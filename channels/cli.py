@@ -29,6 +29,9 @@ class CliChannel(Channel):
         # 群聊时 sender 是发言人自己的名字；单聊退回当前朋友名
         print(f"\n[{_ts()} {sender or _friend_name()}] {text}\n> ", end="", flush=True)
 
+    def typing(self, sender: str = "") -> None:
+        print(f"\n[{_ts()} {sender or _friend_name()}] 正在输入…", end="", flush=True)
+
     def run(self, on_message) -> None:
         print("CLI 模式启动，输入消息回车发送，Ctrl+C 退出。")
         print("> ", end="", flush=True)

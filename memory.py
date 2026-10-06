@@ -34,6 +34,10 @@ EXTRACT_PROMPT = """你是记忆提取器。从最近的对话片段里，提取
   "person": "涉及的人物（没有就空字符串）",
   "theme": "学业 | 技术 | 健康作息 | 饮食 | 娱乐 | 社交情感 | 出行 | 财务 | 其他"
 }
+如果这条信息属于用户的"个人清单"字段（称呼/生日/城市/学校专业/年级/作息习惯/
+兴趣爱好/在忙的事/雷区），额外加一项 "profile": "字段名：值"
+（如 "profile": "作息习惯：夜猫子，凌晨才睡"）。只有用户亲口陈述的确定性事实才能进清单；
+一次性的计划、情绪、事件不进清单。
 
 【类别说明】画像=TA是谁（称呼/城市/身份）；偏好=喜欢/讨厌；计划=打算做的事；
 事件=已经发生的事；人际=TA与别人的关系；情绪=状态与感受。
@@ -136,6 +140,12 @@ def _apply(item: dict) -> bool:
 
     if len(content) < 4 or len(content) > 200:  # 太短没信息量，太长是模型跑偏
         return False
+
+    # 个人清单：属于 profile 字段的确定性事实同步进 TA 的清单（/profile 可见）
+    profile_line = str(item.get("profile", "")).strip()
+    if profile_line:
+        _apply_profile(profile_line)
+
     category = str(item.get("category", "画像")).strip()
     category = _LEGACY_CATEGORY.get(category, category)
     if category not in _CATEGORIES:
@@ -157,6 +167,40 @@ def _apply(item: dict) -> bool:
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
     return True
+
+
+def _apply_profile(line: str) -> None:
+    """把一条"字段：值"写进当前朋友的 profile 清单（kv.profile_text）。
+
+    规则：
+    - 必须有"字段：值"结构（否则只是普通记忆，不进清单）
+    - 字段已存在时：AI 自己写过的字段才更新值；用户手动加的（不在
+      profile_auto_keys 里）不覆盖——以用户为准
+    - 自动填写会置 profile_locked=1，让新朋友沿用这份清单而非遗产 profile.md
+    """
+    m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", line.strip())
+    if not m:
+        return
+    key, value = m.group(1).strip(), m.group(2).strip()
+    if not value or len(value) > 60:
+        return
+    auto_keys = set(filter(None, db.get_kv("profile_auto_keys").split(",")))
+    lines = [l for l in db.get_kv("profile_text").splitlines() if l.strip()]
+    new_line = f"{key}：{value}"
+    for i, l in enumerate(lines):
+        if re.match(rf"^{re.escape(key)}\s*[：:]", l.strip()):
+            if key in auto_keys:        # AI 自己写过的字段：更新值
+                lines[i] = new_line
+            else:                       # 用户手动加的字段：以用户为准，不覆盖
+                return
+            break
+    else:
+        lines.append(new_line)          # 新字段：追加
+    db.set_kv("profile_text", "\n".join(lines))
+    db.set_kv("profile_locked", "1")
+    auto_keys.add(key)
+    db.set_kv("profile_auto_keys", ",".join(sorted(auto_keys)))
+    print(f"[memory] 清单更新：{new_line}")
 
 
 def backfill_history(batch: int = 16, progress=print) -> int:

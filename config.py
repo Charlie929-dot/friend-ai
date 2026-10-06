@@ -50,6 +50,10 @@ READING_MAX_SECONDS = float(os.environ.get("READING_MAX_SECONDS", "20"))        
 SEND_SECONDS_PER_CHAR = float(os.environ.get("SEND_SECONDS_PER_CHAR", "0.08"))        # 分段连发的间隔（按上一条长度）
 SEND_MIN_SECONDS = float(os.environ.get("SEND_MIN_SECONDS", "0.6"))
 SEND_MAX_SECONDS = float(os.environ.get("SEND_MAX_SECONDS", "5"))
+TYPING_ENABLED = os.environ.get("TYPING_ENABLED", "on").lower() == "on"               # "正在输入"总开关
+TYPING_SECONDS_PER_CHAR = float(os.environ.get("TYPING_SECONDS_PER_CHAR", "0.12"))    # 每字假装输入时长
+TYPING_MIN_SECONDS = float(os.environ.get("TYPING_MIN_SECONDS", "1.2"))
+TYPING_MAX_SECONDS = float(os.environ.get("TYPING_MAX_SECONDS", "8"))
 
 # --- 行为参数 ---
 GUARD_ENABLED = os.environ.get("GUARD_ENABLED", "off").lower() == "on"          # 防打扰总开关（默认关，/guard on 开启）

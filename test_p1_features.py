@@ -551,6 +551,108 @@ def test_groupchat():
         _db.init()
 
 
+def test_typing_indicator():
+    """"正在输入"：回复按字数计算输入时长，先 typing() 再发正文。"""
+    import tempfile
+    import time as _t
+    import db as _db
+    import memory as _mem
+    from core import Engine
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
+             config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
+             config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR)
+    config.TYPING_ENABLED = True
+    config.TYPING_SECONDS_PER_CHAR = 0.001   # 把等待压到毫秒级
+    config.TYPING_MIN_SECONDS = 0.01
+    config.TYPING_MAX_SECONDS = 0.05
+    config.READING_MAX_SECONDS = 0.05
+    config.READING_SECONDS_PER_CHAR = 0.0
+    try:
+        _db.init()
+
+        class Ch:
+            def __init__(self):
+                self.events = []  # ("typing",)/("send", text)
+            def send(self, text, sender=""):
+                self.events.append(("send", text))
+            def typing(self, sender=""):
+                self.events.append(("typing",))
+
+        ch = Ch()
+        eng = Engine(ch)
+        eng._judge_session_end = lambda *a, **k: None
+        real_chat = _mem.llm.chat
+        _mem.llm.chat = lambda *a, **k: "好呀好呀\n就这么说定了"
+        _mem.extract_async = lambda: None
+        try:
+            eng.on_user_message("周末去看电影吗")
+            deadline = _t.time() + 3
+            while _t.time() < deadline:
+                sends = [e for e in ch.events if e[0] == "send"]
+                if len(sends) >= 2:
+                    break
+                _t.sleep(0.02)
+        finally:
+            _mem.llm.chat = real_chat
+        kinds = [e[0] for e in ch.events]
+        assert "typing" in kinds, f"没出现正在输入：{ch.events}"
+        assert kinds.index("typing") < kinds.index("send"), \
+            f"typing 应在正文之前：{ch.events}"
+        sends = [e[1] for e in ch.events if e[0] == "send"]
+        assert sends == ["好呀好呀", "就这么说定了"], f"分段发送不对：{sends}"
+        print("ok 正在输入（typing 先于正文 + 分段发送）")
+    finally:
+        (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
+         config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
+         config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR) = saved
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
+def test_profile_autofill():
+    """AI 自动维护 profile：profile 字段进清单、自动字段可更新、手动字段不覆盖。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # 1) 提取结果带 profile 字段 → 写进清单并锁定
+        _mem._apply({"content": "小徐是夜猫子作息", "category": "画像",
+                     "profile": "作息习惯：夜猫子，凌晨才睡"})
+        assert _db.get_kv("profile_locked") == "1", "自动填写应锁定清单"
+        assert "作息习惯：夜猫子，凌晨才睡" in _db.get_kv("profile_text"), \
+            f"清单没写进去：{_db.get_kv('profile_text')!r}"
+        # 2) 同一字段新值 → AI 写过的字段可更新
+        _mem._apply({"content": "小徐最近开始早睡了", "category": "画像",
+                     "profile": "作息习惯：最近在调整，十一点前就睡"})
+        assert "十一点前就睡" in _db.get_kv("profile_text") \
+            and "凌晨才睡" not in _db.get_kv("profile_text"), \
+            f"自动字段未更新：{_db.get_kv('profile_text')!r}"
+        # 3) 用户手动加的字段 → AI 不覆盖
+        _db.set_kv("profile_text", _db.get_kv("profile_text") + "\n称呼：小徐")
+        _mem._apply({"content": "小徐让大家叫他徐哥", "category": "画像",
+                     "profile": "称呼：徐哥"})
+        assert "称呼：小徐" in _db.get_kv("profile_text"), \
+            f"手动字段被覆盖：{_db.get_kv('profile_text')!r}"
+        # 4) 无"字段：值"结构的 profile 不写入
+        _mem._apply_profile("没有结构的一整句话")
+        assert "没有结构" not in _db.get_kv("profile_text")
+        # 5) 记忆本身照常入库（profile 是附加动作）
+        assert any(m["content"] == "小徐是夜猫子作息" for m in _db.all_memories())
+        print("ok AI 自动维护 profile（写入/更新/不覆盖手动/结构校验）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -562,4 +664,6 @@ if __name__ == "__main__":
     test_memory_append_timeline()
     test_memory_v2()
     test_groupchat()
+    test_typing_indicator()
+    test_profile_autofill()
     print("\n全部通过")

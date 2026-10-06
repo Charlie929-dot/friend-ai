@@ -20,6 +20,15 @@ class TelegramChannel(Channel):
         except httpx.HTTPError as e:
             print(f"[telegram] 发送失败: {e}")
 
+    def typing(self, sender: str = "") -> None:
+        # Telegram 原生"正在输入"状态（约 5 秒有效，正文紧随其后发出）
+        try:
+            httpx.post(f"{_API}/sendChatAction", json={
+                "chat_id": config.TELEGRAM_CHAT_ID, "action": "typing",
+            }, timeout=10)
+        except httpx.HTTPError:
+            pass  # 提示失败不阻塞正文
+
     def run(self, on_message) -> None:
         print("Telegram 通道启动（长轮询）。")
         offset = 0

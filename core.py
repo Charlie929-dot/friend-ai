@@ -128,6 +128,15 @@ class Engine:
 
         # 分段连发：按换行拆成几条消息，像真人连着发
         segments = [s.strip() for s in reply.split("\n") if s.strip()]
+        # "正在输入"：按整条回复的字数假装敲键盘，到点再发出正文
+        if config.TYPING_ENABLED and segments:
+            total = sum(len(s) for s in segments)
+            duration = min(max(total * config.TYPING_SECONDS_PER_CHAR,
+                               config.TYPING_MIN_SECONDS), config.TYPING_MAX_SECONDS)
+            typing_fn = getattr(self.channel, "typing", None)  # 通道可选能力
+            if typing_fn:
+                typing_fn()
+            _time.sleep(duration)
         for i, seg in enumerate(segments):
             if i > 0:
                 _time.sleep(min(max(len(segments[i - 1]) * config.SEND_SECONDS_PER_CHAR,
