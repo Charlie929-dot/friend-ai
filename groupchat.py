@@ -9,8 +9,10 @@
 - /endgroup 散群：完整群聊记录写回每位朋友的库（kind='group'，不进 1:1
   上下文和回填范围），并各自提取一遍记忆——同一场群聊，每个人记住的
   侧重点可以不一样。
-- 会话只存在于运行期（重启即散群），群聊记录靠写回各库的 kind='group' 持久。
+- 会话在运行期内存里，但每轮对话后 transcript 会落盘（group_session.json）：
+  /refresh 会先自动散群沉淀再重载；进程重启后启动时自动补写回（recover_pending）。
 """
+import json
 import random
 import time as _time
 from datetime import datetime
@@ -96,6 +98,48 @@ def on_user_text(text: str, channel) -> None:
         if random.random() < STOP_TALK_PROB:
             break
 
+    _persist(s)  # 每轮落盘：/refresh 或重启都不丢群聊内容
+
+
+def _persist_file():
+    return config.BASE_DIR / "group_session.json"
+
+
+def _persist(s: GroupSession) -> None:
+    """把进行中的群会话落盘，防 reload/重启丢失。"""
+    try:
+        data = {
+            "participants": [{"db_path": str(p.db_path), "name": p.name}
+                             for p in s.participants],
+            "transcript": [[sp, tx] for sp, tx in s.transcript],
+        }
+        _persist_file().write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        print(f"[group] 会话落盘失败：{e}")
+
+
+def recover_pending() -> str:
+    """启动时调用：上次群聊没散场进程就退了的话，补写回并各自提取记忆。"""
+    global _session
+    f = _persist_file()
+    if _session is not None or not f.exists():
+        return ""
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+        parts = [Participant(p["db_path"], p["name"]) for p in data["participants"]]
+        s = GroupSession(parts)
+        s.transcript = [(sp, tx) for sp, tx in data["transcript"]]
+        if not s.transcript:
+            f.unlink(missing_ok=True)
+            return ""
+        _session = s
+        end()
+        names = "、".join(p.name for p in parts)
+        return f"[群聊恢复] 上次和{names}的群聊没散场就退出了，已补写记录并各自记下。"
+    except Exception as e:
+        f.unlink(missing_ok=True)  # 文件坏了别反复卡启动
+        return f"[群聊恢复] 恢复失败（{e}），已丢弃残留会话。"
+
 
 def end() -> str:
     """散群：群聊记录写回每位朋友的库，各自提取记忆。"""
@@ -105,13 +149,22 @@ def end() -> str:
         return "现在没有在群的。"
     real_db = config.DB_PATH
     names = "、".join(p.name for p in s.participants)
+    # 先把记录写回所有库，再删落盘文件，最后提取记忆——顺序保证崩溃也不丢内容
     for p in s.participants:
         try:
             config.DB_PATH = p.db_path
             for sp, tx in s.transcript:
                 role = "user" if sp == "小徐" else "assistant"
                 db.add_message(role, f"【群聊·{sp}】{tx}", kind="group")
+        finally:
+            config.DB_PATH = real_db
+    _persist_file().unlink(missing_ok=True)  # 内容已入库，落盘文件使命完成
+    for p in s.participants:
+        try:
+            config.DB_PATH = p.db_path
             _extract_group_memories(s, p)
+        except Exception as e:
+            print(f"[group] {p.name} 提取群聊记忆失败：{e}")
         finally:
             config.DB_PATH = real_db
     return f"散啦～和{names}的这场群聊，大家都各自记下了点什么。"

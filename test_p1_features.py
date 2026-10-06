@@ -28,11 +28,11 @@ def test_cli_timestamps():
     with contextlib.redirect_stdout(buf):
         ch.send("在吗")
     out = buf.getvalue()
-    # 发言人显示朋友自己的名字（无人格卡才退回 AI）
+    # 发言人显示朋友自己的名字（人格卡名 > 别名 > 老朋友）
     import db as _db, persona_pool
     _db.init()
     card = persona_pool.load()
-    name = card["name"] if card else "AI"
+    name = card["name"] if card else (_db.get_kv("alias") or "老朋友")
     assert TS_RE.search(out) and f" {name}] 在吗" in out, \
         f"AI 消息缺时间戳或名字不对（期望 {name}）：{out!r}"
 
@@ -703,8 +703,15 @@ def test_interrupt_detection():
         ch = Ch()
         eng = Engine(ch)
         eng._judge_session_end = lambda *a, **k: None
-        replies = iter(["本来要回你的旧消息", "回应你的插话"])
-        _mem.llm.chat = lambda *a, **k: next(replies, "兜底回复")
+        # 按内容应答而非调用顺序——早期测试的判官线程可能晚触发，偷走按序 mock 的回复
+        def fake_chat1(messages, **k):
+            last = messages[-1]["content"]
+            if "等等我先说个事" in last:
+                return "回应你的插话"
+            if "在吗" in last:
+                return "本来要回你的旧消息"
+            return "嗯"  # 判官等其他调用的安全应答
+        _mem.llm.chat = fake_chat1
         eng.on_user_message("在吗")
         assert wait_for(lambda: any(e[0] == "typing" for e in ch.events)), "没进入打字"
         eng.on_user_message("等等我先说个事")  # 打字期间插话
@@ -725,8 +732,14 @@ def test_interrupt_detection():
         ch2 = Ch()
         eng2 = Engine(ch2)
         eng2._judge_session_end = lambda *a, **k: None
-        replies2 = iter(["第一段\n第二段不该发出", "回应插话"])
-        _mem.llm.chat = lambda *a, **k: next(replies2, "兜底")
+        def fake_chat2(messages, **k):
+            last = messages[-1]["content"]
+            if "停一下我插句嘴" in last:
+                return "回应插话"
+            if "讲个长的" in last:
+                return "第一段\n第二段不该发出"
+            return "嗯"
+        _mem.llm.chat = fake_chat2
         eng2.on_user_message("讲个长的")
         assert wait_for(lambda: any(e[1] == "第一段" for e in ch2.events if e[0] == "send")), \
             f"第一段没发出：{ch2.events}"
@@ -747,6 +760,89 @@ def test_interrupt_detection():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
+def test_group_persist_and_friend_name():
+    """群聊持久化（/refresh 自动散场 + 重启恢复）+ 老朋友名字回退到别名。"""
+    import tempfile
+    import db as _db
+    import groupchat as _gc
+    import commands as _cmd
+    from channels.cli import _friend_name
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _gc.llm.chat
+
+    class Ch:
+        def __init__(self):
+            self.sent = []
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    try:
+        # 两个朋友库：小葵（当前，有人格卡）、初遇朋友（归档，无卡只有别名）
+        _db.init()
+        _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
+                                   '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
+                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
+        config.DB_PATH = tmp / "friend-cc111111.db"
+        _db.init()
+        _db.set_kv("alias", "初遇朋友")
+        _db.set_kv("created_at", "2026-10-05T23:00:00")
+        config.DB_PATH = tmp / "friend.db"
+
+        # 1) 名字回退：无卡有别名 → 别名；无卡无别名 → 老朋友
+        config.DB_PATH = tmp / "friend-cc111111.db"
+        assert _friend_name() == "初遇朋友", f"别名回退失败：{_friend_name()}"
+        config.DB_PATH = tmp / "friend-dd222222.db"
+        _db.init()
+        assert _friend_name() == "老朋友", f"无名回退失败：{_friend_name()}"
+        config.DB_PATH = tmp / "friend.db"
+        assert _friend_name() == "小葵", f"人格卡名字失败：{_friend_name()}"
+
+        # 2) 拉群说话后，transcript 落盘存在
+        parts = [_gc.Participant(tmp / "friend.db", "小葵"),
+                 _gc.Participant(tmp / "friend-cc111111.db", "初遇朋友")]
+        _gc.start(parts)
+        _gc.llm.chat = lambda messages, temperature=0.7: "嗯嗯我在听"
+        _gc.on_user_text("我吃完了", Ch())
+        persist = tmp / "group_session.json"
+        assert persist.exists(), "群聊 transcript 未落盘"
+
+        # 3) /refresh：先自动散场沉淀，再重载——群聊内容不丢
+        out = _cmd.handle("/refresh")
+        config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"  # reload 会重置，拉回来
+        assert "散场" in out, f"refresh 未提示散场：{out}"
+        assert not _gc.is_active(), "refresh 后群还应处于散场状态"
+        assert not persist.exists(), "散场后落盘文件应删除"
+        with __import__("sqlite3").connect(str(tmp / "friend-cc111111.db")) as c:
+            n = c.execute("SELECT COUNT(*) FROM messages WHERE kind='group'").fetchone()[0]
+        assert n > 0, "refresh 散场后群聊记录没写回初遇朋友的库"
+
+        # 4) 重启恢复：模拟进程带着未散场的群退出——recover_pending 补写回
+        _gc.start(parts)
+        _gc.llm.chat = lambda messages, temperature=0.7: "好嘞"
+        _gc.on_user_text("群里再说点啥", Ch())
+        assert persist.exists()
+        _gc._session = None  # 模拟进程重启（内存没了，落盘还在）
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 提取不新记
+        note = _gc.recover_pending()
+        assert "群聊恢复" in note, f"恢复提示不对：{note}"
+        assert not persist.exists(), "恢复后落盘文件应删除"
+        with __import__("sqlite3").connect(str(tmp / "friend.db")) as c:
+            rows = [r[0] for r in c.execute(
+                "SELECT content FROM messages WHERE kind='group' AND content LIKE '%群里再说点啥%'")]
+        assert rows, "恢复后群聊记录没补写回小葵的库"
+        print("ok 群聊持久化（落盘/refresh散场/重启恢复）+ 老朋友名字回退")
+    finally:
+        _gc.llm.chat = real_chat
+        _gc._session = None
+        (tmp / "group_session.json").unlink(missing_ok=True)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -761,4 +857,5 @@ if __name__ == "__main__":
     test_typing_indicator()
     test_profile_autofill()
     test_interrupt_detection()
+    test_group_persist_and_friend_name()
     print("\n全部通过")

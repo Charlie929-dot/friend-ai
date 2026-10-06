@@ -78,9 +78,11 @@ def _archives() -> list:
 
 
 def _current_friend_name() -> str:
-    """当前朋友的显示名（人格卡名，老无名朋友退回"老朋友"）。"""
+    """当前朋友的显示名：人格卡名 > 别名 > 老朋友。"""
     card = persona_pool.load()
-    return card["name"] if card else "老朋友"
+    if card:
+        return card["name"]
+    return db.get_kv("alias") or "老朋友"
 
 
 def _friend_name_in(path) -> str:
@@ -428,11 +430,16 @@ def handle(cmd_line: str) -> str:
         import memory as _memory
         import persona as _persona
         import persona_pool as _pool
+        # 群聊会话在 groupchat 模块内存里，reload 会把它冲掉——先散群沉淀再重载
+        group_note = ""
+        if _groupchat.is_active():
+            _groupchat.end()
+            group_note = "（群聊已先散场，大家都记下了）"
         config.load_dotenv(force=True)   # .env 改过的值强制生效
         importlib.reload(config)         # 重读全部配置参数
         for m in (_pool, _persona, _llm, _memory, _guard, _game, _groupchat):
             importlib.reload(m)
-        return "刷新成功"
+        return "刷新成功" + group_note
 
     if cmd == "/guard":
         import guard as g

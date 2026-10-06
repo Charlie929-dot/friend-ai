@@ -13,15 +13,19 @@ def _ts() -> str:
 
 
 def _friend_name() -> str:
-    """聊天界面显示朋友自己的名字（没有人格卡的老朋友退回 AI）。"""
+    """聊天界面显示朋友自己的名字：人格卡名 > 别名（初遇朋友这类老朋友的）> 老朋友。"""
     try:
         import persona_pool
         card = persona_pool.load()
         if card:
             return card["name"]
+        import db
+        alias = db.get_kv("alias")
+        if alias:
+            return alias
     except Exception:
         pass
-    return "AI"
+    return "老朋友"
 
 
 class CliChannel(Channel):

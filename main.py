@@ -25,6 +25,10 @@ def make_channel(name: str):
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "cli"
     db.init()
+    import groupchat
+    recovered = groupchat.recover_pending()  # 上次群聊没散场就退了的话，补写回
+    if recovered:
+        print(recovered)
     if mode == "cli":
         # 启动先选聊天对象（在引擎/调度器创建前，选完作息按选中朋友排）
         cmd = commands.pick_friend_on_startup()
