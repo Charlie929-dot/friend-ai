@@ -77,7 +77,8 @@ def extract_async() -> None:
 
 def _extract_safe() -> None:
     try:
-        _extract()
+        with db.PATH_LOCK:   # 与用户切换朋友互斥：提取全程读写的是同一个库
+            _extract()
     except Exception as e:
         print(f"[memory] 提取失败：{e}")
 

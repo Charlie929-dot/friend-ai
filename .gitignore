@@ -9,6 +9,7 @@ backups/
 archive.log
 outbox.log
 *.log
+group_session.json
 
 # Python
 __pycache__/

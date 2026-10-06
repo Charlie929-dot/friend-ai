@@ -131,7 +131,8 @@ class Engine:
                 batch = self._pending      # 取走这批消息
                 self._pending = []         # 清空，下一批重新计阅读时间
             try:
-                self._generate_reply(batch)
+                with db.PATH_LOCK:  # 回复全流程与切换朋友互斥，不写错库
+                    self._generate_reply(batch)
             finally:
                 with self._lock:
                     self._sending = False
@@ -201,11 +202,15 @@ class Engine:
         elif any(s in reply for s in ENDING_SIGNALS):
             db.set_kv("session_open", "0")
         else:
-            threading.Thread(target=self._judge_session_end,
+            threading.Thread(target=self._judge_locked,
                              args=(batch, reply), daemon=True).start()
 
         memory.extract_async()  # 后台提取这段对话里值得记住的事
         self.check_auto_familiar()
+
+    def _judge_locked(self, batch: list[str], reply: str) -> None:
+        with db.PATH_LOCK:  # 与切换朋友互斥
+            self._judge_session_end(batch, reply)
 
     # --- 话题结束的 AI 判官：关键词没抓住的收尾由模型判断 ---
     def _judge_session_end(self, batch: list[str], reply: str) -> bool:
@@ -236,6 +241,10 @@ class Engine:
     # --- 主动消息（调度器调用） ---
     def proactive(self, scenario: str) -> bool:
         """尝试发一条主动消息，返回是否实际发出。"""
+        with db.PATH_LOCK:  # 与切换朋友互斥：提示词/记忆/发送全程同一个库
+            return self._proactive(scenario)
+
+    def _proactive(self, scenario: str) -> bool:
         ok, reason = guard.can_send_proactive(scenario=scenario)
         if not ok:
             print(f"[proactive:{scenario}] 被防打扰拦截：{reason}")

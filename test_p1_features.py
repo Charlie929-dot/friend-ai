@@ -852,6 +852,64 @@ def test_group_persist_and_friend_name():
         _db.init()
 
 
+def test_db_path_lock():
+    """PATH_LOCK 互斥：在途提取持锁期间切库被阻塞；放行后记忆落旧库不串新库。"""
+    import tempfile
+    import threading
+    import time as _t
+    import sqlite3
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    path_a, path_b = tmp / "a.db", tmp / "b.db"
+    config.BASE_DIR = tmp
+    try:
+        config.DB_PATH = path_a
+        _db.init()
+        _db.add_message("user", "我明天早上要去图书馆自习")
+        _db.add_message("assistant", "好啊，几点去？")
+
+        gate = threading.Event()
+        switched = threading.Event()
+        real_chat = _mem.llm.chat
+
+        def slow_chat(messages, temperature=0.7):
+            gate.wait(5)  # 提取线程持锁卡在 LLM 调用
+            return '[{"content": "小徐计划明天早上去图书馆自习", "category": "计划", "theme": "学业"}]'
+
+        def do_switch():
+            with _db.PATH_LOCK:      # 模拟 /friend：必须与在途提取互斥
+                config.DB_PATH = path_b
+                _db.init()
+            switched.set()
+
+        _mem.llm.chat = slow_chat
+        _mem.extract_async()          # 后台提取：持锁，卡在 gate
+        _t.sleep(0.3)                 # 确保提取线程先拿到锁
+        t = threading.Thread(target=do_switch)
+        t.start()
+        _t.sleep(0.3)
+        assert not switched.is_set(), "提取持锁期间切库线程应被阻塞"
+        gate.set()
+        t.join(5)
+        assert switched.is_set(), "提取放行后切库线程应完成"
+        _mem.llm.chat = real_chat
+        # 等提取线程写完（gate 打开后它还需要一点点时间做 db 写）
+        for _ in range(100):
+            n = sqlite3.connect(path_a).execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            if n == 1:
+                break
+            _t.sleep(0.05)
+        a_n = sqlite3.connect(path_a).execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        b_n = sqlite3.connect(path_b).execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        assert a_n == 1 and b_n == 0, f"记忆应落旧库 A：A={a_n} B={b_n}"
+        print("ok PATH_LOCK 互斥（在途提取阻塞切库 + 记忆不串库）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -867,4 +925,5 @@ if __name__ == "__main__":
     test_profile_autofill()
     test_interrupt_detection()
     test_group_persist_and_friend_name()
+    test_db_path_lock()
     print("\n全部通过")

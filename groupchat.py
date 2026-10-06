@@ -144,61 +144,63 @@ def recover_pending() -> str:
 def end() -> str:
     """散群：群聊记录写回每位朋友的库，各自提取记忆。"""
     global _session
-    s, _session = _session, None
-    if not s:
-        return "现在没有在群的。"
-    real_db = config.DB_PATH
-    names = "、".join(p.name for p in s.participants)
-    # 先把记录写回所有库，再删落盘文件，最后提取记忆——顺序保证崩溃也不丢内容
-    for p in s.participants:
-        try:
-            config.DB_PATH = p.db_path
-            for sp, tx in s.transcript:
-                role = "user" if sp == "小徐" else "assistant"
-                db.add_message(role, f"【群聊·{sp}】{tx}", kind="group")
-        finally:
-            config.DB_PATH = real_db
-    _persist_file().unlink(missing_ok=True)  # 内容已入库，落盘文件使命完成
-    for p in s.participants:
-        try:
-            config.DB_PATH = p.db_path
-            _extract_group_memories(s, p)
-        except Exception as e:
-            print(f"[group] {p.name} 提取群聊记忆失败：{e}")
-        finally:
-            config.DB_PATH = real_db
+    with db.PATH_LOCK:  # 与 1:1 后台回复/提取互斥：写回期间库指针稳定
+        s, _session = _session, None
+        if not s:
+            return "现在没有在群的。"
+        real_db = config.DB_PATH
+        names = "、".join(p.name for p in s.participants)
+        # 先把记录写回所有库，再删落盘文件，最后提取记忆——顺序保证崩溃也不丢内容
+        for p in s.participants:
+            try:
+                config.DB_PATH = p.db_path
+                for sp, tx in s.transcript:
+                    role = "user" if sp == "小徐" else "assistant"
+                    db.add_message(role, f"【群聊·{sp}】{tx}", kind="group")
+            finally:
+                config.DB_PATH = real_db
+        _persist_file().unlink(missing_ok=True)  # 内容已入库，落盘文件使命完成
+        for p in s.participants:
+            try:
+                config.DB_PATH = p.db_path
+                _extract_group_memories(s, p)
+            except Exception as e:
+                print(f"[group] {p.name} 提取群聊记忆失败：{e}")
+            finally:
+                config.DB_PATH = real_db
     return f"散啦～和{names}的这场群聊，大家都各自记下了点什么。"
 
 
 def _speak(p: Participant, s: GroupSession, channel) -> str:
     """让一位朋友在群里发言：临时把 db 指到TA的库，用TA的人设和记忆。"""
-    real_db = config.DB_PATH
-    try:
-        config.DB_PATH = p.db_path
-        members = "、".join([*(x.name for x in s.participants), "小徐（用户）"])
-        sys_prompt = (persona.build_system_prompt("AWAKE") + "\n"
-                      + GROUP_RULES.format(members=members, self_name=p.name))
-        # 拿最近的群聊内容召回TA自己的旧记忆
-        recent = " ".join(t for _, t in s.transcript[-6:])
-        recalled = memory.recall(recent, top_k=3) if recent else []
-        if recalled:
-            mem_text = "\n".join("- " + m["content"] for m in recalled)
-            sys_prompt += f"\n【你想起来的旧记忆】（自然使用，别生硬复述）\n{mem_text}"
-        log = "\n".join(f"{sp}：{tx}" for sp, tx in s.transcript[-20:])
-        msgs = [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": f"【群聊记录】\n{log}\n\n（轮到你了，直接说内容）"},
-        ]
-        reply = llm.chat(msgs).strip()
-        # 模型偶尔自带名字前缀，剥掉
-        for sep in ("：", ":"):
-            if reply.startswith(f"{p.name}{sep}"):
-                reply = reply[len(p.name) + 1:].strip()
-        s.transcript.append((p.name, reply))
-        _send_segments(channel, p.name, reply)
-        return reply
-    finally:
-        config.DB_PATH = real_db
+    with db.PATH_LOCK:  # 与 1:1 后台回复/提取互斥：发言期间库指针稳定
+        real_db = config.DB_PATH
+        try:
+            config.DB_PATH = p.db_path
+            members = "、".join([*(x.name for x in s.participants), "小徐（用户）"])
+            sys_prompt = (persona.build_system_prompt("AWAKE") + "\n"
+                          + GROUP_RULES.format(members=members, self_name=p.name))
+            # 拿最近的群聊内容召回TA自己的旧记忆
+            recent = " ".join(t for _, t in s.transcript[-6:])
+            recalled = memory.recall(recent, top_k=3) if recent else []
+            if recalled:
+                mem_text = "\n".join("- " + m["content"] for m in recalled)
+                sys_prompt += f"\n【你想起来的旧记忆】（自然使用，别生硬复述）\n{mem_text}"
+            log = "\n".join(f"{sp}：{tx}" for sp, tx in s.transcript[-20:])
+            msgs = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": f"【群聊记录】\n{log}\n\n（轮到你了，直接说内容）"},
+            ]
+            reply = llm.chat(msgs).strip()
+            # 模型偶尔自带名字前缀，剥掉
+            for sep in ("：", ":"):
+                if reply.startswith(f"{p.name}{sep}"):
+                    reply = reply[len(p.name) + 1:].strip()
+            s.transcript.append((p.name, reply))
+            _send_segments(channel, p.name, reply)
+            return reply
+        finally:
+            config.DB_PATH = real_db
 
 
 def _send_segments(channel, name: str, text: str) -> None:

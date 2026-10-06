@@ -232,13 +232,14 @@ def handle(cmd_line: str) -> str:
         return "回到初见阶段，我会经常来冒泡的～"
 
     if cmd == "/new-friend":
-        archived = _archive_current()
-        db.clear_all()  # 清空而非删文件：避免沙箱安全删除拦截，也无文件占用问题
-        db.set_kv("profile_locked", "1")  # 新朋友零了解开局，信息清单自己攒
-        card = persona_pool.draw()  # P1 核心乐趣：开盲盒抽人格
-        persona_pool.save(card)
-        # 让这位新朋友用人格做自我介绍（LLM 不可用就兜底）
-        greeting = _intro_greeting(card)
+        with db.PATH_LOCK:  # 与后台回复/提取互斥：归档+清库期间旧库不再被写
+            archived = _archive_current()
+            db.clear_all()  # 清空而非删文件：避免沙箱安全删除拦截，也无文件占用问题
+            db.set_kv("profile_locked", "1")  # 新朋友零了解开局，信息清单自己攒
+            card = persona_pool.draw()  # P1 核心乐趣：开盲盒抽人格
+            persona_pool.save(card)
+            # 让这位新朋友用人格做自我介绍（LLM 不可用就兜底）
+            greeting = _intro_greeting(card)
         head = f"（抽到了新朋友：{card['name']}·{card['label']}）"
         tail = ("\n\n（想让TA先了解你一点？/profile add <一行> 逐条告诉TA，"
                 "/profile reuse 沿用之前填过的清单，或跳过直接聊）")
@@ -320,8 +321,9 @@ def handle(cmd_line: str) -> str:
         if not arg.isdigit() or not (1 <= int(arg) <= len(archives)):
             return f"用法：/friend <编号>（1-{len(archives)}），先用 /friends 查看列表"
         chosen = archives[int(arg) - 1]
-        _archive_current()  # 当前朋友也归档（覆盖更新TA自己的那份），不丢
-        shutil.copyfile(str(chosen), str(config.DB_PATH))
+        with db.PATH_LOCK:  # 与后台回复/提取互斥：归档+覆盖期间库不被写
+            _archive_current()  # 当前朋友也归档（覆盖更新TA自己的那份），不丢
+            shutil.copyfile(str(chosen), str(config.DB_PATH))
         name, _ = _archive_display(chosen)
         msg = f"欢迎回来～已切换到 {name}，接着聊吧。"
         import core  # 切过去就顺手看看TA有没有留言攒着

@@ -1,9 +1,16 @@
 """SQLite 存储层：状态机、消息记录、防打扰计数。单用户场景，一切从简。"""
 import json
 import sqlite3
+import threading
 from datetime import date, datetime
 
 import config
+
+# 库切换互斥锁：所有依赖"当前朋友库"一致性的多步流程（回复生成、记忆提取、
+# 主动消息、群聊发言）与切库操作（/friend、/new-friend、群聊/散群）互斥。
+# 不修这个锁的话，后台线程（记忆提取/回复）会在用户切换朋友的瞬间
+# 把数据写进换人后的库（实测出现过记忆串库）。
+PATH_LOCK = threading.RLock()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
