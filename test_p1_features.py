@@ -1,0 +1,565 @@
+"""P1 新功能回归测试：CLI 时间戳 + /refresh 热重载。
+运行：python test_p1_features.py
+"""
+import builtins
+import contextlib
+import io
+import os
+import re
+import sys
+import types
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import commands
+import config
+import persona
+
+TS_RE = re.compile(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
+
+
+def test_cli_timestamps():
+    """AI 消息带 [时间 AI] 前缀；用户发送后打印 [时间 你] 标记行。"""
+    from channels.cli import CliChannel
+    ch = CliChannel()
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ch.send("在吗")
+    out = buf.getvalue()
+    # 发言人显示朋友自己的名字（无人格卡才退回 AI）
+    import db as _db, persona_pool
+    _db.init()
+    card = persona_pool.load()
+    name = card["name"] if card else "AI"
+    assert TS_RE.search(out) and f" {name}] 在吗" in out, \
+        f"AI 消息缺时间戳或名字不对（期望 {name}）：{out!r}"
+
+    # 模拟用户输入一行后 EOF 退出
+    received = []
+    real_input = builtins.input
+    builtins.input = lambda: (_ for _ in ()).throw(EOFError()) if received else "你好"
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            ch.run(received.append)
+    finally:
+        builtins.input = real_input
+    out = buf.getvalue()
+    assert received == ["你好"], f"on_message 没收到消息：{received}"
+    assert TS_RE.search(out) and " 你]" in out, f"用户消息缺时间标记：{out!r}"
+    print("ok CLI 时间戳（AI 消息 + 用户消息标记）")
+
+
+def test_refresh_reloads_config_and_modules():
+    """/refresh 后：config 参数、persona 文案都按文件最新内容生效。"""
+    # 1) config 参数：改环境变量模拟 .env 变更（load_dotenv(force=True) 已覆盖）
+    old_limit = config.DAILY_PROACTIVE_LIMIT
+    os.environ["DAILY_PROACTIVE_LIMIT"] = "42"
+    # 2) persona 文案：运行时弄脏，refresh 后应恢复文件原值
+    original_flavor = persona.DEFAULT_FLAVOR
+    persona.DEFAULT_FLAVOR = "被篡改的人设"
+
+    result = commands.handle("/refresh")
+
+    assert result == "刷新成功", f"返回不对：{result!r}"
+    assert config.DAILY_PROACTIVE_LIMIT == 42, \
+        f"config 未重载：{config.DAILY_PROACTIVE_LIMIT}"
+    assert persona.DEFAULT_FLAVOR == original_flavor, "persona 未恢复文件内容"
+
+    # 还原环境，避免污染后续
+    os.environ["DAILY_PROACTIVE_LIMIT"] = str(old_limit)
+    import importlib
+    importlib.reload(config)
+    print("ok /refresh 热重载（config 参数 + persona 文案）")
+
+
+def test_refresh_reschedules_jobs():
+    """on_config_reloaded 后定时任务按新参数重排。"""
+    from apscheduler.triggers.cron import CronTrigger
+    import scheduler
+
+    engine = types.SimpleNamespace(
+        wake_up=lambda: None, go_sleep=lambda: None,
+        proactive=lambda s: None, check_bubble=lambda: None,
+        check_nudge=lambda: None)
+    sch = scheduler.start(engine)
+
+    old_noon = config.NOON_HOUR
+    os.environ["NOON_HOUR"] = "15"
+    commands.handle("/refresh")
+
+    # 模拟 main.py 的 /refresh 善后
+    real_engine = types.SimpleNamespace(sched=sch, _reset_bubble_timer=lambda: None)
+    scheduler.reschedule_all(sch, real_engine)
+
+    noon_fields = {f.name: str(f) for f in sch.get_job("noon").trigger.fields}
+    assert noon_fields["hour"] == "15", f"noon 任务未重排：{noon_fields}"
+    # wake/sleep 跟随人格卡（当前 friend.db 里的朋友），无人格卡才是 config 默认
+    import persona as _p
+    wake_fields = {f.name: str(f) for f in sch.get_job("wake").trigger.fields}
+    assert wake_fields["hour"] == str(_p.behavior_params()["wake_hour"]), \
+        f"wake 任务异常：{wake_fields}"
+
+    os.environ["NOON_HOUR"] = str(old_noon)
+    import importlib
+    importlib.reload(config)
+    sch.shutdown()
+    print("ok /refresh 后定时任务重排（noon/wake/random_chat）")
+
+
+def test_startup_pick_friend():
+    """启动菜单：回车继续 / 编号换老朋友 / n 抽新朋友 / 乱输入兜底。"""
+    import db as _db
+    _db.init()
+    n_archives = len(commands._archives())
+
+    printed = []
+    # 回车 → None（继续当前）
+    assert commands.pick_friend_on_startup(input_fn=lambda p: "", print_fn=printed.append) is None
+    # n → 抽新朋友
+    assert commands.pick_friend_on_startup(input_fn=lambda p: "n", print_fn=lambda x: None) == "/new-friend"
+    # 合法编号 → /friend N
+    if n_archives:
+        assert commands.pick_friend_on_startup(
+            input_fn=lambda p: "1", print_fn=lambda x: None) == "/friend 1"
+        # 超界编号 → None（兜底）
+        assert commands.pick_friend_on_startup(
+            input_fn=lambda p: str(n_archives + 5), print_fn=lambda x: None) is None
+    # 乱输入 → None（兜底）
+    assert commands.pick_friend_on_startup(input_fn=lambda p: "???", print_fn=lambda x: None) is None
+    # 菜单里要能看到当前朋友和归档列表
+    menu = "\n".join(printed)
+    assert "当前朋友：" in menu and "抽一位新朋友" in menu
+    print("ok 启动选朋友菜单（回车/编号/n/兜底）")
+
+
+def test_stable_archive(tmp_path=None):
+    """归档 V2：一个好朋友一份文件（覆盖更新）、别名不改文件名、归档日志。"""
+    import tempfile
+    import db as _db
+    import persona_pool
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # 朋友甲：聊过 + 人格卡
+        _db.set_kv("relationship_stage", "new")
+        _db.add_message("user", "你好甲")
+        persona_pool.save({"name": "甲", "label": "阳光话痨", "text": "x",
+                           "wake_hour": 7, "sleep_hour": 23, "bubble_mult": 1.0,
+                           "quirk": "q", "drawn_at": "2026-10-06T00:00:00"})
+        name1 = commands._archive_current()
+        assert name1 == "甲", f"归档返回名不对：{name1}"
+        archives1 = commands._archives()
+        assert len(archives1) == 1
+        first_at = commands._archive_display(archives1[0])[1]
+        # 再归档一次：仍然只有一份（覆盖，不产生新文件）
+        name1b = commands._archive_current()
+        archives1b = commands._archives()
+        assert len(archives1b) == 1, "重复归档产生了第二份文件"
+        assert archives1b[0] == archives1[0], "归档文件名变了（应该稳定）"
+        assert commands._archive_display(archives1b[0])[1] >= first_at
+
+        # 朋友乙：换库（模拟 /new-friend 清空重来）
+        # archived_at 精度到秒，跨一秒保证两人归档时刻可区分（真实使用必然间隔）
+        import time as _t
+        _t.sleep(1.1)
+        _db.clear_all()
+        _db.set_kv("relationship_stage", "new")
+        _db.add_message("user", "你好乙")
+        persona_pool.save({"name": "乙", "label": "老干部", "text": "x",
+                           "wake_hour": 6, "sleep_hour": 22, "bubble_mult": 1.0,
+                           "quirk": "q", "drawn_at": "2026-10-06T01:00:00"})
+        commands._archive_current()
+        assert len(commands._archives()) == 2
+
+        # 换回甲 → 再换回来：切换不产生新快照
+        r = commands.handle("/friend 1")
+        assert "甲" in r, f"/friend 切换反馈不对：{r}"
+        assert len(commands._archives()) == 2
+        commands.handle("/friend 2")
+        commands.handle("/friend 1")
+        assert len(commands._archives()) == 2, "来回切换产生了重复归档"
+
+        # /alias 只改库内记录，文件名不动
+        target_before = commands._archives()[0].name
+        r = commands.handle("/alias 1 老铁")
+        assert "老铁" in r
+        assert commands._archives()[0].name == target_before, "/alias 改了文件名"
+        assert commands._archive_display(commands._archives()[0])[0] == "老铁"
+
+        # /friends 输出带最后归档时间
+        out = commands.handle("/friends")
+        assert "老铁" in out and "最后归档" in out, f"/friends 输出：{out}"
+
+        # 归档日志
+        log = (tmp / "archive.log").read_text(encoding="utf-8")
+        assert "归档 甲" in log and "归档 乙" in log, f"archive.log：{log}"
+        print("ok 归档 V2（稳定文件/覆盖更新/别名不改名/归档日志）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
+def test_game_mode():
+    """娱乐模式：开局/结束检测、规则注入、游戏中暂停主动消息、/status 显示。"""
+    import tempfile
+    import db as _db
+    import game
+    import guard as _guard
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # 泛泛说"玩游戏"不开局，提到具体游戏名才开
+        game.on_user_text("我们玩个游戏吧")
+        assert game.current() is None, "泛泛的游戏意愿不应触发状态机"
+        game.on_user_text("来玩成语接龙吧")
+        assert game.current()["game"] == "idiom", "成语接龙未开局"
+        # 规则注入
+        inj = game.prompt_injection()
+        assert "成语接龙" in inj and "规则" in inj
+        # 游戏中：主动消息全部暂停
+        ok, reason = _guard.can_send_proactive(scenario="bubble")
+        assert not ok and reason == "游戏中", f"游戏中未拦截冒泡：{ok} {reason}"
+        ok, reason = _guard.can_send_proactive(scenario="morning")
+        assert not ok and reason == "游戏中", f"游戏中未拦截问候：{ok} {reason}"
+        # /status 显示游戏状态
+        out = commands.handle("/status")
+        assert "游戏中：成语接龙" in out, f"/status 缺游戏状态：{out}"
+        # 游戏中提到另一个游戏名 = 换游戏
+        game.on_user_text("要不玩海龟汤")
+        assert game.current()["game"] == "soup", "换游戏失败"
+        assert "海龟汤" in game.prompt_injection()
+        # 结束游戏 → 主动消息恢复
+        game.on_user_text("不玩了")
+        assert game.current() is None, "游戏未结束"
+        assert game.prompt_injection() is None
+        ok, _ = _guard.can_send_proactive(scenario="bubble")
+        assert ok, "游戏结束后主动消息未恢复"
+        # 不在游戏时说"不玩了"不应报错
+        game.on_user_text("不玩了")
+        print("ok 娱乐模式（开局/换游戏/结束/主动消息暂停恢复/状态显示）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
+def test_session_end_and_outbox():
+    """话题结束 AI 判断（AI回复信号 + LLM判官）+ outbox 未读队列重放。"""
+    import json as _json
+    import tempfile
+    import db as _db
+    import llm as _llm
+    import memory as _memory
+    from core import Engine
+
+    class DummyChannel:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, text):
+            self.sent.append(text)
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _llm.chat
+    real_extract = _memory.extract_async
+    _memory.extract_async = lambda: None  # 测试不碰真实 LLM
+    try:
+        _db.init()
+        ch = DummyChannel()
+        engine = Engine(ch)
+
+        # 1) AI 回复自带结束信号 → 会话关闭（不轻催）
+        _db.set_kv("session_open", "1")
+        _llm.chat = lambda *a, **k: "晚安啦，好梦"
+        engine._generate_reply(["我要睡了"])
+        assert _db.get_kv("session_open") == "0", "AI 回复含晚安未关闭会话"
+
+        # 2) LLM 判官：关键词都没抓住时由模型判
+        _db.set_kv("session_open", "1")
+        _llm.chat = lambda *a, **k: "是"
+        assert engine._judge_session_end(["那我先走啦"], "嗯嗯，去吧！") is True
+        assert _db.get_kv("session_open") == "0", "LLM 判官未关闭会话"
+        _db.set_kv("session_open", "1")
+        _llm.chat = lambda *a, **k: "否"
+        assert engine._judge_session_end(["等下我有个问题"], "你说") is False
+        assert _db.get_kv("session_open") == "1", "LLM 判官误关会话"
+        # LLM 不可用/乱答 → 不动会话
+        _llm.chat = lambda *a, **k: "（stub：还没配 key）"
+        assert engine._judge_session_end(["哈哈"], "哈哈") is False
+        assert _db.get_kv("session_open") == "1"
+
+        # 3) outbox 未读队列：主动消息攒着，用户回来时重放并清空
+        _llm.chat = lambda *a, **k: "（test）"
+        engine._send("冒个泡～", kind="proactive")
+        engine._send("中午吃了没", kind="proactive")
+        q = _json.loads(_db.get_kv("outbox_queue"))
+        assert len(q) == 2, f"未读队列没攒住：{q}"
+        assert (tmp / "outbox.log").exists(), "outbox.log 存档丢了"
+        ch.sent.clear()
+        engine.on_user_message("我回来了")
+        assert any("2 条留言" in s and "冒个泡" in s for s in ch.sent), \
+            f"回来时没有重放留言：{ch.sent}"
+        assert _db.get_kv("outbox_queue") == "", "重放后队列未清空"
+        # 没有留言时不打扰
+        ch.sent.clear()
+        engine.on_user_message("在吗")
+        assert not any("条留言" in s for s in ch.sent), "空队列也重放了"
+        print("ok 话题结束 AI 判断 + outbox 未读队列重放")
+    finally:
+        _llm.chat = real_chat
+        _memory.extract_async = real_extract
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
+def test_memory_append_timeline():
+    """追加式时间线记忆：同主题不合并全保留；原文相同才跳过；
+    时间标签参与召回（相对词换算日期）；同组更新历史带出；/memories 分组展示。"""
+    import tempfile
+    from datetime import datetime
+    import commands as _cmd
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # prompt 新规则：绝对日期 + 追加式，不再有合并规则
+        assert "YYYY-MM-DD" in _mem.EXTRACT_PROMPT
+        assert "一件事只留一条" not in _mem.EXTRACT_PROMPT
+
+        # 1) 同主题换说法 → 两条都保留（追加，不合并）
+        _db.add_memory("小徐的AI项目正在稳步推进", "事件", theme="技术")
+        _mem._apply({"content": "小徐的AI项目规模很大，每天只能推进一部分",
+                     "category": "事件", "theme": "技术"})
+        assert _db.memory_count() == 2, "同主题新进展应追加而非合并"
+        # 2) 原文完全相同 → 跳过
+        _mem._apply({"content": "小徐的AI项目正在稳步推进", "category": "事件", "theme": "技术"})
+        assert _db.memory_count() == 2, "完全相同的原文不应重复记"
+
+        # 3) 记忆量超过全量阈值后，时间标签参与召回：
+        #    query 说"今天下午" 应命中今天日期+下午的标签
+        today = datetime.now().date().isoformat()
+        _db.add_memory("小徐计划先写图像作业再弄项目", "计划",
+                       time_label=f"{today} 下午", theme="学业")
+        _db.add_memory("小徐打算周日去爬山", "计划", theme="出行")
+        _db.add_memory("小徐爬山改到周六了", "计划", theme="出行")
+        for i in range(10):  # 填充无关记忆，超过全量返回阈值（10 条）
+            _db.add_memory(f"无关记忆填充第{i}号关于天气", "事件", theme="其他")
+        hits = _mem.recall("我今天下午该干嘛来着", top_k=5)
+        assert any("图像作业" in m["content"] for m in hits), \
+            f"时间标签未参与召回：{[m['content'] for m in hits]}"
+
+        # 4) 同组更新历史：命中旧计划时带出同组更新的那条（改期）
+        hits = _mem.recall("周日去爬山的计划", top_k=5)
+        contents = [m["content"] for m in hits]
+        assert any("改到周六" in c for c in contents), f"未带出同组更新：{contents}"
+
+        # 5) /memories 分组展示：同 (category, theme) 归一组，组内旧→新；
+        #    每条带存储时间（记于MM-DD HH:MM），与事发时间标签是两个维度
+        out = _cmd.handle("/memories")
+        assert "▸ 计划·出行" in out, f"缺分组标题：{out}"
+        i_old, i_new = out.index("周日去爬山"), out.index("改到周六")
+        assert i_old < i_new, "组内应按时间正序（新的在后面）"
+        assert "记于" in out, f"缺存储时间：{out}"
+        assert f"@{today} 下午" in out, f"缺事发时间标签：{out}"
+        print("ok 追加式时间线记忆（追加/相同跳过/时间标签召回/同组带出/分组展示+双时间维度）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_memory_v2():
+    """记忆系统 v2：历史回填（断点/历史时间锚定）+ 删除待确认 + status 列迁移。"""
+    import json
+    import sqlite3
+    import tempfile
+    import commands as _cmd
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _mem.llm.chat
+    try:
+        _db.init()
+        # 0) status 列迁移：模拟旧库（删掉 status 列）后 init 应自动补回
+        with sqlite3.connect(str(config.DB_PATH)) as c:
+            c.execute("ALTER TABLE memories DROP COLUMN status")
+        _db.init()
+        with sqlite3.connect(str(config.DB_PATH)) as c:
+            cols = [r[1] for r in c.execute("PRAGMA table_info(memories)")]
+        assert "status" in cols, "旧库迁移未补 status 列"
+
+        # 1) 历史回填：旧消息分批提取，参照时间用消息当天而非回填当天
+        for i, (role, text) in enumerate([
+                ("user", "我们今天下午聊聊SVD图像压缩吧"),
+                ("assistant", "好啊，SVD 就是把矩阵分解成三个矩阵……"),
+                ("user", "懂了！你讲得比老师清楚"),
+                ("assistant", "哈哈那明天继续"),
+        ]):
+            _db.add_message(role, text)
+        with sqlite3.connect(str(config.DB_PATH)) as c:  # 改成历史时间 10-03
+            c.execute("UPDATE messages SET ts='2026-10-03T15:00:00'")
+        calls = []
+
+        def fake_chat(messages, temperature=0.7):
+            calls.append(messages[-1]["content"])
+            return json.dumps([{"content": "AI 给小徐详细讲过SVD图像压缩的原理",
+                                "category": "事件", "theme": "学业",
+                                "time": "2026-10-03 下午"}], ensure_ascii=False)
+
+        _mem.llm.chat = fake_chat
+        added = _mem.backfill_history(progress=lambda *a: None)
+        # 断言最终状态而非精确条数：早期测试可能残留后台线程晚触发 llm.chat（竞态），
+        # 会抢先 apply 同一条记忆导致 added=0，但终态一致
+        assert any("【现在时间】2026-10-03" in c for c in calls), \
+            f"参照时间应为消息当天：{calls[:2]}"
+        mems = _db.all_memories()
+        svd = [m for m in mems if "SVD" in m["content"]]
+        assert svd, f"回填未产生记忆：{[m['content'] for m in mems]}"
+        assert svd[0]["time_label"] == "2026-10-03 下午", \
+            f"时间标签未锚定历史日期：{svd[0]['time_label']}"
+        # 断点：再跑一次不重复回填
+        assert _mem.backfill_history(progress=lambda *a: None) == 0, "断点失效，重复回填"
+
+        # 2) 删除待确认：AI 提议 → 标记不真删 → recall 排除 → keepmem 恢复 → delmem 真删
+        _mem.llm.chat = real_chat  # 后续不再需要 LLM
+        _mem._apply({"content": "小徐被AI称为技术宅", "category": "画像"})
+        _mem._apply({"content": "技术宅", "delete": True})
+        pend = _db.pending_delete_memories()
+        assert len(pend) == 1 and "技术宅" in pend[0]["content"], "删除提议未标记"
+        assert _db.memory_count() == 2, "提议删除不应真删"
+        assert all("技术宅" not in m["content"] for m in _mem.recall("小徐 技术")), \
+            "待删除记忆不应参与召回"
+        out = _cmd.handle("/memories")
+        assert "待你确认" in out and "技术宅" in out, f"/memories 缺待确认区：{out}"
+        assert "留着" in _cmd.handle(f"/keepmem {pend[0]['id']}")
+        assert not _db.pending_delete_memories(), "keepmem 未恢复"
+        assert "已忘掉" in _cmd.handle(f"/delmem {pend[0]['id']}")
+        assert all("技术宅" not in m["content"] for m in _db.all_memories()), "delmem 未真删"
+        print("ok 记忆 v2（迁移/回填+历史时间锚定/断点/删除待确认全流程）")
+    finally:
+        _mem.llm.chat = real_chat
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_groupchat():
+    """朋友联动群聊：拉群/名字显示/轮次上限防循环/散群写回+各自提取/群聊暂停冒泡。"""
+    import tempfile
+    import commands as _cmd
+    import db as _db
+    import groupchat as _gc
+    import guard as _guard
+
+    class FakeChannel:
+        def __init__(self):
+            self.sent = []  # (sender, text)
+
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _gc.llm.chat
+    try:
+        # 当前朋友小葵 + 归档老朋友稳稳
+        _db.init()
+        _db.set_kv("persona_json", '{"name": "小葵", "label": "温柔治愈", '
+                                   '"text": "温柔", "wake_hour": 8, "sleep_hour": 23, '
+                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
+        config.DB_PATH = tmp / "friend-abc12345.db"
+        _db.init()
+        _db.set_kv("persona_json", '{"name": "稳稳", "label": "毒舌卷王", '
+                                   '"text": "毒舌", "wake_hour": 7, "sleep_hour": 24, '
+                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-05"}')
+        _db.set_kv("alias", "稳稳")
+        _db.set_kv("archived_at", "2026-10-05T23:00:00")
+        config.DB_PATH = tmp / "friend.db"
+
+        # 拉群：当前朋友 + 归档 [1]
+        out = _cmd.handle("/group 1")
+        assert "小葵" in out and "稳稳" in out, f"拉群失败：{out}"
+        assert _gc.is_active()
+        # 群聊期间主动消息暂停
+        ok, reason = _guard.can_send_proactive()
+        assert not ok and reason == "群聊中", f"群聊中冒泡未拦截：{reason}"
+
+        # 群聊对话：mock LLM——小葵的话里点名稳稳（提及接力）
+        def fake_chat(messages, temperature=0.7):
+            sys_msg = messages[0]["content"]
+            if "你是小葵" in sys_msg:
+                return "小徐你来啦\n稳稳你也说两句呗"
+            return "哟，都在呢"
+
+        _gc.llm.chat = fake_chat
+        # 强制串话不停，验证 MAX_AI_TURNS 硬顶
+        real_cross, real_stop = _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB
+        _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB = 1.0, 0.0
+        ch = FakeChannel()
+        _gc.on_user_text("大家好呀", ch)
+        _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB = real_cross, real_stop
+
+        ai_msgs = [x for x in ch.sent if x[0]]
+        assert all(s in ("小葵", "稳稳") for s, _ in ai_msgs), f"发言人名字不对：{ai_msgs[:3]}"
+        s = _gc.current()
+        # transcript 一条 = 一次发言（send 会按换行拆段，不能拿消息数当轮次）
+        ai_turns = sum(1 for sp, _ in s.transcript if sp != "小徐")
+        assert ai_turns == _gc.MAX_AI_TURNS, f"轮次硬顶失效：{ai_turns}"
+        assert s.transcript[0] == ("小徐", "大家好呀")
+        # 小葵第一段没点名，第二段点名稳稳——都在 transcript 里
+        assert any(sp == "小葵" and "稳稳" in tx for sp, tx in s.transcript)
+
+        # 散群：记录写回两位各自的库 + 各自提取记忆
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 提取阶段不新记
+        out = _cmd.handle("/endgroup")
+        assert "散啦" in out
+        assert not _gc.is_active()
+        for f, name in ((tmp / "friend.db", "小葵"), (tmp / "friend-abc12345.db", "稳稳")):
+            config.DB_PATH = f
+            _db.init()
+            with __import__("sqlite3").connect(str(f)) as c:
+                n = c.execute("SELECT COUNT(*) FROM messages WHERE kind='group'").fetchone()[0]
+            assert n == len(s.transcript), f"{name} 库里群聊记录不全：{n}"
+        config.DB_PATH = tmp / "friend.db"
+        # 散群后冒泡恢复
+        ok, _ = _guard.can_send_proactive()
+        assert ok, "散群后冒泡未恢复"
+        print("ok 群聊（拉群/名字/轮次上限/写回各自库/暂停恢复冒泡）")
+    finally:
+        _gc.llm.chat = real_chat
+        _gc._session = None
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+if __name__ == "__main__":
+    test_cli_timestamps()
+    test_refresh_reloads_config_and_modules()
+    test_refresh_reschedules_jobs()
+    test_startup_pick_friend()
+    test_stable_archive()
+    test_game_mode()
+    test_session_end_and_outbox()
+    test_memory_append_timeline()
+    test_memory_v2()
+    test_groupchat()
+    print("\n全部通过")

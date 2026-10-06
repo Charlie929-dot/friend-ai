@@ -1,0 +1,19 @@
+# 隐私与密钥
+.env
+profile.md
+
+# 数据（聊天记录/记忆库）
+*.db
+*.db-journal
+backups/
+archive.log
+outbox.log
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.idea/
