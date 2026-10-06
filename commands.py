@@ -40,6 +40,8 @@ HELP = """可用命令：
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
   /group <编号...> 拉群：当前朋友和指定的归档老朋友一起聊天（编号见 /friends）
   /endgroup        散群：群聊记录写回每位朋友的库并各自记进记忆
+  /groupidle       查看群聊自主闲聊开关（你不说话时 AI 们会自己慢慢聊）
+  /groupidle on|off  开/关群聊自主闲聊（默认开）
   /guard           查看防打扰开关状态
   /guard on|off    开/关防打扰（默认关；睡觉拦截是作息，不受影响）
   /refresh         重新加载所有文件（.env/配置/人设/prompt/语料），不用重启
@@ -350,6 +352,19 @@ def handle(cmd_line: str) -> str:
         import groupchat
         return groupchat.end()
 
+    if cmd == "/groupidle":
+        import groupchat
+        if not arg:
+            return (f"群聊自主闲聊：{'开' if groupchat.idle_enabled() else '关'}。"
+                    "开着时你不说话，AI 们会自己有一搭没一搭地聊；你一开口话题就回到你。")
+        if arg == "on":
+            db.set_kv("group_idle", "on")
+            return "群聊自主闲聊已开启：你不说话的时候，他们会自己聊起来的。"
+        if arg == "off":
+            db.set_kv("group_idle", "off")
+            return "群聊自主闲聊已关闭：群里只有你说完大家才接话。"
+        return "用法：/groupidle on 或 /groupidle off"
+
     if cmd == "/note":
         if not arg:
             return "用法：/note <要记住的事>，如 /note 叫我小徐"
@@ -428,6 +443,7 @@ def handle(cmd_line: str) -> str:
         # 范围：.env/config 参数、人格池、人设 prompt、LLM、记忆、防打扰、游戏规则。
         # 不重载 core/db/scheduler/通道（引擎实例已创建，结构改动仍需重启）。
         import importlib
+        import corpus as _corpus
         import game as _game
         import groupchat as _groupchat
         import guard as _guard
@@ -442,7 +458,7 @@ def handle(cmd_line: str) -> str:
             group_note = "（群聊已先散场，大家都记下了）"
         config.load_dotenv(force=True)   # .env 改过的值强制生效
         importlib.reload(config)         # 重读全部配置参数
-        for m in (_pool, _persona, _llm, _memory, _guard, _game, _groupchat):
+        for m in (_corpus, _pool, _persona, _llm, _memory, _guard, _game, _groupchat):
             importlib.reload(m)
         return "刷新成功" + group_note
 

@@ -51,6 +51,10 @@ def main():
                 engine.on_persona_changed()  # 人格/朋友变了，重排作息与冒泡
             elif cmd0 == "/refresh":
                 engine.on_config_reloaded()  # 热重载后定时任务按新配置重排
+            elif cmd0 == "/group":
+                import groupchat
+                if groupchat.is_active():
+                    groupchat.attach_channel(channel)  # 自主闲聊得有地方发言
         else:
             import groupchat
             if groupchat.is_active():

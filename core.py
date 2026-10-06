@@ -6,6 +6,7 @@ import time as _time
 from datetime import datetime, timedelta
 
 import config
+import corpus
 import db
 import game
 import guard
@@ -18,13 +19,6 @@ from channels.base import Channel
 # 会话结束信号：用户说了这些 = 这段会话告一段落，不要轻催
 ENDING_SIGNALS = ["拜拜", "晚安", "去忙", "先这样", "下了", "睡了", "睡觉",
                   "我去写", "写作业去", "去吃饭", "去上课", "溜了", "不聊了", "先不聊"]
-
-# 内容太长、阅读超限时先回一句
-LONG_TEXT_NOTES = [
-    "内容有点多，我慢慢看哈",
-    "好家伙，信息量有点大，容我缓缓",
-    "等下，这也太长了吧，我慢慢看",
-]
 
 
 def take_outbox() -> list[dict]:
@@ -104,7 +98,7 @@ class Engine:
                                           self._reading_deadline)
                 long_note = False
         if long_note:
-            self._send(random.choice(LONG_TEXT_NOTES), kind="chat")
+            self._send(corpus.pick(corpus.LONG_TEXT_NOTES, "long_note"), kind="chat")
 
         # 会话级时间观：判断这段会话是继续还是告一段落
         if any(s in text for s in ENDING_SIGNALS):
@@ -140,7 +134,7 @@ class Engine:
     def _generate_reply(self, batch: list[str]) -> None:
         state = db.get_state()
         if state == "SLEEPING":
-            self._send(random.choice(persona.SLEEPY_REPLIES), kind="chat")
+            self._send(corpus.pick(persona.SLEEPY_REPLIES, "sleepy"), kind="chat")
             return
 
         messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
@@ -189,7 +183,8 @@ class Engine:
             # 停发剩余段，先听你说
             if self._interrupted():
                 if i > 0:  # 已经发出去几段了，补一句让步语
-                    self._send(random.choice(persona.INTERRUPT_ACKS), kind="chat")
+                    self._send(corpus.pick(persona.INTERRUPT_ACKS, "interrupt"),
+                               kind="chat")
                 interrupted = True
                 break
             self._send(seg, kind="chat")
@@ -251,19 +246,24 @@ class Engine:
             return False
 
         state = db.get_state()
-        prompt = persona.build_proactive_prompt(state, scenario)
-        # 主动话题接记忆：random 场景一半概率翻一条旧记忆接着聊
-        if scenario == "random" and random.random() < 0.5:
-            mem = memory.random_memory()
-            if mem:
-                prompt[-1]["content"] += (
-                    f"\n（你忽然想起关于TA的一件事：「{mem['content']}」。"
-                    f"可以就着它聊，比如问问后续；想聊别的也行。）")
-        try:
-            reply = llm.chat(prompt, temperature=1.0)
-        except llm.LLMUnavailable as e:
-            print(f"[proactive:{scenario}] LLM 不可用：{e}")
-            return False
+        reply = None
+        # 冒泡一部分直接抽固定语料：不重样、省 token（语料在 corpus.py 统一维护）
+        if scenario == "bubble" and random.random() < config.BUBBLE_FIXED_PROB:
+            reply = corpus.pick(corpus.BUBBLE_LINES, "bubble")
+        if reply is None:
+            prompt = persona.build_proactive_prompt(state, scenario)
+            # 主动话题接记忆：random 场景一半概率翻一条旧记忆接着聊
+            if scenario == "random" and random.random() < 0.5:
+                mem = memory.random_memory()
+                if mem:
+                    prompt[-1]["content"] += (
+                        f"\n（你忽然想起关于TA的一件事：「{mem['content']}」。"
+                        f"可以就着它聊，比如问问后续；想聊别的也行。）")
+            try:
+                reply = llm.chat(prompt, temperature=1.0)
+            except llm.LLMUnavailable as e:
+                print(f"[proactive:{scenario}] LLM 不可用：{e}")
+                return False
 
         if scenario == "bubble":
             db.incr_counter("bubble_count")

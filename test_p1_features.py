@@ -18,6 +18,23 @@ import persona
 
 TS_RE = re.compile(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
 
+# 群聊时间模拟（阅读/打字/接话间隔）的测试用快档：压到毫秒级，别把测试拖慢
+_FAST_TIMING = {
+    "READING_SECONDS_PER_CHAR": 0.0, "READING_MAX_SECONDS": 5.0,
+    "TYPING_SECONDS_PER_CHAR": 0.0, "TYPING_MIN_SECONDS": 0.0,
+    "TYPING_MAX_SECONDS": 0.01,
+    "SEND_SECONDS_PER_CHAR": 0.0, "SEND_MIN_SECONDS": 0.0, "SEND_MAX_SECONDS": 0.01,
+    "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0, "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
+}
+
+
+def _set_timing(values: dict) -> dict:
+    """批量改 config 计时参数，返回旧值（finally 里还原）。"""
+    saved = {k: getattr(config, k) for k in values}
+    for k, v in values.items():
+        setattr(config, k, v)
+    return saved
+
 
 def test_cli_timestamps():
     """AI 消息带 [时间 AI] 前缀；用户发送后打印 [时间 你] 标记行。"""
@@ -489,6 +506,7 @@ def test_groupchat():
     config.BASE_DIR = tmp
     config.DB_PATH = tmp / "friend.db"
     real_chat = _gc.llm.chat
+    saved_timing = _set_timing(_FAST_TIMING)
     try:
         # 当前朋友小葵 + 归档老朋友稳稳
         _db.init()
@@ -554,6 +572,7 @@ def test_groupchat():
         assert ok, "散群后冒泡未恢复"
         print("ok 群聊（拉群/名字/轮次上限/写回各自库/暂停恢复冒泡）")
     finally:
+        _set_timing(saved_timing)
         _gc.llm.chat = real_chat
         _gc._session = None
         config.BASE_DIR, config.DB_PATH = real_base, real_db
@@ -782,6 +801,7 @@ def test_group_persist_and_friend_name():
     config.BASE_DIR = tmp
     config.DB_PATH = tmp / "friend.db"
     real_chat = _gc.llm.chat
+    saved_timing = _set_timing(_FAST_TIMING)
 
     class Ch:
         def __init__(self):
@@ -834,6 +854,7 @@ def test_group_persist_and_friend_name():
         _gc.llm.chat = lambda messages, temperature=0.7: "好嘞"
         _gc.on_user_text("群里再说点啥", Ch())
         assert persist.exists()
+        _gc._session.active = False  # 停掉闲聊线程再模拟重启
         _gc._session = None  # 模拟进程重启（内存没了，落盘还在）
         _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 提取不新记
         note = _gc.recover_pending()
@@ -845,7 +866,10 @@ def test_group_persist_and_friend_name():
         assert rows, "恢复后群聊记录没补写回小葵的库"
         print("ok 群聊持久化（落盘/refresh散场/重启恢复）+ 老朋友名字回退")
     finally:
+        _set_timing(saved_timing)
         _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
         _gc._session = None
         (tmp / "group_session.json").unlink(missing_ok=True)
         config.BASE_DIR, config.DB_PATH = real_base, real_db
@@ -910,6 +934,263 @@ def test_db_path_lock():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
+def test_corpus_pick():
+    """固定语料库：语料从 corpus 统一管理、persona 别名兼容、pick 不连续重复。"""
+    import corpus
+    import persona as _persona
+    # 别名兼容：旧引用（core/测试）拿到的就是 corpus 里的那份
+    assert _persona.SLEEPY_REPLIES is corpus.SLEEPY_REPLIES
+    assert _persona.INTERRUPT_ACKS is corpus.INTERRUPT_ACKS
+    # 语料丰富度：睡觉/插话/冒泡都比原来的一小把多
+    assert len(corpus.SLEEPY_REPLIES) >= 10
+    assert len(corpus.INTERRUPT_ACKS) >= 6
+    assert len(corpus.BUBBLE_LINES) >= 10
+    assert len(corpus.LONG_TEXT_NOTES) >= 5
+    # pick 不连续重复（人味儿 = 不重样）
+    picks = [corpus.pick(corpus.BUBBLE_LINES, "test_no_repeat") for _ in range(30)]
+    assert all(a != b for a, b in zip(picks, picks[1:])), \
+        f"出现连续重复：{picks}"
+    # 空列表/单条兜底
+    assert corpus.pick([], "empty") == ""
+    assert corpus.pick(["唯一"], "single") == "唯一"
+    print("ok 固定语料库（统一管理/别名兼容/丰富度/不连续重复）")
+
+
+def test_bubble_fixed_corpus():
+    """冒泡固定语料：BUBBLE_FIXED_PROB=1 时冒泡直接抽语料，不调 LLM（省 token）。"""
+    import tempfile
+    import corpus
+    import db as _db
+    import llm as _llm
+    from core import Engine
+
+    class DummyChannel:
+        def __init__(self):
+            self.sent = []
+        def send(self, text, sender=""):
+            self.sent.append(text)
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved_prob = config.BUBBLE_FIXED_PROB
+    config.BUBBLE_FIXED_PROB = 1.0
+    real_chat = _llm.chat
+    try:
+        _db.init()
+        ch = DummyChannel()
+        engine = Engine(ch)
+
+        def boom(*a, **k):
+            raise AssertionError("固定语料冒泡不应调 LLM")
+
+        _llm.chat = boom
+        assert engine._proactive("bubble") is True
+        assert ch.sent and ch.sent[0] in corpus.BUBBLE_LINES, \
+            f"冒泡没走固定语料：{ch.sent}"
+        print("ok 冒泡固定语料（不走 LLM，省 token）")
+    finally:
+        _llm.chat = real_chat
+        config.BUBBLE_FIXED_PROB = saved_prob
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
+def _make_two_friend_dbs(tmp):
+    """测试工具：当前朋友小葵 + 归档老朋友稳稳两份库。返回两个 Participant。"""
+    import db as _db
+    import groupchat as _gc
+    config.DB_PATH = tmp / "friend.db"
+    _db.init()
+    _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
+                               '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
+                               '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
+    config.DB_PATH = tmp / "friend-abc12345.db"
+    _db.init()
+    _db.set_kv("persona_json", '{"name": "稳稳", "label": "老干部", '
+                               '"text": "稳", "wake_hour": 7, "sleep_hour": 22, '
+                               '"bubble_mult": 1.0, "drawn_at": "2026-10-05"}')
+    config.DB_PATH = tmp / "friend.db"
+    return [_gc.Participant(tmp / "friend.db", "小葵"),
+            _gc.Participant(tmp / "friend-abc12345.db", "稳稳")]
+
+
+def test_group_timing():
+    """群聊时间感与私聊同步：阅读等待生效；发言人"正在输入"在其正文之前。"""
+    import tempfile
+    import time as _t
+    import db as _db
+    import groupchat as _gc
+
+    class Ch:
+        def __init__(self):
+            self.events = []  # ("typing", sender) / ("send", sender, text)
+        def send(self, text, sender=""):
+            self.events.append(("send", sender, text))
+        def typing(self, sender=""):
+            self.events.append(("typing", sender))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    saved_timing = _set_timing(_FAST_TIMING)
+    # 阅读时长拉开一点，验证"读完才回"（首位回应者：read + 0.3s 起步）
+    config.READING_SECONDS_PER_CHAR = 0.05
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: "嗯嗯"
+        _gc.start(parts)
+        t0 = _t.time()
+        _gc.on_user_text("大家好呀", ch)
+        elapsed = _t.time() - t0
+        # 阅读模拟：5 个字 * 0.05s + 最少 0.3s 反应 ≈ 0.55s 起步
+        assert elapsed >= 0.5, f"阅读等待没生效，秒回了：{elapsed:.2f}s"
+        # 每位发言人都先 typing 再发正文，且 typing 带发言人自己的名字
+        for name in ("小葵", "稳稳"):
+            ti = next((i for i, e in enumerate(ch.events)
+                       if e == ("typing", name)), None)
+            si = next((i for i, e in enumerate(ch.events)
+                       if e[0] == "send" and e[1] == name), None)
+            assert ti is not None and si is not None and ti < si, \
+                f"{name} 的 typing/正文时序不对：{ch.events}"
+        print("ok 群聊时间感（阅读等待 + 发言人 typing 先于正文）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved_timing)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_group_idle_chatter():
+    """群聊自主闲聊：用户沉默后 AI 们自己开聊（间隔拉长、轮数有上限）；
+    用户一开口立刻打断、话题回归用户；睡觉的成员不参与闲聊。"""
+    import tempfile
+    import time as _t
+    import db as _db
+    import groupchat as _gc
+    import commands as _cmd
+
+    class Ch:
+        def __init__(self):
+            self.sent = []  # (sender, text)
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    saved_timing = _set_timing(_FAST_TIMING)
+    saved_idle = _set_timing({
+        "GROUP_IDLE_AFTER_MIN_MINUTES": 0.003,   # ≈0.2s 空闲就开聊
+        "GROUP_IDLE_AFTER_MAX_MINUTES": 0.003,
+        "GROUP_IDLE_GAP_MIN_SECONDS": 0.05,
+        "GROUP_IDLE_GAP_MAX_SECONDS": 0.08,
+        "GROUP_IDLE_MAX_TURNS": 3,
+        "TYPING_ENABLED": False,                  # 闲聊速度优先
+    })
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: "随便聊聊"
+        _gc.start(parts)
+        _gc.attach_channel(ch)
+
+        def wait_for(pred, timeout=8):
+            deadline = _t.time() + timeout
+            while _t.time() < deadline:
+                if pred():
+                    return True
+                _t.sleep(0.03)
+            return False
+
+        # 1) 用户没说话，AI 们自己聊起来了
+        assert wait_for(lambda: len(ch.sent) >= 2), \
+            f"自主闲聊没触发：{ch.sent}"
+        assert all(s in ("小葵", "稳稳") for s, _ in ch.sent), \
+            f"闲聊发言人不对：{ch.sent[:3]}"
+        s = _gc.current()
+        assert s is not None
+        # 自主闲聊提示词确实注入了（冷场指引）
+        seen_prompts = []
+
+        def spy_chat(messages, temperature=0.7):
+            seen_prompts.append(messages[0]["content"])
+            return "随便聊聊"
+
+        _gc.llm.chat = spy_chat
+        assert wait_for(lambda: any("冷下来了" in p for p in seen_prompts)), \
+            "闲聊没注入冷场指引"
+
+        # 2) 用户一开口：闲聊被打断，话题回归用户（全员回应用户的新消息）
+        ch.sent.clear()
+        _gc.llm.chat = lambda messages, temperature=0.7: "回应小徐"
+        _gc.on_user_text("我回来了", ch)
+        idx_user = next(i for i, (sp, _) in enumerate(s.transcript) if sp == "小徐"
+                        and _ == "我回来了")
+        after = [sp for sp, _ in s.transcript[idx_user + 1:]]
+        assert "小葵" in after and "稳稳" in after, \
+            f"用户回来后没人接话：{s.transcript}"
+        assert all(tx == "回应小徐" for sp, tx in s.transcript[idx_user + 1:]
+                   if sp != "小徐"), "话题没回到用户"
+
+        # 3) 稳稳睡觉了：新一轮闲聊只有小葵发言
+        _cmd._write_kv_file(tmp / "friend-abc12345.db", "state", "SLEEPING")
+        ch.sent.clear()
+        with _db.PATH_LOCK:
+            s.last_user_ts = 0.0
+            s.last_idle_ts = 0.0
+            s.idle_after = 0.15  # 立刻再触发一轮
+        assert wait_for(lambda: len(ch.sent) >= 2), \
+            f"睡觉判定后闲聊没继续：{ch.sent}"
+        speakers = {sp for sp, _ in ch.sent}
+        assert speakers == {"小葵"}, f"睡觉的稳稳不该发言：{ch.sent}"
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 散群提取不新记
+        _gc.end()
+        print("ok 群聊自主闲聊（冷场开聊/用户打断回归/睡觉成员跳过）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved_timing)
+        _set_timing(saved_idle)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_groupidle_command():
+    """/groupidle：查看/开/关自主闲聊，kv 运行时覆盖优先于 config。"""
+    import tempfile
+    import db as _db
+    import commands as _cmd
+    import groupchat as _gc
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        assert _gc.idle_enabled() is True  # config 默认开
+        assert "开" in _cmd.handle("/groupidle")
+        assert "已关闭" in _cmd.handle("/groupidle off")
+        assert _gc.idle_enabled() is False
+        assert "关" in _cmd.handle("/groupidle")
+        assert "已开启" in _cmd.handle("/groupidle on")
+        assert _gc.idle_enabled() is True
+        assert "用法" in _cmd.handle("/groupidle xyz")
+        print("ok /groupidle 开关（查看/开/关/运行时覆盖）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -926,4 +1207,9 @@ if __name__ == "__main__":
     test_interrupt_detection()
     test_group_persist_and_friend_name()
     test_db_path_lock()
+    test_corpus_pick()
+    test_bubble_fixed_corpus()
+    test_group_timing()
+    test_group_idle_chatter()
+    test_groupidle_command()
     print("\n全部通过")

@@ -7,6 +7,8 @@
 from datetime import datetime, timedelta
 
 import config
+# 兼容旧引用：固定语料已统一收进 corpus 模块，这里留别名（core/测试在用）
+from corpus import INTERRUPT_ACKS, SLEEPY_REPLIES  # noqa: F401
 
 COMMON_RULES = """你是一个有自己生活的朋友型 AI，不是助手，不是工具。
 - 你像朋友一样和用户相处：会主动、会惦记、有自己的节奏和情绪。
@@ -142,21 +144,3 @@ def build_proactive_prompt(state: str, scenario: str) -> list[dict]:
         {"role": "system", "content": build_system_prompt(state)},
         {"role": "user", "content": f"（内心活动，不用回复这句话本身）{scene}现在给用户发一条消息。"},
     ]
-
-
-# 睡觉期间的迷糊回复（不调 LLM，省钱）
-SLEEPY_REPLIES = [
-    "嗯……睡着了……zzz",
-    "唔……明天说……",
-    "（翻了个身）呼……",
-    "梦话中：……别吵……",
-    "zzZ……（睡得很沉）",
-]
-
-# 插话检测：回复发到一半被打断时的让步语（不调 LLM）
-INTERRUPT_ACKS = [
-    "你先说？",
-    "哎你说你说",
-    "嗯？你想说啥",
-    "（打住）你先说",
-]

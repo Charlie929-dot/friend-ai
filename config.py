@@ -77,3 +77,18 @@ BUBBLE_DAILY_LIMIT = int(os.environ.get("BUBBLE_DAILY_LIMIT", "12"))            
 NUDGE_IDLE_MIN_MINUTES = int(os.environ.get("NUDGE_IDLE_MIN_MINUTES", "10"))
 NUDGE_IDLE_MAX_MINUTES = int(os.environ.get("NUDGE_IDLE_MAX_MINUTES", "20"))
 NUDGE_PROBABILITY = float(os.environ.get("NUDGE_PROBABILITY", "0.6"))  # 剩下 40% 选择安静等待（真人也不是每次都催）
+
+# --- 固定语料策略 ---
+BUBBLE_FIXED_PROB = float(os.environ.get("BUBBLE_FIXED_PROB", "0.35"))  # 冒泡直接抽固定语料的概率（省 token）
+
+# --- 群聊：成员间的时间感 ---
+GROUP_SPEAKER_GAP_MIN_SECONDS = float(os.environ.get("GROUP_SPEAKER_GAP_MIN_SECONDS", "0.8"))  # 上一位说完，下一位接话的间隔
+GROUP_SPEAKER_GAP_MAX_SECONDS = float(os.environ.get("GROUP_SPEAKER_GAP_MAX_SECONDS", "2.5"))
+
+# --- 群聊：自主闲聊（用户没说话、群里没有话题焦点时 AI 们自己聊） ---
+GROUP_IDLE_CHATTER = os.environ.get("GROUP_IDLE_CHATTER", "on").lower() == "on"   # 总开关（/groupidle 可运行时覆盖）
+GROUP_IDLE_AFTER_MIN_MINUTES = float(os.environ.get("GROUP_IDLE_AFTER_MIN_MINUTES", "3"))   # 用户沉默多久后开聊
+GROUP_IDLE_AFTER_MAX_MINUTES = float(os.environ.get("GROUP_IDLE_AFTER_MAX_MINUTES", "8"))
+GROUP_IDLE_GAP_MIN_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MIN_SECONDS", "20"))  # 闲聊时拉长的"阅读+回复"间隔
+GROUP_IDLE_GAP_MAX_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MAX_SECONDS", "60"))
+GROUP_IDLE_MAX_TURNS = int(os.environ.get("GROUP_IDLE_MAX_TURNS", "6"))   # 一次闲聊最多几轮（省 token）
