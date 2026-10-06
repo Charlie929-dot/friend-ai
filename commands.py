@@ -323,7 +323,10 @@ def handle(cmd_line: str) -> str:
         _archive_current()  # 当前朋友也归档（覆盖更新TA自己的那份），不丢
         shutil.copyfile(str(chosen), str(config.DB_PATH))
         name, _ = _archive_display(chosen)
-        return f"欢迎回来～已切换到 {name}，接着聊吧。"
+        msg = f"欢迎回来～已切换到 {name}，接着聊吧。"
+        import core  # 切过去就顺手看看TA有没有留言攒着
+        pending = core.pending_outbox_text()
+        return msg + (f"\n\n{pending}" if pending else "")
 
     if cmd == "/group":
         import groupchat

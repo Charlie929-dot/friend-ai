@@ -306,10 +306,19 @@ def test_session_end_and_outbox():
         q = _json.loads(_db.get_kv("outbox_queue"))
         assert len(q) == 2, f"未读队列没攒住：{q}"
         assert (tmp / "outbox.log").exists(), "outbox.log 存档丢了"
+        # 回来就先看到（启动/换朋友时的重放，不用等开口说第一句）
+        import core as _core
+        text = _core.pending_outbox_text()
+        assert "2 条留言" in text and "冒个泡" in text and "中午吃了没" in text, \
+            f"回来时的留言内容不对：{text}"
+        assert _db.get_kv("outbox_queue") == "", "取走后队列未清空"
+        assert _core.pending_outbox_text() == "", "空队列应返回空串"
+        # 开口说话也能拿到（进程没重启时的兜底路径）
+        engine._send("还在吗", kind="proactive")
         ch.sent.clear()
         engine.on_user_message("我回来了")
-        assert any("2 条留言" in s and "冒个泡" in s for s in ch.sent), \
-            f"回来时没有重放留言：{ch.sent}"
+        assert any("1 条留言" in s and "还在吗" in s for s in ch.sent), \
+            f"开口后没有重放留言：{ch.sent}"
         assert _db.get_kv("outbox_queue") == "", "重放后队列未清空"
         # 没有留言时不打扰
         ch.sent.clear()

@@ -7,6 +7,7 @@
 import sys
 
 import commands
+import core
 import db
 from core import Engine
 
@@ -36,6 +37,10 @@ def main():
             print(commands.handle(cmd))
     channel = make_channel(mode)
     engine = Engine(channel)
+    # 一进来就先把离开期间攒下的留言重放出来，不用等你说第一句话
+    pending = core.pending_outbox_text()
+    if pending:
+        channel.send(pending)
 
     def on_message(text: str) -> None:
         text = text.strip()

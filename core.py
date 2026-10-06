@@ -27,6 +27,43 @@ LONG_TEXT_NOTES = [
 ]
 
 
+def take_outbox() -> list[dict]:
+    """取出并清空未读主动消息队列（存在各自 friend.db，按朋友隔离）。
+
+    主动消息发出时就进队，用户回来（启动 / 换朋友 / 开口说话）时重放。
+    """
+    raw = db.get_kv("outbox_queue")
+    if not raw:
+        return []
+    db.set_kv("outbox_queue", "")
+    try:
+        queue = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(queue, list):
+        return []
+    return [m for m in queue if isinstance(m, dict) and m.get("text")]
+
+
+def format_outbox(items: list[dict]) -> str:
+    """把未读留言渲染成一条重放消息。"""
+    lines = []
+    for m in items:
+        ts = ""
+        try:
+            ts = datetime.fromisoformat(m["ts"]).strftime("%m-%d %H:%M")
+        except (KeyError, ValueError):
+            pass
+        lines.append(f"[{ts}] {m['text']}" if ts else m["text"])
+    return f"（你不在的时候 TA 发的 {len(items)} 条留言）\n" + "\n".join(lines)
+
+
+def pending_outbox_text() -> str:
+    """有待重放的留言就返回渲染好的文本，没有返回空串（启动/换朋友时调用）。"""
+    items = take_outbox()
+    return format_outbox(items) if items else ""
+
+
 class Engine:
     def __init__(self, channel: Channel):
         self.channel = channel
@@ -192,24 +229,9 @@ class Engine:
 
     # --- 未读留言队列：用户不在时主动消息攒着，回来时重放（按朋友隔离） ---
     def _flush_outbox(self) -> None:
-        raw = db.get_kv("outbox_queue")
-        if not raw:
-            return
-        db.set_kv("outbox_queue", "")
-        try:
-            queue = json.loads(raw)
-        except ValueError:
-            return
-        if not queue:
-            return
-        lines = []
-        for m in queue:
-            try:
-                ts = datetime.fromisoformat(m["ts"]).strftime("%m-%d %H:%M")
-            except (KeyError, ValueError):
-                ts = ""
-            lines.append(f"[{ts}] {m['text']}" if ts else m["text"])
-        self.channel.send(f"（你不在的时候 TA 发的 {len(queue)} 条留言）\n" + "\n".join(lines))
+        items = take_outbox()
+        if items:
+            self.channel.send(format_outbox(items))
 
     # --- 主动消息（调度器调用） ---
     def proactive(self, scenario: str) -> bool:
