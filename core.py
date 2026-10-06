@@ -77,6 +77,11 @@ class Engine:
             self._reset_nudge_timer()
 
     # --- 后台回复线程：读完才回，回完这段再处理新攒的消息 ---
+    def _interrupted(self) -> bool:
+        """回复生成/发送期间用户又发来了新消息（插话）。"""
+        with self._lock:
+            return bool(self._pending)
+
     def _reply_worker(self) -> None:
         while True:
             _time.sleep(0.2)
@@ -137,15 +142,26 @@ class Engine:
             if typing_fn:
                 typing_fn()
             _time.sleep(duration)
+        interrupted = False
         for i, seg in enumerate(segments):
             if i > 0:
                 _time.sleep(min(max(len(segments[i - 1]) * config.SEND_SECONDS_PER_CHAR,
                                     config.SEND_MIN_SECONDS), config.SEND_MAX_SECONDS))
+            # 插话检测（发送前最后一刻检查）：TA 打字/连发期间你又说话了——
+            # 停发剩余段，先听你说
+            if self._interrupted():
+                if i > 0:  # 已经发出去几段了，补一句让步语
+                    self._send(random.choice(persona.INTERRUPT_ACKS), kind="chat")
+                interrupted = True
+                break
             self._send(seg, kind="chat")
 
         # 话题结束判断：AI 自己的回复带结束信号 → 直接关闭会话（不轻催）；
-        # 关键词都没抓住时，让 AI 异步判一下这段聊天是不是自然结束了
-        if any(s in reply for s in ENDING_SIGNALS):
+        # 关键词都没抓住时，让 AI 异步判一下这段聊天是不是自然结束了。
+        # 被打断（插话）说明聊天正酣，跳过收尾判断。
+        if interrupted:
+            pass
+        elif any(s in reply for s in ENDING_SIGNALS):
             db.set_kv("session_open", "0")
         else:
             threading.Thread(target=self._judge_session_end,

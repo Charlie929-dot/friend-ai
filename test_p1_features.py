@@ -653,6 +653,100 @@ def test_profile_autofill():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
+def test_interrupt_detection():
+    """插话检测：打字阶段打断→整段回复作废；连发中途打断→停发+让步语。"""
+    import tempfile
+    import time as _t
+    import db as _db
+    import memory as _mem
+    import persona as _persona
+    from core import Engine
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
+             config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
+             config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR,
+             config.SEND_MIN_SECONDS, config.SEND_MAX_SECONDS,
+             config.SEND_SECONDS_PER_CHAR)
+    config.TYPING_ENABLED = True
+    config.READING_MAX_SECONDS = 0.05
+    config.READING_SECONDS_PER_CHAR = 0.0
+    try:
+        _db.init()
+
+        class Ch:
+            def __init__(self):
+                self.events = []
+            def send(self, text, sender=""):
+                self.events.append(("send", text))
+            def typing(self, sender=""):
+                self.events.append(("typing",))
+
+        real_chat = _mem.llm.chat
+        _mem.extract_async = lambda: None
+
+        def wait_for(pred, timeout=4):
+            deadline = _t.time() + timeout
+            while _t.time() < deadline:
+                if pred():
+                    return True
+                _t.sleep(0.02)
+            return False
+
+        # 场景一：打字阶段插话 → 本次回复作废，直接回应新消息
+        config.TYPING_SECONDS_PER_CHAR = 0.5   # 打字很慢，留出插话窗口
+        config.TYPING_MIN_SECONDS = 0.3
+        config.TYPING_MAX_SECONDS = 1.0
+        ch = Ch()
+        eng = Engine(ch)
+        eng._judge_session_end = lambda *a, **k: None
+        replies = iter(["本来要回你的旧消息", "回应你的插话"])
+        _mem.llm.chat = lambda *a, **k: next(replies, "兜底回复")
+        eng.on_user_message("在吗")
+        assert wait_for(lambda: any(e[0] == "typing" for e in ch.events)), "没进入打字"
+        eng.on_user_message("等等我先说个事")  # 打字期间插话
+        assert wait_for(lambda: any(e[0] == "send" for e in ch.events)), "没有后续回复"
+        _t.sleep(0.8)  # 等插话消息的回复走完
+        sent_texts = [e[1] for e in ch.events if e[0] == "send"]
+        assert "本来要回你的旧消息" not in sent_texts, \
+            f"打字阶段被打断不应再发旧回复：{sent_texts}"
+        assert "回应你的插话" in sent_texts, f"应回应插话内容：{sent_texts}"
+
+        # 场景二：分段连发中途插话 → 停发剩余段 + 让步语
+        config.TYPING_MIN_SECONDS = 0.01
+        config.TYPING_MAX_SECONDS = 0.02
+        config.TYPING_SECONDS_PER_CHAR = 0.001
+        config.SEND_MIN_SECONDS = 0.4   # 段间间隔拉长，留出插话窗口
+        config.SEND_MAX_SECONDS = 0.5
+        config.SEND_SECONDS_PER_CHAR = 0.01
+        ch2 = Ch()
+        eng2 = Engine(ch2)
+        eng2._judge_session_end = lambda *a, **k: None
+        replies2 = iter(["第一段\n第二段不该发出", "回应插话"])
+        _mem.llm.chat = lambda *a, **k: next(replies2, "兜底")
+        eng2.on_user_message("讲个长的")
+        assert wait_for(lambda: any(e[1] == "第一段" for e in ch2.events if e[0] == "send")), \
+            f"第一段没发出：{ch2.events}"
+        eng2.on_user_message("停一下我插句嘴")  # 段间插话
+        _t.sleep(1.2)  # 等段间睡眠与后续流程走完
+        sent2 = [e[1] for e in ch2.events if e[0] == "send"]
+        assert "第二段不该发出" not in sent2, f"插话后剩余段应停发：{sent2}"
+        assert any(t in _persona.INTERRUPT_ACKS for t in sent2), \
+            f"缺让步语（{ _persona.INTERRUPT_ACKS }）：{sent2}"
+        print("ok 插话检测（打字打断作废 + 中途停发让步）")
+    finally:
+        _mem.llm.chat = real_chat
+        (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
+         config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
+         config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR,
+         config.SEND_MIN_SECONDS, config.SEND_MAX_SECONDS,
+         config.SEND_SECONDS_PER_CHAR) = saved
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -666,4 +760,5 @@ if __name__ == "__main__":
     test_groupchat()
     test_typing_indicator()
     test_profile_autofill()
+    test_interrupt_detection()
     print("\n全部通过")
