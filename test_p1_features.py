@@ -1368,6 +1368,73 @@ def test_group_handoff_free_chat():
         _db.init()
 
 
+def test_corpus_consolidation():
+    """固定语料统一收进 corpus.py：信号词/固定单句/模板都在，业务模块不再各自硬编码。"""
+    import corpus
+    import game as _game
+    import core as _core
+
+    assert "拜拜" in corpus.ENDING_SIGNALS and "晚安" in corpus.ENDING_SIGNALS
+    assert "不玩了" in corpus.GAME_STOP_WORDS
+    assert "朋友啦" in corpus.AUTO_FAMILIAR_NOTE
+    assert corpus.LLM_STUB
+    assert corpus.LLM_ERROR.format("xx") == "（脑子卡住了：xx）"
+    assert corpus.INTRO_FALLBACK.format("阿燃") == "你好啊，我叫阿燃，我们认识一下吧！"
+    # 业务模块不再各自硬编码
+    assert not hasattr(_core, "ENDING_SIGNALS"), "core 还留着 ENDING_SIGNALS"
+    assert not hasattr(_game, "STOP_WORDS"), "game 还留着 STOP_WORDS"
+    # 游戏结束检测仍工作（走 corpus）
+    assert _game.detect_stop("不玩了") is True
+    assert _game.detect_stop("今天天气不错") is False
+    print("ok 固定语料统一收进 corpus（信号词/单句/模板，业务模块不再硬编码）")
+
+
+def test_group_llm_fallback():
+    """群聊与私聊同步：LLM 报错时那位朋友说兜底语，不卡死整轮群聊。"""
+    import tempfile
+    import db as _db
+    import groupchat as _gc
+
+    class Ch:
+        def __init__(self):
+            self.sent = []
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = _set_timing({
+        "TYPING_ENABLED": False,
+        "READING_SECONDS_PER_CHAR": 0.0,
+        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
+        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
+    })
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: (_ for _ in ()).throw(
+            _gc.llm.LLMUnavailable("boom"))
+        _gc.start(parts)
+        _gc.attach_channel(ch)
+        _gc.on_user_text("在吗", ch)  # 不应抛异常
+        assert ch.sent and all("脑子卡住了" in t for _, t in ch.sent), \
+            f"群聊 LLM 兜底不对：{ch.sent}"
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
+        _gc.end()
+        print("ok 群聊 LLM 兜底（报错说'脑子卡住了'，不卡死整轮）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1385,11 +1452,13 @@ if __name__ == "__main__":
     test_group_persist_and_friend_name()
     test_db_path_lock()
     test_corpus_pick()
+    test_corpus_consolidation()
     test_bubble_fixed_corpus()
     test_group_timing()
     test_group_idle_chatter()
     test_groupidle_command()
     test_group_handoff_free_chat()
+    test_group_llm_fallback()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

@@ -2,6 +2,7 @@
 import httpx
 
 import config
+import corpus
 
 
 class LLMUnavailable(Exception):
@@ -11,7 +12,7 @@ class LLMUnavailable(Exception):
 def chat(messages: list[dict], temperature: float = 0.8) -> str:
     """messages: OpenAI 格式 [{"role": ..., "content": ...}]，返回回复文本。"""
     if not config.DEEPSEEK_API_KEY:
-        return "（stub：还没配 DEEPSEEK_API_KEY，配好我就能真的说话了）"
+        return corpus.LLM_STUB
     import db  # 延迟导入，/model 命令的运行时覆盖
     model = db.get_kv("model_override", config.DEEPSEEK_MODEL)
     try:

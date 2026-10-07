@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime
 
 import config
+import corpus
 import db
 import persona_pool
 
@@ -200,7 +201,7 @@ def _intro_greeting(card: dict) -> str:
                 "表达想认识TA的意思。两三句话以内。")},
         ])
     except Exception:
-        return f"你好啊，我叫{card['name']}，我们认识一下吧！"
+        return corpus.INTRO_FALLBACK.format(card['name'])
 
 
 def handle(cmd_line: str) -> str:

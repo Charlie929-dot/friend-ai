@@ -16,11 +16,6 @@ import persona
 from channels.base import Channel
 
 
-# 会话结束信号：用户说了这些 = 这段会话告一段落，不要轻催
-ENDING_SIGNALS = ["拜拜", "晚安", "去忙", "先这样", "下了", "睡了", "睡觉",
-                  "我去写", "写作业去", "去吃饭", "去上课", "溜了", "不聊了", "先不聊"]
-
-
 def take_outbox() -> list[dict]:
     """取出并清空未读主动消息队列（存在各自 friend.db，按朋友隔离）。
 
@@ -101,7 +96,7 @@ class Engine:
             self._send(corpus.pick(corpus.LONG_TEXT_NOTES, "long_note"), kind="chat")
 
         # 会话级时间观：判断这段会话是继续还是告一段落
-        if any(s in text for s in ENDING_SIGNALS):
+        if any(s in text for s in corpus.ENDING_SIGNALS):
             db.set_kv("session_open", "0")      # 道别了，不催
         else:
             db.set_kv("session_open", "1")      # 会话进行中，启动等待计时
@@ -134,7 +129,7 @@ class Engine:
     def _generate_reply(self, batch: list[str]) -> None:
         state = db.get_state()
         if state == "SLEEPING":
-            self._send(corpus.pick(persona.SLEEPY_REPLIES, "sleepy"), kind="chat")
+            self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
             return
 
         messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
@@ -161,7 +156,7 @@ class Engine:
         try:
             reply = llm.chat(messages)
         except llm.LLMUnavailable as e:
-            reply = f"（脑子卡住了：{e}）"
+            reply = corpus.LLM_ERROR.format(e)
 
         # 分段连发：按换行拆成几条消息，像真人连着发
         segments = [s.strip() for s in reply.split("\n") if s.strip()]
@@ -183,7 +178,7 @@ class Engine:
             # 停发剩余段，先听你说
             if self._interrupted():
                 if i > 0:  # 已经发出去几段了，补一句让步语
-                    self._send(corpus.pick(persona.INTERRUPT_ACKS, "interrupt"),
+                    self._send(corpus.pick(corpus.INTERRUPT_ACKS, "interrupt"),
                                kind="chat")
                 interrupted = True
                 break
@@ -194,7 +189,7 @@ class Engine:
         # 被打断（插话）说明聊天正酣，跳过收尾判断。
         if interrupted:
             pass
-        elif any(s in reply for s in ENDING_SIGNALS):
+        elif any(s in reply for s in corpus.ENDING_SIGNALS):
             db.set_kv("session_open", "0")
         else:
             threading.Thread(target=self._judge_locked,
@@ -344,8 +339,7 @@ class Engine:
         known = profile_count + len(db.get_facts()) + db.memory_count()
         if known >= config.AUTO_FAMILIAR_INFO_THRESHOLD:
             db.set_kv("relationship_stage", "familiar")
-            self._send("（不知不觉已经了解你这么多了——我觉得咱们算朋友啦。"
-                       "以后我不老冒泡烦你，有事才来。）", kind="chat")
+            self._send(corpus.AUTO_FAMILIAR_NOTE, kind="chat")
 
     # --- 作息切换（调度器调用） ---
     def wake_up(self) -> None:
@@ -368,7 +362,7 @@ class Engine:
             with db.PATH_LOCK:  # 与切换朋友互斥：复盘/写日记全程读写同一个库
                 return diary.daily_review()
         except llm.LLMUnavailable as e:
-            return f"（脑子卡住了：{e}）"
+            return corpus.LLM_ERROR.format(e)
 
     def _send(self, text: str, kind: str) -> None:
         db.add_message("assistant", text, kind=kind)

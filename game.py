@@ -11,6 +11,7 @@
 import json
 from datetime import datetime
 
+import corpus
 import db
 
 GAMES = {
@@ -38,9 +39,7 @@ GAMES = {
     },
 }
 
-# 结束游戏的信号（只在游戏中才生效）
-STOP_WORDS = ["不玩了", "不想玩了", "结束游戏", "退出游戏", "玩够了", "换个游戏"]
-
+# 结束游戏的信号（在 corpus.GAME_STOP_WORDS 统一维护）
 
 def current() -> dict | None:
     """当前游戏状态（{"game": key, "started_at": iso}），没在玩返回 None。"""
@@ -76,7 +75,7 @@ def detect_start(text: str) -> str | None:
 
 
 def detect_stop(text: str) -> bool:
-    return any(w in text for w in STOP_WORDS)
+    return any(w in text for w in corpus.GAME_STOP_WORDS)
 
 
 def on_user_text(text: str) -> None:

@@ -300,7 +300,11 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
                 {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": f"【群聊记录】\n{log}\n\n（轮到你了，直接说内容）"},
             ]
-            reply = llm.chat(msgs).strip()
+            try:
+                reply = llm.chat(msgs).strip()
+            except Exception as e:
+                # 和私聊一致：LLM 挂了就说"脑子卡住了"，别让一位朋友卡死整轮群聊
+                reply = corpus.LLM_ERROR.format(e)
             # 模型偶尔自带名字前缀，剥掉
             for sep in ("：", ":"):
                 if reply.startswith(f"{p.name}{sep}"):
