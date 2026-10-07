@@ -366,11 +366,30 @@ def test_memory_append_timeline():
         # prompt 新规则：绝对日期 + 追加式，不再有合并规则
         assert "YYYY-MM-DD" in _mem.EXTRACT_PROMPT
         assert "一件事只留一条" not in _mem.EXTRACT_PROMPT
-        # prompt 红线（2026-10-07 反馈记录 #4）：承诺时序铁律 + 第一人称视角
-        assert "时序铁律" in _mem.EXTRACT_PROMPT
-        assert "提议在前" in _mem.EXTRACT_PROMPT
-        assert "用户还没回应" in _mem.EXTRACT_PROMPT
-        assert "禁止自称" in _mem.EXTRACT_PROMPT
+        # 红线代码化（2026-10-07 用户拍板）：确定性规则移出 prompt，只留一句兜底
+        assert "时序铁律" not in _mem.EXTRACT_PROMPT
+        assert "这条用户还没回应" in _mem.EXTRACT_PROMPT   # 结构化标注的说明保留
+
+        # _validate：推测/元信息/承诺安全网（丢弃）+ 自称（先改写再丢弃）
+        assert _mem._validate("可能明天要考试", False) is None                       # 推测
+        assert _mem._validate("用户没有主动告知生日", False) is None                 # 元信息
+        assert _mem._validate("小徐答应告诉我吃了什么", True) is None                # 尾部未回应→丢
+        assert _mem._validate("小徐答应告诉我吃了什么", False) == "小徐答应告诉我吃了什么"
+        assert _mem._validate("小徐答应告诉AI吃了什么", False) == "小徐答应告诉我吃了什么"  # 改写
+        assert _mem._validate("小徐的AI项目稳步推进", False) == "小徐的AI项目稳步推进"      # 合法复合词
+        assert _mem._validate("小徐在搞朋友型AI", False) == "小徐在搞朋友型AI"
+        assert _mem._validate("小徐觉得AI很可爱", False) is None                     # 残留自称→丢
+
+        # _format_convo：用户最后发言之后的"我"的消息标注未回应
+        rows = [{"role": "assistant", "content": "先去吃个午饭"},
+                {"role": "user", "content": "嗯嗯"},
+                {"role": "assistant", "content": "吃完跟我说吃了啥"}]
+        convo, tail = _mem._format_convo(rows)
+        assert "我（这条用户还没回应）：吃完跟我说吃了啥" in convo
+        assert "我：先去吃个午饭" in convo
+        assert tail is True
+        convo2, tail2 = _mem._format_convo(rows[:2])
+        assert "还没回应" not in convo2 and tail2 is False
 
         # 1) 同主题换说法 → 两条都保留（追加，不合并）
         _db.add_memory("小徐的AI项目正在稳步推进", "事件", theme="技术")
@@ -451,7 +470,7 @@ def test_memory_v2():
 
         def fake_chat(messages, temperature=0.7):
             calls.append(messages[-1]["content"])
-            return json.dumps([{"content": "AI 给小徐详细讲过SVD图像压缩的原理",
+            return json.dumps([{"content": "我给小徐详细讲过SVD图像压缩的原理",  # 新红线：第一人称
                                 "category": "事件", "theme": "学业",
                                 "time": "2026-10-03 下午"}], ensure_ascii=False)
 

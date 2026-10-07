@@ -21,7 +21,8 @@ import db
 import llm
 
 EXTRACT_PROMPT = """你是记忆提取器。从最近的对话片段里，提取值得长期记住的事。
-对话里"我"就是这位 AI 朋友自己，"用户"是小徐。
+对话里"我"就是这位朋友自己，"用户"是小徐。标注"（这条用户还没回应）"的
+"我"的消息用户还没看到——不能记成用户已回应/已答应。
 
 输出：一个 JSON 数组，不要输出任何其他文字。每项格式：
 {
@@ -57,23 +58,76 @@ EXTRACT_PROMPT = """你是记忆提取器。从最近的对话片段里，提取
   只有和已知记忆内容几乎完全一样的，才不要重复提取。
 
 【质量红线——违反就不要输出】
-- 不记元信息——对对话过程本身的描述而不是事实。反例：
-  "用户不知道AI是否知道…""用户没有主动告知…""小徐提到过群聊，但AI没看到相关内容"
 - 不记"我"自己说的话："我"对用户的评价、起的昵称、调侃、客套都不是用户的事实。
-  反例："小徐被AI称为技术宅"——那是"我"自己说的俏皮话，一律不记。
+  反例："小徐被我称为技术宅"——那是"我"自己说的俏皮话，一律不记。
   只有用户亲口陈述或明确确认过的事才能记。
-- **时序铁律（承诺类必查）**："小徐答应/承诺/决定…"类记忆，必须满足"我"的提议在前、
-  用户明确应允在后。用户最后一条发言之后"我"才提出的提议，用户根本没机会回应，
-  一律不记为承诺——至多记"我提议/邀请了某事（用户还没回应）"。
-  反例：对话顺序是 用户"嗯嗯"（回应上一句）→ "我"说"吃完记得跟我说吃了啥"，
-  记"小徐答应吃完午饭后告诉我吃了什么"就是错的——那个"嗯嗯"不是对这个提议的回应。
-- 记忆里提到这位朋友一律用"我"，禁止自称"AI""助手"。
-  反例："小徐答应告诉AI吃了什么"应写作"小徐答应告诉我吃了什么"。
-- 不记不确定的推测（"可能""应该""也许"开头的）
 - 不记闲聊客套、一次性话题、"我"自己的事
 - 一条记忆只说一件事，别囫囵吞枣把多个事实塞进一句
+- 兜底（程序还会再过滤一道，漏网=失败）：元信息、不确定推测、用"AI/助手"自称、
+  把用户还没回应的提议记成"小徐答应…"
 
 没有合格的新信息就输出：[]"""
+
+
+# ---------- 确定性后处理：能正则判断的红线不进 prompt（2026-10-07 用户拍板）----------
+# 推测词开头 → 丢弃
+_SPECULATION = re.compile(r"^(可能|应该|也许|大概|估计|疑似)")
+# 元信息（对对话过程的描述而非事实）→ 丢弃
+_META = re.compile(r"用户(没有|未)(主动)?(告知|提及|说)|用户不知道|AI没看到|没有看到相关|没有主动告知")
+# 高置信自称改写：这位朋友的口误"AI"→"我"（先改写）
+_SELF_REWRITE = (("AI助手", "我"), ("告诉AI", "告诉我"), ("对AI", "对我"), ("跟AI", "跟我"),
+                 ("和AI", "和我"), ("被AI", "被我"), ("向AI", "向我"),
+                 ("AI问", "我问"), ("AI说", "我说"), ("AI叫", "我叫"), ("AI称", "我称"),
+                 ("AI提醒", "我提醒"), ("AI邀请", "我邀请"), ("AI提议", "我提议"), ("AI推荐", "我推荐"),
+                 ("AI给", "我给"), ("AI帮", "我帮"), ("AI陪", "我陪"), ("AI夸", "我夸"))
+# 残留"AI"属于这些复合词则合法（AI项目/朋友型AI…），否则视为自称漏网 → 丢弃
+_AI_LEGIT_AFTER = ("项目", "技术", "模型", "产品", "应用", "工具", "时代", "行业",
+                   "课", "绘画", "视频", "公司", "专业", "方向", "领域", "开发", "创业", "浪潮")
+_AI_TOKEN = re.compile(r"(?<![A-Za-z])AI(?![A-Za-z])")
+# 承诺类安全网：窗口尾部是"我"的发言（用户未回应）时，"答应/承诺"必是错位归因 → 丢弃
+_PROMISE = re.compile(r"(答应|承诺|保证)")
+
+
+def _validate(content: str, assistant_tail: bool) -> str | None:
+    """确定性红线过滤。返回清洗后的 content；该丢弃返回 None。
+
+    assistant_tail=True 表示本轮提取窗口里用户最后一条发言之后还有"我"的
+    消息（用户没机会回应），此时"答应/承诺/保证"类记忆一律丢弃——
+    正常情况结构化标注已防住，这是双保险。
+    """
+    if _SPECULATION.search(content):
+        print(f"[memory] 过滤（推测）：{content[:30]}")
+        return None
+    if _META.search(content):
+        print(f"[memory] 过滤（元信息）：{content[:30]}")
+        return None
+    if assistant_tail and _PROMISE.search(content):
+        print(f"[memory] 过滤（承诺时序安全网）：{content[:30]}")
+        return None
+    for old, new in _SELF_REWRITE:
+        content = content.replace(old, new)
+    for m in _AI_TOKEN.finditer(content):
+        if content[m.start() - 1:m.start()] == "型":      # 朋友型AI 等复合词
+            continue
+        if content[m.end():].startswith(_AI_LEGIT_AFTER):  # AI项目/AI技术…
+            continue
+        print(f"[memory] 过滤（自称漏网）：{content[:30]}")
+        return None
+    return content
+
+
+def _format_convo(rows: list[dict]) -> tuple[str, bool]:
+    """拼对话文本 + 结构化标注：用户最后一条发言之后的"我"的消息标记为未回应。
+
+    返回 (convo, assistant_tail)。承诺类错位归因（反馈记录 #4）靠上下文
+    结构从源头防——提取器直接"看见"哪些消息用户还没回应，不靠 prompt 规则。
+    """
+    last_user = max((i for i, r in enumerate(rows) if r["role"] == "user"), default=-1)
+    convo = "\n".join(
+        f"{'用户' if r['role'] == 'user' else ('我（这条用户还没回应）' if i > last_user else '我')}"
+        f"：{r['content']}"
+        for i, r in enumerate(rows))
+    return convo, bool(rows) and rows[-1]["role"] != "user"
 
 
 def extract_async() -> None:
@@ -97,8 +151,7 @@ def _extract() -> None:
     known = [m["content"] for m in db.all_memories(limit=50)]
     facts = db.get_facts()
 
-    convo = "\n".join(f"{'用户' if m['role'] == 'user' else '我'}：{m['content']}"
-                      for m in context)
+    convo, assistant_tail = _format_convo(context)
     now = datetime.now()
     week = "一二三四五六日"[now.weekday()]
     # 注入当前时间，提取器才能把"今天下午"换算成绝对日期标签
@@ -114,7 +167,7 @@ def _extract() -> None:
     ], temperature=0.2)
     items = _parse_json_array(raw)
     for it in items:
-        _apply(it)
+        _apply(it, assistant_tail)
 
 
 def _parse_json_array(raw: str) -> list[dict]:
@@ -136,7 +189,7 @@ _LEGACY_CATEGORY = {"fact": "画像", "preference": "偏好", "plan": "计划",
                     "event": "事件", "person": "人际"}
 
 
-def _apply(item: dict) -> bool:
+def _apply(item: dict, assistant_tail: bool = False) -> bool:
     """落库一条提取结果。返回是否新记了一条。"""
     content = str(item["content"]).strip()
 
@@ -150,6 +203,12 @@ def _apply(item: dict) -> bool:
 
     if len(content) < 4 or len(content) > 200:  # 太短没信息量，太长是模型跑偏
         return False
+
+    # 确定性红线（推测/元信息/自称/承诺时序安全网），能代码判断的不占 prompt
+    cleaned = _validate(content, assistant_tail)
+    if cleaned is None:
+        return False
+    content = cleaned
 
     # 个人清单：属于 profile 字段的确定性事实同步进 TA 的清单（/profile 可见）
     profile_line = str(item.get("profile", "")).strip()
@@ -225,8 +284,7 @@ def backfill_history(batch: int = 16, progress=print) -> int:
         rows = db.messages_page(offset, batch)
         if not rows:
             break
-        convo = "\n".join(f"{'用户' if r['role'] == 'user' else '我'}：{r['content']}"
-                          for r in rows)
+        convo, assistant_tail = _format_convo(rows)
         # 用这批消息最后一条的时间作为"现在"，相对时间词才锚定到事发当天
         try:
             ref = datetime.fromisoformat(rows[-1]["ts"])
@@ -244,7 +302,7 @@ def backfill_history(batch: int = 16, progress=print) -> int:
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in _parse_json_array(raw):
-            if _apply(it):
+            if _apply(it, assistant_tail):
                 added += 1
         offset = rows[-1]["id"]
         db.set_kv("memfill_offset", str(offset))
