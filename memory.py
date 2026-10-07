@@ -96,26 +96,22 @@ def _extract_prompt() -> str:
 
 
 # ---------- 确定性后处理：能正则判断的红线不进 prompt（2026-10-07 用户拍板）----------
-# 推测词开头 → 丢弃
-_SPECULATION = re.compile(r"^(可能|应该|也许|大概|估计|疑似)")
-# 元信息（对对话过程的描述而非事实）→ 丢弃
-_META = re.compile(r"用户(没有|未)(主动)?(告知|提及|说)|用户不知道|AI没看到|没有看到相关|没有主动告知")
-# 高置信自称改写：口误"AI"→"我"（先改写）。prompt 已无 AI 身份提示，
-# 这些改写只兜历史习惯/偶发口误；合法话题（AI项目/朋友型AI）不受影响。
+# 红线词表统一收在 corpus（语料，可扩充），这里 compile 成正则对象
+_SPECULATION = re.compile(corpus.SPECULATION)                 # 推测词开头 → 丢弃
+_META = re.compile(corpus.META)                               # 元信息 → 丢弃
+_PROMISE = re.compile(corpus.PROMISE)                         # 承诺时序安全网
+_SELF_AMNESIA = re.compile(corpus.SELF_AMNESIA)               # 失忆自证循环
+_MEMORY_QUIZ = re.compile(corpus.MEMORY_QUIZ)                 # 记忆追问元信息
+_MEMORY_REMINDER = re.compile(corpus.MEMORY_REMINDER)         # 叮嘱别忘
+# 高置信自称改写：口误"AI"→"我"（先改写）。这是固定改写规则、不扩充，留本地。
+# prompt 已无 AI 身份提示，这些改写只兜历史习惯/偶发口误；
+# 合法话题（AI项目/朋友型AI）不受影响。
 _SELF_REWRITE = (("（AI）", ""), ("(AI)", ""),
                  ("AI助手", "我"), ("告诉AI", "告诉我"), ("对AI", "对我"), ("跟AI", "跟我"),
                  ("和AI", "和我"), ("被AI", "被我"), ("向AI", "向我"),
                  ("AI问", "我问"), ("AI说", "我说"), ("AI叫", "我叫"), ("AI称", "我称"),
                  ("AI提醒", "我提醒"), ("AI邀请", "我邀请"), ("AI提议", "我提议"), ("AI推荐", "我推荐"),
                  ("AI给", "我给"), ("AI帮", "我帮"), ("AI陪", "我陪"), ("AI夸", "我夸"))
-# 承诺类安全网：窗口尾部是"我"的发言（用户未回应）时，"答应/承诺"必是错位归因 → 丢弃
-_PROMISE = re.compile(r"(答应|承诺|保证)")
-# AI 自述健忘：记"我不记得/我失忆/想不起来/我忘了"会把"失忆"固化成人设（自证循环）→ 丢弃
-_SELF_AMNESIA = re.compile(r"我不记得|我失忆|我想不起来|我忘了")
-# 记忆状态追问的元信息："追问/是否还记得/记不记得"是对话过程，不是可记的事实 → 丢弃
-_MEMORY_QUIZ = re.compile(r"追问|是否还记得|记不记得")
-# 叮嘱"别忘/记牢"类："小徐叮嘱我别忘/记牢"是对话元信息，且固化"健忘"人设 → 丢弃
-_MEMORY_REMINDER = re.compile(r"别忘|记牢")
 
 
 def _validate(content: str, assistant_tail: bool) -> str | None:
@@ -426,7 +422,7 @@ def _bigrams(s: str) -> set[str]:
     return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) > 1 else {s}
 
 
-_STOP = set("的了是在我你他她这那有没吗呢吧啊呀哦嘛哈么什怎都很也还就去要来上个下和跟与及或对把被让向从但而因所如果真")
+_STOP = set(corpus.STOP_CHARS)
 
 
 def _keywords(s: str) -> set[str]:
@@ -434,8 +430,8 @@ def _keywords(s: str) -> set[str]:
     return {ch for ch in re.sub(r"\s", "", s) if ch not in _STOP and '一' <= ch <= '鿿'}
 
 
-_REL_DAYS = {"今天": 0, "今晚": 0, "明天": 1, "昨天": -1, "前天": -2, "后天": 2}
-_PERIODS = ("凌晨", "早上", "上午", "中午", "下午", "晚上", "深夜")
+_REL_DAYS = corpus.REL_DAYS
+_PERIODS = corpus.PERIODS
 
 
 def _query_time_tokens(query: str) -> list[str]:
@@ -453,8 +449,8 @@ def _query_time_tokens(query: str) -> list[str]:
 # 私聊场景下，享受"新鲜度加分"的最近群聊记忆条数（原来兜底注入也是 5 条）
 _GROUP_RECENT_COUNT = 5
 
-# 身份/关系询问的意图词：问"是谁/认识/介绍/记得/熟悉"时，人际类记忆应优先于琐事
-_IDENTITY_QUERY = re.compile(r"是谁|谁啊|谁呀|认识|介绍|记得|熟悉")
+# 身份/关系询问的意图词：词表在 corpus（语料，可扩充）
+_IDENTITY_QUERY = re.compile(corpus.IDENTITY_QUERY)
 
 
 def _query_person_names(query: str) -> list[str]:
@@ -472,8 +468,8 @@ def _query_person_names(query: str) -> list[str]:
     return [n for n in names if n in query]
 
 
-# 追问细节的意图词：query 含这些词时，命中的长记忆（B 库）应展开全文
-_EXPAND_QUERY = re.compile(r"详细|完整|具体|展开|说说|讲讲|细节|全过程|完整版|具体点")
+# 追问细节的意图词：词表在 corpus（语料，可扩充）
+_EXPAND_QUERY = re.compile(corpus.EXPAND_QUERY)
 
 
 def wants_expansion(query: str) -> bool:
@@ -481,12 +477,9 @@ def wants_expansion(query: str) -> bool:
     return bool(_EXPAND_QUERY.search(query))
 
 
-# 回忆/追问信号：用户消息含这些词时，启用 function calling 让 AI 主动查记忆。
+# 回忆/追问信号：命中则启用 function calling 让 AI 主动查记忆（词表在 corpus）。
 # 普通闲聊不含这些词，走快速路径（省 token、省延迟），只有"反复要求回忆"才主动检索。
-_MEMORY_SEARCH_QUERY = re.compile(
-    r"回忆|记得|想起|想不起|想不起来|还记得|记不记得|当时|之前|以前|那时候|那时|"
-    r"啥时候|什么时候|怎么回事|怎么认识|认识吗|介绍|谁啊|是谁|"
-    r"详细|完整|具体|展开|说说|讲讲|细节|全过程")
+_MEMORY_SEARCH_QUERY = re.compile(corpus.MEMORY_SEARCH_QUERY)
 
 
 def wants_memory_search(text: str) -> bool:
@@ -603,12 +596,33 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
 # 仍保留做第一层兜底）。两个工具对应 A/B 两级库：
 #   search_memories → 查 A 库摘要（短内容直接给，长内容给摘要 + 长文标记）
 #   recall_detail   → 深挖细节，展开 B 库全文
+
+# 工具文案：与工具 schema 强耦合的固定描述/返回句/渲染标记。
+# 这些"未来不会扩充"，按约定不归语料，就近维护在本模块（不塞 corpus）。
+_TOOL_SEARCH_DESC = (
+    "搜索你关于小徐的记忆库，返回相关的记忆摘要。"
+    "当你想不起某件事、需要回忆过去聊过的内容时调用。"
+    "只在确实需要查证时才调，别每句话都查。")
+_TOOL_DETAIL_DESC = (
+    "深入回忆某件事的完整细节（展开长文本）。"
+    "当 search_memories 的结果里某条标了【有长文】，"
+    "且你想听完整经过时，用这个把全文取出来。")
+_TOOL_NO_QUERY = "（没有提供检索关键词）"
+_TOOL_NO_HIT = "（记忆库里没找到相关的内容）"
+_TOOL_HIT_PREFIX = "找到这些相关记忆："
+_TOOL_DETAIL_NO_HIT = "（没找到相关记忆）"
+_TOOL_DETAIL_PREFIX = "相关记忆的完整内容："
+_TOOL_UNKNOWN = "（未知工具）"
+_TOOL_GROUP_TAG = "（群聊）"
+_TOOL_LONG_MARK = "【有长文，可调 recall_detail 展开】"
+_TOOL_FULL_PREFIX = "（全文）"
+
 MEMORY_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "search_memories",
-            "description": corpus.MEMORY_TOOL_SEARCH_DESC,
+            "description": _TOOL_SEARCH_DESC,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -625,7 +639,7 @@ MEMORY_TOOLS = [
         "type": "function",
         "function": {
             "name": "recall_detail",
-            "description": corpus.MEMORY_TOOL_DETAIL_DESC,
+            "description": _TOOL_DETAIL_DESC,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -646,14 +660,14 @@ def _render_tool_memories(mems: list[dict]) -> str:
     语义一致，但这里自包含，避免 memory↔context 循环依赖。"""
     lines = []
     for m in mems:
-        tag = corpus.TOOL_GROUP_TAG if m.get("source") == "group" else ""
+        tag = _TOOL_GROUP_TAG if m.get("source") == "group" else ""
         anchor = f"（{m['time_label']}）" if m.get("time_label") else ""
         line = f"- {tag}{anchor}{m['content']}"
         if m.get("long_id"):
-            line += corpus.TOOL_LONG_MARK
+            line += _TOOL_LONG_MARK
         lines.append(line)
         if m.get("long_content"):
-            lines.append(f"  {corpus.TOOL_FULL_PREFIX}{m['long_content']}")
+            lines.append(f"  {_TOOL_FULL_PREFIX}{m['long_content']}")
     return "\n".join(lines)
 
 
@@ -661,18 +675,18 @@ def run_memory_tool(name: str, args: dict) -> str:
     """执行记忆检索工具，返回渲染好的文本结果（供 AI 阅读后继续回复）。"""
     query = str(args.get("query", "")).strip()
     if not query:
-        return corpus.TOOL_NO_QUERY
+        return _TOOL_NO_QUERY
     if name == "search_memories":
         hits = recall(query, top_k=5, group_first=False)
         if not hits:
-            return corpus.TOOL_NO_HIT
-        return corpus.TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
+            return _TOOL_NO_HIT
+        return _TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
     if name == "recall_detail":
         hits = recall(query, top_k=3, group_first=False, expand_long=True)
         if not hits:
-            return corpus.TOOL_DETAIL_NO_HIT
-        return corpus.TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)
-    return corpus.TOOL_UNKNOWN
+            return _TOOL_DETAIL_NO_HIT
+        return _TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)
+    return _TOOL_UNKNOWN
 
 
 def random_memory(category: str | None = None) -> dict | None:

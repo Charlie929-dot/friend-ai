@@ -1390,24 +1390,48 @@ def test_group_handoff_free_chat():
 
 
 def test_corpus_consolidation():
-    """固定语料统一收进 corpus.py：信号词/固定单句/模板都在，业务模块不再各自硬编码。"""
+    """语料统一收进 corpus.py：固定回复 + 匹配关键词/正则都在，业务模块不再各自硬编码。"""
     import corpus
     import game as _game
     import core as _core
+    import groupchat as _gc
+    import guard as _guard
+    import memory as _mem
 
+    # 固定回复语料
     assert "拜拜" in corpus.ENDING_SIGNALS and "晚安" in corpus.ENDING_SIGNALS
     assert "不玩了" in corpus.GAME_STOP_WORDS
     assert "朋友啦" in corpus.AUTO_FAMILIAR_NOTE
     assert corpus.LLM_STUB
     assert corpus.LLM_ERROR.format("xx") == "（脑子卡住了：xx）"
     assert corpus.INTRO_FALLBACK.format("阿燃") == "你好啊，我叫阿燃，我们认识一下吧！"
-    # 业务模块不再各自硬编码
+
+    # 匹配关键词/正则（信号词 + 意图词 + 提取红线）都在 corpus，且业务模块不再各自硬编码
+    assert "你们认识" in corpus.HANDOFF_SIGNALS
+    assert "在忙" in corpus.BUSY_SIGNALS
+    assert "是谁" in corpus.IDENTITY_QUERY
+    assert "可能" in corpus.SPECULATION
+    assert "我不记得" in corpus.SELF_AMNESIA
     assert not hasattr(_core, "ENDING_SIGNALS"), "core 还留着 ENDING_SIGNALS"
     assert not hasattr(_game, "STOP_WORDS"), "game 还留着 STOP_WORDS"
-    # 游戏结束检测仍工作（走 corpus）
+    assert not hasattr(_gc, "HANDOFF_SIGNALS"), "groupchat 还留着 HANDOFF_SIGNALS"
+    assert not hasattr(_guard, "BUSY_SIGNALS"), "guard 还留着 BUSY_SIGNALS"
+    # memory 的红线/意图正则编译自 corpus 词表（源词表不在 memory 硬编码）
+    assert _mem._SPECULATION.pattern == corpus.SPECULATION
+    assert _mem._SELF_AMNESIA.pattern == corpus.SELF_AMNESIA
+    assert _mem._IDENTITY_QUERY.pattern == corpus.IDENTITY_QUERY
+    assert _mem._MEMORY_SEARCH_QUERY.pattern == corpus.MEMORY_SEARCH_QUERY
+    # 工具 description/返回句这类"不会扩充"的文案不属语料，回到 memory 就近维护
+    assert hasattr(_mem, "_TOOL_SEARCH_DESC"), "工具 description 应就近在 memory 维护"
+    assert not hasattr(corpus, "TOOL_NO_QUERY"), "工具返回句不该进 corpus 语料"
+
+    # 识别仍工作（走 corpus）
     assert _game.detect_stop("不玩了") is True
     assert _game.detect_stop("今天天气不错") is False
-    print("ok 固定语料统一收进 corpus（信号词/单句/模板，业务模块不再硬编码）")
+    assert _gc._is_handoff("你们认识一下新朋友") is True
+    assert any(s in "我在忙" for s in corpus.BUSY_SIGNALS)
+    assert _mem.wants_memory_search("你还记得小葵吗") is True
+    print("ok 语料统一收进 corpus（固定回复 + 匹配关键词/正则，业务模块不再硬编码）")
 
 
 def test_group_llm_fallback():

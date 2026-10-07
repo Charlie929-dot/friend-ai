@@ -2,15 +2,13 @@
 from datetime import datetime, timedelta
 
 import config
+import corpus
 import db
-
-# 用户消息里的"忙碌信号"（关键词粗暴匹配，MVP 够用，后续可换 LLM 判断）
-BUSY_SIGNALS = ["在忙", "待会", "等下", "开会", "先不聊", "别发", "安静", "stop"]
 
 
 def check_busy_signal(text: str) -> bool:
-    """用户回复里出现忙碌信号 → 进入静默期。"""
-    if any(s in text for s in BUSY_SIGNALS):
+    """用户回复里出现忙碌信号（词表在 corpus）→ 进入静默期。"""
+    if any(s in text for s in corpus.BUSY_SIGNALS):
         db.set_kv("quiet_until", (datetime.now() + timedelta(
             hours=config.QUIET_AFTER_BUSY_HOURS)).isoformat(timespec="seconds"))
         return True

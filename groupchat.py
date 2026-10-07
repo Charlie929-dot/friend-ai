@@ -48,16 +48,10 @@ IDLE_HINT = """【现在的情况】小徐有一会儿没说话了，群里冷�
 - 你们自己随便聊：聊你自己的生活、最近遇到的事、奇怪的想法，或者接上面某位的话。
 - 别总围着小徐，也别做总结陈词。有一搭没一搭，想哪说哪。"""
 
-# 用户把焦点交给朋友们的信号：说这类话后朋友们该自己聊起来，别等长空闲（3-8 分钟）
-HANDOFF_SIGNALS = (
-    "你们认识", "认识一下", "你们聊", "你们自己", "互相认识",
-    "介绍一下彼此", "你们玩", "你们先聊", "别管我",
-)
-
-
+# 用户把焦点交给朋友们的信号（词表在 corpus，语料统一维护）
 def _is_handoff(text: str) -> bool:
     """用户是否把话题焦点交给朋友们（"你们认识一下新朋友"这类）。"""
-    return any(sig in text for sig in HANDOFF_SIGNALS)
+    return any(sig in text for sig in corpus.HANDOFF_SIGNALS)
 
 _session = None
 
