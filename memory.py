@@ -320,6 +320,57 @@ def backfill_history(batch: int = 16, progress=print) -> int:
     return added
 
 
+_GROUP_PREFIX = re.compile(r"^【群聊·([^】]+)】\s*")
+
+
+def backfill_group(batch: int = 12, progress=print) -> int:
+    """补提取群聊记忆：把 messages 里 kind='group' 的记录重新喂给提取器，
+    写 source='group' 的记忆。修复散群时提取失败（如旧库缺列）导致的遗漏。
+
+    群聊记录 content 格式 = 「【群聊·发言人】内容」，发言人可能是多个朋友；
+    提取时把「小徐」映射成「用户」、其余保留朋友名，让提取器分清谁说了什么。
+    「我」= 当前朋友（_extract_prompt 注入的人格名）。断点续跑：memfill_group_offset。"""
+    offset = int(db.get_kv("memfill_group_offset", "0") or 0)
+    added = 0
+    while True:
+        rows = db.group_messages_page(offset, batch)
+        if not rows:
+            break
+        lines = []
+        for r in rows:
+            m = _GROUP_PREFIX.match(r["content"])
+            if m:
+                who = "用户" if m.group(1) == "小徐" else m.group(1)
+                lines.append(f"{who}：{r['content'][m.end():]}")
+            else:
+                lines.append(r["content"])
+        convo = "\n".join(lines)
+        # 用这批消息最后一条的时间作参照，相对时间词才锚定到事发当天
+        try:
+            ref = datetime.fromisoformat(rows[-1]["ts"])
+        except (ValueError, KeyError):
+            ref = datetime.now()
+        week = "一二三四五六日"[ref.weekday()]
+        user_msg = (f"【现在时间】{ref:%Y-%m-%d} 周{week} {ref:%H:%M}\n\n"
+                    f"【群聊记录】\n{convo}")
+        known = [m["content"] for m in db.all_memories(limit=50)
+                 if m.get("status", "ok") == "ok"]
+        if known:
+            user_msg += ("\n\n【已知记忆（内容几乎一样的不要重复提取）】\n"
+                         + "\n".join(f"- {x}" for x in known[:50]))
+        raw = llm.chat([
+            {"role": "system", "content": _extract_prompt()},
+            {"role": "user", "content": user_msg},
+        ], temperature=0.2)
+        for it in _parse_json_array(raw):
+            if _apply(it, False, source="group"):
+                added += 1
+        offset = rows[-1]["id"]
+        db.set_kv("memfill_group_offset", str(offset))
+        progress(f"[memfill-group] 已处理到第 {offset} 条，新记 {added} 条…")
+    return added
+
+
 def _bigrams(s: str) -> set[str]:
     s = re.sub(r"\s", "", s)
     return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) > 1 else {s}

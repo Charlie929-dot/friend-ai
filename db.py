@@ -146,6 +146,17 @@ def messages_page(after_id: int, limit: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def group_messages_page(after_id: int, limit: int) -> list[dict]:
+    """按 id 顺序取群聊记录（补提取群聊记忆用），after_id 之后的一批。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, ts, role, content FROM messages "
+            "WHERE kind='group' AND id > ? ORDER BY id LIMIT ?",
+            (after_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def last_user_message_ts() -> datetime | None:
     with _conn() as c:
         row = c.execute(

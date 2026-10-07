@@ -39,6 +39,7 @@ HELP = """可用命令：
   /delmem <编号>   删掉一条自动记忆（也用于确认 AI 提议的删除）
   /keepmem <编号>  保留一条 AI 提议删除的记忆（取消待删除标记）
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
+  /rememgroup      补提取群聊记忆：把没成功写进记忆的群聊记录重新记一遍（修复遗漏）
   /diary           看今天的日记（含复盘）；/diary <日期> 看指定那天
   /diaries         列出所有写过日记的日期
   /review          现在立刻复盘今天并写日记（睡前会自动写）
@@ -442,6 +443,14 @@ def handle(cmd_line: str) -> str:
         if added == 0:
             return "历史里没有新东西可记（或已经全部回填过了）。"
         return f"回填完成：从旧聊天里新记住 {added} 条。用 /memories 看看吧。"
+
+    if cmd == "/rememgroup":
+        # 补提取群聊记忆：把散群时没成功写进记忆的群聊记录重新记一遍
+        import memory as _memory
+        added = _memory.backfill_group()
+        if added == 0:
+            return "群聊记录里没有新东西可记（或已经全部补提取过了）。"
+        return f"补提取完成：从群聊记录里新记住 {added} 条。用 /memories 看看吧。"
 
     if cmd == "/diary":
         import diary as _diary

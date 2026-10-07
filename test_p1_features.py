@@ -1781,6 +1781,50 @@ def test_info_dispatch():
         _db.init()
 
 
+def test_backfill_group():
+    """补提取群聊记忆：kind='group' 记录重新提取，格式化发言人并写 source='group'。"""
+    import json
+    import tempfile
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _mem.llm.chat
+    try:
+        _db.init()
+        _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
+                                   '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
+                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
+        _db.add_message("user", "【群聊·小徐】哈喽", kind="group")
+        _db.add_message("assistant", "【群聊·小葵】哈喽哈喽", kind="group")
+        _db.add_message("assistant", "【群聊·初遇朋友】你们好", kind="group")
+        calls = []
+
+        def fake_chat(messages, temperature=0.7):
+            calls.append(messages)
+            return json.dumps([{"content": "群聊里认识了新朋友阿燃", "category": "人际"}],
+                              ensure_ascii=False)
+
+        _mem.llm.chat = fake_chat
+        added = _mem.backfill_group(progress=lambda *a: None)
+        assert added == 1, f"补提取应记 1 条：{added}"
+        user_msg = calls[0][-1]["content"]
+        assert "用户：哈喽" in user_msg and "小葵：哈喽哈喽" in user_msg, \
+            f"群聊记录格式化不对：{user_msg}"
+        assert "【群聊·" not in user_msg, "发言人不该保留【群聊·前缀"
+        mems = _db.all_memories()
+        assert any(m["content"] == "群聊里认识了新朋友阿燃" and m["source"] == "group"
+                   for m in mems), f"群聊记忆没写 source=group：{mems}"
+        print("ok 补提取群聊记忆（kind=group 格式化 + source=group 落库）")
+    finally:
+        _mem.llm.chat = real_chat
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1810,6 +1854,7 @@ if __name__ == "__main__":
     test_group_selective_respond()
     test_group_interject()
     test_info_dispatch()
+    test_backfill_group()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")
