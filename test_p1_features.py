@@ -1301,6 +1301,73 @@ def test_diary_purge_reviewed_messages():
         _db.init()
 
 
+def test_group_handoff_free_chat():
+    """拉群后用户把焦点交给朋友们（"你们认识一下"），应很快开自由闲聊，不等长空闲。"""
+    import tempfile
+    import time as _t
+    import db as _db
+    import groupchat as _gc
+
+    class Ch:
+        def __init__(self):
+            self.sent = []  # (sender, text)
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    # 正常空闲阈值拉到 60 分钟（测试期间绝不触发），焦点交接阈值压到 0.2s
+    saved = _set_timing({
+        "GROUP_IDLE_AFTER_MIN_MINUTES": 60.0,
+        "GROUP_IDLE_AFTER_MAX_MINUTES": 60.0,
+        "GROUP_IDLE_GAP_MIN_SECONDS": 0.05,
+        "GROUP_IDLE_GAP_MAX_SECONDS": 0.08,
+        "GROUP_IDLE_MAX_TURNS": 3,
+        "GROUP_HANDOFF_IDLE_SECONDS": 0.2,
+        "TYPING_ENABLED": False,
+    })
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: "随便聊聊"
+        _gc.start(parts)
+        _gc.attach_channel(ch)
+
+        # 用户还没说话：60 分钟阈值下不该有闲聊
+        _t.sleep(0.6)
+        assert ch.sent == [], f"用户没说话不该闲聊：{ch.sent}"
+
+        # 用户把焦点交给朋友 → 回应流程同步完成后，很快出现自主闲聊
+        _gc.on_user_text("哈喽朋友们，你们认识一下新朋友", ch)
+        after_respond = len(ch.sent)
+        deadline = _t.time() + 3
+        while _t.time() < deadline and len(ch.sent) <= after_respond:
+            _t.sleep(0.03)
+        assert len(ch.sent) > after_respond, \
+            f"焦点交接后没开自由闲聊：{ch.sent}"
+
+        # 非交接消息则不受影响：仍走正常长空闲（这里只验证不立即触发）
+        ch.sent.clear()
+        _gc.on_user_text("在吗", ch)
+        after2 = len(ch.sent)
+        _t.sleep(0.5)
+        assert len(ch.sent) == after2, f"普通消息不该立即触发闲聊：{ch.sent}"
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 散群提取不新记
+        _gc.end()
+        print("ok 群聊焦点交接（你们认识一下→立刻自由闲聊；普通消息不受影响）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1322,6 +1389,7 @@ if __name__ == "__main__":
     test_group_timing()
     test_group_idle_chatter()
     test_groupidle_command()
+    test_group_handoff_free_chat()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

@@ -46,6 +46,17 @@ IDLE_HINT = """【现在的情况】小徐有一会儿没说话了，群里冷�
 - 你们自己随便聊：聊你自己的生活、最近遇到的事、奇怪的想法，或者接上面某位的话。
 - 别总围着小徐，也别做总结陈词。有一搭没一搭，想哪说哪。"""
 
+# 用户把焦点交给朋友们的信号：说这类话后朋友们该自己聊起来，别等长空闲（3-8 分钟）
+HANDOFF_SIGNALS = (
+    "你们认识", "认识一下", "你们聊", "你们自己", "互相认识",
+    "介绍一下彼此", "你们玩", "你们先聊", "别管我",
+)
+
+
+def _is_handoff(text: str) -> bool:
+    """用户是否把话题焦点交给朋友们（"你们认识一下新朋友"这类）。"""
+    return any(sig in text for sig in HANDOFF_SIGNALS)
+
 _session = None
 
 
@@ -113,7 +124,8 @@ def attach_channel(channel) -> None:
 def on_user_text(text: str, channel) -> None:
     """群里收到用户消息：全员依次回应 → 提及接力 → 概率串话，到上限就安静。
 
-    时间感和私聊同步：先"读完"用户这句话，回应前各自"正在输入"。"""
+    时间感和私聊同步：先"读完"用户这句话，回应前各自"正在输入"。
+    若用户把焦点交给朋友们（"你们认识一下"），回应完很快开始自由闲聊，不等长空闲。"""
     s = _session
     if not s:
         return
@@ -121,11 +133,16 @@ def on_user_text(text: str, channel) -> None:
     s.last_user_ts = _time.time()
     s.user_event.set()   # 闲聊线程：用户回来了，停下
     s.interrupt.set()    # 若有在途回应流程：别说了，听用户的新消息
+    handoff = _is_handoff(text)
     with s.lock:         # 与在途流程互斥（IM 通道下消息可能并发到达）
         s.interrupt.clear()  # 我是最新一轮，之前的打断信号归我消化
         s.transcript.append(("小徐", text))
         _respond_flow(s, channel, text)
         _persist(s)  # 每轮落盘：/refresh 或重启都不丢群聊内容
+        if handoff:
+            # 焦点交给朋友们了：把空闲阈值压短，回应完立刻开始自由闲聊
+            s.last_idle_ts = 0.0
+            s.idle_after = config.GROUP_HANDOFF_IDLE_SECONDS
     s.user_event.clear()  # 回应完毕，闲聊线程可以继续等空闲了
 
 
@@ -320,24 +337,31 @@ def _send_segments(channel, name: str, text: str) -> None:
 # --- 自主闲聊：没有话题焦点时，AI 们自己聊 ---
 
 def _idle_loop(s: GroupSession) -> None:
-    """群会话的后台线程：等空闲 → 到点开聊 → 用户一说话立刻停。"""
+    """群会话的后台线程：等空闲 → 到点开聊 → 用户一说话立刻停。
+
+    整段套 try/except：闲聊里 LLM 偶发报错（限流/网络）不能把线程打挂，
+    否则"自由闲聊"就再也起不来了。"""
     while s.active:
-        # 轮询切片随触发阈值缩放：测试里阈值压到零点几秒也能及时响应
-        s.user_event.wait(min(1.0, max(0.1, s.idle_after / 3)))
-        if not s.active:
-            return
-        if s.user_event.is_set():
-            # 用户回应流程进行中（event 已置位，上面的 wait 会秒回）——睡一下再看，别空转
-            _time.sleep(min(1.0, max(0.1, s.idle_after / 3)))
-            continue
-        if not idle_enabled() or s.channel is None or len(s.participants) < 2:
-            continue
-        base = max(s.last_user_ts, s.last_idle_ts)
-        if _time.time() - base < s.idle_after:
-            continue
-        _idle_burst(s)
-        s.last_idle_ts = _time.time()
-        s.idle_after = _idle_after_seconds()  # 下一轮重新掷一个间隔
+        try:
+            # 轮询切片随触发阈值缩放：测试里阈值压到零点几秒也能及时响应
+            s.user_event.wait(min(1.0, max(0.1, s.idle_after / 3)))
+            if not s.active:
+                return
+            if s.user_event.is_set():
+                # 用户回应流程进行中（event 已置位，上面的 wait 会秒回）——睡一下再看，别空转
+                _time.sleep(min(1.0, max(0.1, s.idle_after / 3)))
+                continue
+            if not idle_enabled() or s.channel is None or len(s.participants) < 2:
+                continue
+            base = max(s.last_user_ts, s.last_idle_ts)
+            if _time.time() - base < s.idle_after:
+                continue
+            _idle_burst(s)
+            s.last_idle_ts = _time.time()
+            s.idle_after = _idle_after_seconds()  # 下一轮重新掷一个间隔
+        except Exception as e:
+            print(f"[group] 自主闲聊出错，歇一下再试：{e}")
+            _time.sleep(5)
 
 
 def _idle_burst(s: GroupSession) -> None:

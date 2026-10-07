@@ -96,3 +96,4 @@ GROUP_IDLE_AFTER_MAX_MINUTES = float(os.environ.get("GROUP_IDLE_AFTER_MAX_MINUTE
 GROUP_IDLE_GAP_MIN_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MIN_SECONDS", "20"))  # 闲聊时拉长的"阅读+回复"间隔
 GROUP_IDLE_GAP_MAX_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MAX_SECONDS", "60"))
 GROUP_IDLE_MAX_TURNS = int(os.environ.get("GROUP_IDLE_MAX_TURNS", "6"))   # 一次闲聊最多几轮（省 token）
+GROUP_HANDOFF_IDLE_SECONDS = float(os.environ.get("GROUP_HANDOFF_IDLE_SECONDS", "5"))  # 用户把焦点交给朋友们（"你们认识一下"）后，多快开始自由闲聊
