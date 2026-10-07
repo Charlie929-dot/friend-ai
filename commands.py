@@ -330,6 +330,7 @@ def handle(cmd_line: str) -> str:
         with db.PATH_LOCK:  # 与后台回复/提取互斥：归档+覆盖期间库不被写
             _archive_current()  # 当前朋友也归档（覆盖更新TA自己的那份），不丢
             shutil.copyfile(str(chosen), str(config.DB_PATH))
+            db.init()  # 覆盖回旧库文件后重新迁移（补齐 source 等后加的列）
         name, _ = _archive_display(chosen)
         msg = f"欢迎回来～已切换到 {name}，接着聊吧。"
         import core  # 切过去就顺手看看TA有没有留言攒着

@@ -162,14 +162,17 @@ def _respond_loop(self) -> None:
             if not self.active:
                 return
             text, handoff = self.user_queue.popleft()
-        self.respond_done.clear()
+            self.respond_done.clear()  # 与 popleft 同锁原子：wait_responders 看不到"队列空但 done"的中间态
         try:
             with self.lock:   # 回应流程 vs 自主闲聊 互斥
                 self.interrupt.clear()  # 我是最新一轮，之前的打断归我消化
                 _respond_flow(self, self.channel, text)
                 _persist(self)  # 每轮落盘：/refresh 或重启都不丢群聊内容
+                # 每次用户消息后重新掷空闲阈值；只有焦点交接才压短，
+                # 否则"你们认识一下"后紧接着的普通消息会沿用残留的短阈值、
+                # 用户一说话又触发闲聊
+                self.idle_after = _idle_after_seconds()
                 if handoff:
-                    # 焦点交给朋友们了：把空闲阈值压短，回应完立刻开始自由闲聊
                     self.last_idle_ts = 0.0
                     self.idle_after = config.GROUP_HANDOFF_IDLE_SECONDS
         except Exception as e:
@@ -318,6 +321,7 @@ def end() -> str:
         for p in s.participants:
             try:
                 config.DB_PATH = p.db_path
+                db.init()  # 切到归档库先迁移（旧库补 source 等后加的列）
                 for sp, tx in s.transcript:
                     role = "user" if sp == "小徐" else "assistant"
                     db.add_message(role, f"【群聊·{sp}】{tx}", kind="group")
@@ -327,6 +331,7 @@ def end() -> str:
         for p in s.participants:
             try:
                 config.DB_PATH = p.db_path
+                db.init()  # 提取前确保已迁移，add_memory(source=...) 不缺列
                 _extract_group_memories(s, p)
             except Exception as e:
                 print(f"[group] {p.name} 提取群聊记忆失败：{e}")
@@ -344,6 +349,7 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
         real_db = config.DB_PATH
         try:
             config.DB_PATH = p.db_path
+            db.init()  # 切到归档库先迁移（读旧库 memories 时列齐全）
             sleeping = db.get_state() == "SLEEPING"
             if sleeping and idle:
                 return ""  # 自主闲聊：睡着的人不参与

@@ -875,6 +875,7 @@ def test_group_persist_and_friend_name():
         # 3) /refresh：先自动散场沉淀，再重载——群聊内容不丢
         out = _cmd.handle("/refresh")
         config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"  # reload 会重置，拉回来
+        _set_timing(_FAST_TIMING)  # /refresh reload 了 config，计时参数被重置为默认，重新拉快
         assert "散场" in out, f"refresh 未提示散场：{out}"
         assert not _gc.is_active(), "refresh 后群还应处于散场状态"
         assert not persist.exists(), "散场后落盘文件应删除"
@@ -1505,6 +1506,57 @@ def test_group_sleeping_member():
         _db.init()
 
 
+def test_group_end_migrates_old_archive():
+    """散群写回/提取时，旧归档库（缺 source 列）自动补列，add_memory(source=group) 不报错。"""
+    import sqlite3
+    import tempfile
+    import db as _db
+    import groupchat as _gc
+
+    class Ch:
+        def __init__(self):
+            self.sent = []
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = _set_timing({**_FAST_TIMING,
+                         "GROUP_RESPOND_MIN": 99, "GROUP_RESPOND_MAX": 99})
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)  # 小葵(friend.db) + 稳稳(friend-abc12345.db)
+        # 把稳稳的归档库改成"旧库"：删掉 source 列模拟老版本
+        with sqlite3.connect(str(tmp / "friend-abc12345.db")) as c:
+            c.execute("ALTER TABLE memories DROP COLUMN source")
+        # mock：回应时当普通文本，散群提取时解析出一条群聊记忆（触发 source=group 写入）
+        _gc.llm.chat = lambda messages, temperature=0.7: \
+            '[{"content": "群聊里认识了新朋友", "category": "人际"}]'
+        _gc.start(parts)
+        _gc.attach_channel(Ch())
+        _gc.on_user_text("大家好", Ch())
+        _gc.wait_responders()
+        out = _gc.end()  # 散群：写回 + 提取——旧库应自动迁移，不报 no column named source
+        assert "散啦" in out, f"散群失败：{out}"
+        with sqlite3.connect(str(tmp / "friend-abc12345.db")) as c:
+            cols = [r[1] for r in c.execute("PRAGMA table_info(memories)")]
+            mems = c.execute("SELECT content, source FROM memories").fetchall()
+        assert "source" in cols, "散群后旧库未补 source 列"
+        assert any("群聊里认识了新朋友" in m[0] and m[1] == "group" for m in mems), \
+            f"群聊记忆没写进旧库：{mems}"
+        print("ok 群聊散群自动迁移旧库（补 source 列 + 群聊记忆落库）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_group_selective_respond():
     """选择性回应：每次用户发言随机 1~GROUP_RESPOND_MAX 位朋友回应，不全员刷屏；点名谁谁必回。"""
     import tempfile
@@ -1754,6 +1806,7 @@ if __name__ == "__main__":
     test_group_handoff_free_chat()
     test_group_llm_fallback()
     test_group_sleeping_member()
+    test_group_end_migrates_old_archive()
     test_group_selective_respond()
     test_group_interject()
     test_info_dispatch()
