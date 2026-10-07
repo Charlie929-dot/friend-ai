@@ -63,6 +63,10 @@ EXTRACT_PROMPT = """你在整理{WHO}和小徐的聊天记录，从最近的对�
   反例："小徐被我称为技术宅"——那是"我"自己说的俏皮话，一律不记。
   只有用户亲口陈述或明确确认过的事才能记。
 - 不记闲聊客套、一次性话题、"我"自己的事
+- **不记"失忆"类（关键）**：不记"我"不记得/想不起来某事、不记用户追问"记不记得"、
+  发现我失忆、说我失忆这类对话过程，也不记"某位朋友失忆了"这种描述——这是对话
+  元信息，会把"失忆"固化成人设，形成"越问越不记得"的死循环。事情本身才记：
+  群里聊了 X → 记"群里聊了 X"，而不是"用户问我记不记得群里聊了 X"。
 - 一条记忆只说一件事，别囫囵吞枣把多个事实塞进一句
 - 兜底（程序还会再过滤一道，漏网=失败）：元信息、不确定推测、
   把用户还没回应的提议记成"小徐答应…"
@@ -100,6 +104,10 @@ _SELF_REWRITE = (("（AI）", ""), ("(AI)", ""),
                  ("AI给", "我给"), ("AI帮", "我帮"), ("AI陪", "我陪"), ("AI夸", "我夸"))
 # 承诺类安全网：窗口尾部是"我"的发言（用户未回应）时，"答应/承诺"必是错位归因 → 丢弃
 _PROMISE = re.compile(r"(答应|承诺|保证)")
+# AI 自述健忘：记"我不记得/我失忆/想不起来/我忘了"会把"失忆"固化成人设（自证循环）→ 丢弃
+_SELF_AMNESIA = re.compile(r"我不记得|我失忆|我想不起来|我忘了")
+# 记忆状态追问的元信息："追问/是否还记得/记不记得"是对话过程，不是可记的事实 → 丢弃
+_MEMORY_QUIZ = re.compile(r"追问|是否还记得|记不记得")
 
 
 def _validate(content: str, assistant_tail: bool) -> str | None:
@@ -120,6 +128,12 @@ def _validate(content: str, assistant_tail: bool) -> str | None:
         return None
     for old, new in _SELF_REWRITE:
         content = content.replace(old, new)
+    if _SELF_AMNESIA.search(content):
+        print(f"[memory] 过滤（失忆自证循环）：{content[:30]}")
+        return None
+    if _MEMORY_QUIZ.search(content):
+        print(f"[memory] 过滤（记忆追问元信息）：{content[:30]}")
+        return None
     return content
 
 
