@@ -1879,6 +1879,35 @@ def test_group_memory_in_private_chat():
         _db.init()
 
 
+def test_identity_recall():
+    """身份询问（"记得XX吗/XX是谁"）时，人际/介绍类记忆应优先于琐事。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        _db.add_memory("小徐拉了一个群，把初遇朋友和小葵拉进来互相认识",
+                       "人际", person="小葵、初遇朋友")
+        for i in range(12):
+            _db.add_memory(f"小葵琐事{i}号：拿快递晾衣服", "事件", person="小葵")
+
+        hits = _mem.recall("你还记得小葵吗", top_k=3, group_first=False)
+        contents = [m["content"] for m in hits]
+        assert any("拉进来互相认识" in c for c in contents), \
+            f"身份记忆没进 top：{contents}"
+        assert "拉进来互相认识" in "".join(contents[:2]), \
+            f"身份记忆未排在琐事前面：{contents}"
+        print("ok 身份询问召回（人际/介绍类优先于琐事）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1910,6 +1939,7 @@ if __name__ == "__main__":
     test_info_dispatch()
     test_backfill_group()
     test_group_memory_in_private_chat()
+    test_identity_recall()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

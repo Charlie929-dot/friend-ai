@@ -108,6 +108,8 @@ _PROMISE = re.compile(r"(答应|承诺|保证)")
 _SELF_AMNESIA = re.compile(r"我不记得|我失忆|我想不起来|我忘了")
 # 记忆状态追问的元信息："追问/是否还记得/记不记得"是对话过程，不是可记的事实 → 丢弃
 _MEMORY_QUIZ = re.compile(r"追问|是否还记得|记不记得")
+# 叮嘱"别忘/记牢"类："小徐叮嘱我别忘/记牢"是对话元信息，且固化"健忘"人设 → 丢弃
+_MEMORY_REMINDER = re.compile(r"别忘|记牢")
 
 
 def _validate(content: str, assistant_tail: bool) -> str | None:
@@ -133,6 +135,9 @@ def _validate(content: str, assistant_tail: bool) -> str | None:
         return None
     if _MEMORY_QUIZ.search(content):
         print(f"[memory] 过滤（记忆追问元信息）：{content[:30]}")
+        return None
+    if _MEMORY_REMINDER.search(content):
+        print(f"[memory] 过滤（叮嘱别忘元信息）：{content[:30]}")
         return None
     return content
 
@@ -417,6 +422,24 @@ def _query_time_tokens(query: str) -> list[str]:
 # 私聊场景下，享受"新鲜度加分"的最近群聊记忆条数（原来兜底注入也是 5 条）
 _GROUP_RECENT_COUNT = 5
 
+# 身份/关系询问的意图词：问"是谁/认识/介绍/记得/熟悉"时，人际类记忆应优先于琐事
+_IDENTITY_QUERY = re.compile(r"是谁|谁啊|谁呀|认识|介绍|记得|熟悉")
+
+
+def _query_person_names(query: str) -> list[str]:
+    """识别 query 里出现的人物名（朋友名 + 小徐 + 别名），用于 person 标签命中加权。"""
+    import persona_pool
+    names = {"小徐"}
+    for p in persona_pool.POOL:
+        names.update(p["names"])
+    try:
+        alias = db.get_kv("alias")
+        if alias:
+            names.add(alias)
+    except Exception:
+        pass
+    return [n for n in names if n in query]
+
 
 def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
@@ -444,6 +467,9 @@ def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
     q_bi = _bigrams(query)
     q_kw = _keywords(query)
     time_tokens = _query_time_tokens(query)
+    # 意图感知：问"是谁/认识/记得"→ 人际记忆优先；query 点到人名 → person 标签命中优先
+    identity_q = bool(_IDENTITY_QUERY.search(query))
+    q_names = _query_person_names(query)
     # 私聊场景：最近几条群聊记忆给温和加分（新鲜度兜底，防"群聊失忆"）
     recent_group_ids: set[int] = set()
     if not group_first:
@@ -458,6 +484,13 @@ def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
         score = len(q_bi & _bigrams(hay)) * 2 + len(q_kw & _keywords(hay)) * 0.5
         # 时间标签衔接："今天下午"换算成日期后命中记忆的绝对时间标签
         score += sum(3.0 for t in time_tokens if t in m.get("time_label", ""))
+        # 人名标签命中：query 里点到的名字，person 标签精确命中是强信号（标签 > 字面）
+        if q_names and any(n in m.get("person", "") for n in q_names):
+            score += 2.0
+        # 身份/关系询问：人际类记忆（TA 与谁的关系）优先于琐事——
+        # 修"记得小葵吗"只召回"小葵拿快递"、召不回"介绍认识"的排序缺陷
+        if identity_q and m["category"] == "人际":
+            score += 3.0
         # 群聊来源记忆加分：群聊场景全量优先 / 私聊场景最近几条温和优先
         if m.get("source", "private") == "group":
             if group_first:
