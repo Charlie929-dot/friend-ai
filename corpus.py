@@ -87,6 +87,30 @@ ENDING_SIGNALS = ["拜拜", "晚安", "去忙", "先这样", "下了", "睡了",
 # 结束游戏信号（娱乐模式）
 GAME_STOP_WORDS = ["不玩了", "不想玩了", "结束游戏", "退出游戏", "玩够了", "换个游戏", "下了", "你们玩"]
 
+# --- 记忆主动检索（function calling / MCP 阶段）的固定语料 ---
+# 工具描述：写进 tools schema 的 description，引导 AI 何时调、调什么
+MEMORY_TOOL_SEARCH_DESC = (
+    "搜索你关于小徐的记忆库，返回相关的记忆摘要。"
+    "当你想不起某件事、需要回忆过去聊过的内容时调用。"
+    "只在确实需要查证时才调，别每句话都查。")
+MEMORY_TOOL_DETAIL_DESC = (
+    "深入回忆某件事的完整细节（展开长文本）。"
+    "当 search_memories 的结果里某条标了【有长文】，"
+    "且你想听完整经过时，用这个把全文取出来。")
+
+# 工具返回的固定句子
+TOOL_NO_QUERY = "（没有提供检索关键词）"
+TOOL_NO_HIT = "（记忆库里没找到相关的内容）"
+TOOL_HIT_PREFIX = "找到这些相关记忆："
+TOOL_DETAIL_NO_HIT = "（没找到相关记忆）"
+TOOL_DETAIL_PREFIX = "相关记忆的完整内容："
+TOOL_UNKNOWN = "（未知工具）"
+
+# 渲染标记（工具返回内容里给 AI 看的）
+TOOL_GROUP_TAG = "（群聊）"
+TOOL_LONG_MARK = "【有长文，可调 recall_detail 展开】"
+TOOL_FULL_PREFIX = "（全文）"
+
 # 各类语料上一次抽中的下标：防连续重复（人味儿 = 不重样）
 _last_idx: dict[str, int] = {}
 

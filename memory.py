@@ -18,6 +18,7 @@ import threading
 from datetime import datetime, timedelta
 
 import config
+import corpus
 import db
 import llm
 
@@ -607,10 +608,7 @@ MEMORY_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memories",
-            "description": (
-                "搜索你关于小徐的记忆库，返回相关的记忆摘要。"
-                "当你想不起某件事、需要回忆过去聊过的内容时调用。"
-                "只在确实需要查证时才调，别每句话都查。"),
+            "description": corpus.MEMORY_TOOL_SEARCH_DESC,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -627,10 +625,7 @@ MEMORY_TOOLS = [
         "type": "function",
         "function": {
             "name": "recall_detail",
-            "description": (
-                "深入回忆某件事的完整细节（展开长文本）。"
-                "当 search_memories 的结果里某条标了【有长文】，"
-                "且你想听完整经过时，用这个把全文取出来。"),
+            "description": corpus.MEMORY_TOOL_DETAIL_DESC,
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -651,14 +646,14 @@ def _render_tool_memories(mems: list[dict]) -> str:
     语义一致，但这里自包含，避免 memory↔context 循环依赖。"""
     lines = []
     for m in mems:
-        tag = "（群聊）" if m.get("source") == "group" else ""
+        tag = corpus.TOOL_GROUP_TAG if m.get("source") == "group" else ""
         anchor = f"（{m['time_label']}）" if m.get("time_label") else ""
         line = f"- {tag}{anchor}{m['content']}"
         if m.get("long_id"):
-            line += "【有长文，可调 recall_detail 展开】"
+            line += corpus.TOOL_LONG_MARK
         lines.append(line)
         if m.get("long_content"):
-            lines.append(f"  （全文）{m['long_content']}")
+            lines.append(f"  {corpus.TOOL_FULL_PREFIX}{m['long_content']}")
     return "\n".join(lines)
 
 
@@ -666,18 +661,18 @@ def run_memory_tool(name: str, args: dict) -> str:
     """执行记忆检索工具，返回渲染好的文本结果（供 AI 阅读后继续回复）。"""
     query = str(args.get("query", "")).strip()
     if not query:
-        return "（没有提供检索关键词）"
+        return corpus.TOOL_NO_QUERY
     if name == "search_memories":
         hits = recall(query, top_k=5, group_first=False)
         if not hits:
-            return "（记忆库里没找到相关的内容）"
-        return "找到这些相关记忆：\n" + _render_tool_memories(hits)
+            return corpus.TOOL_NO_HIT
+        return corpus.TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
     if name == "recall_detail":
         hits = recall(query, top_k=3, group_first=False, expand_long=True)
         if not hits:
-            return "（没找到相关记忆）"
-        return "相关记忆的完整内容：\n" + _render_tool_memories(hits)
-    return "（未知工具）"
+            return corpus.TOOL_DETAIL_NO_HIT
+        return corpus.TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)
+    return corpus.TOOL_UNKNOWN
 
 
 def random_memory(category: str | None = None) -> dict | None:
