@@ -97,3 +97,5 @@ GROUP_IDLE_GAP_MIN_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MIN_SECONDS", 
 GROUP_IDLE_GAP_MAX_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MAX_SECONDS", "60"))
 GROUP_IDLE_MAX_TURNS = int(os.environ.get("GROUP_IDLE_MAX_TURNS", "6"))   # 一次闲聊最多几轮（省 token）
 GROUP_HANDOFF_IDLE_SECONDS = float(os.environ.get("GROUP_HANDOFF_IDLE_SECONDS", "5"))  # 用户把焦点交给朋友们（"你们认识一下"）后，多快开始自由闲聊
+GROUP_CONTEXT_MESSAGES = int(os.environ.get("GROUP_CONTEXT_MESSAGES", "30"))         # 群聊回应流程注入的上下文条数（越大越记得住早前内容，越耗 token）
+GROUP_IDLE_CONTEXT_MESSAGES = int(os.environ.get("GROUP_IDLE_CONTEXT_MESSAGES", "20"))  # 自主闲聊的上下文条数（短一点省 token）

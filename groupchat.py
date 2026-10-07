@@ -292,14 +292,16 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
                               + GROUP_RULES.format(members=members, self_name=p.name))
                 if idle:
                     sys_prompt += "\n" + IDLE_HINT
-                # 拿最近的群聊内容召回TA自己的旧记忆
-                recent = " ".join(t for _, t in s.transcript[-6:])
+                # 拿最近的群聊内容召回TA自己的旧记忆（比私聊看得更远一点）
+                recent = " ".join(t for _, t in s.transcript[-15:])
                 recalled = memory.recall(recent, top_k=3) if recent else []
                 if recalled:
                     mem_text = "\n".join("- " + m["content"] for m in recalled)
                     sys_prompt += f"\n【你想起来的旧记忆】（自然使用，别生硬复述）\n{mem_text}"
-                # 闲聊时上下文带短一点，省 token
-                window = s.transcript[-14:] if idle else s.transcript[-20:]
+                # 上下文窗口：回应流程多带点（记住"这是新朋友阿燃"这类早前介绍），
+                # 自主闲聊带短一点省 token
+                window = (s.transcript[-config.GROUP_IDLE_CONTEXT_MESSAGES:] if idle
+                          else s.transcript[-config.GROUP_CONTEXT_MESSAGES:])
                 log = "\n".join(f"{sp}：{tx}" for sp, tx in window)
                 msgs = [
                     {"role": "system", "content": sys_prompt},
