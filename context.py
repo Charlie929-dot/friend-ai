@@ -50,35 +50,34 @@ def render_memories(mems: list[dict]) -> str:
     return "\n".join(_memory_line(m) for m in mems)
 
 
-def _memory_message(mems: list[dict]) -> dict | None:
-    """把召回的记忆渲染成一条 system 注入消息；没有命中返回 None。"""
+def _memory_message(mems: list[dict], private: bool = False) -> dict | None:
+    """把召回的记忆渲染成一条 system 注入消息；没有命中返回 None。
+
+    private=True（私聊场景）：召回里混有群聊来源记忆时，补一句来源提示，
+    让 AI 知道这些是在群里发生的、不是私聊单独说的，别搞混。"""
     if not mems:
         return None
+    hint = _MEMORY_HINT
+    if private and any(m.get("source") == "group" for m in mems):
+        hint += "；带「群聊」标记的是在群里发生的，不是私聊单独说的，别搞混"
     return {"role": "system",
-            "content": f"【你想起来的旧记忆】（{_MEMORY_HINT}）\n{render_memories(mems)}"}
+            "content": f"【你想起来的旧记忆】（{hint}）\n{render_memories(mems)}"}
 
 
 # ---------- 私聊回复 ----------
 
 def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> list[dict]:
     """私聊回复的完整 messages：system（人设+便签+profile）→ 游戏规则 →
-    相关记忆（system）→ 最近的群聊记忆（system，兜底防"群聊失忆"）→
-    最近聊天上下文（user）。"""
+    相关记忆（system，群聊记忆统一参与召回，最近几条有新鲜度加分，私聊也能
+    想起群里聊过的事）→ 最近聊天上下文（user）。"""
     messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
     combined = " ".join(batch)
     if combined:
-        mem_msg = _memory_message(memory.recall(combined))
+        mem_msg = _memory_message(memory.recall(combined), private=True)
         if mem_msg:
             messages.append(mem_msg)
-    # 最近的群聊记忆：关键词召回靠命中，问得含糊就召不回——这里兜底注入，
-    # 让 TA 私聊里也记得"我们最近在群里聊过这些"，能接上、不会失忆
-    group_mems = memory.recent_group_memories(limit=5)
-    if group_mems:
-        messages.append({"role": "system",
-                         "content": "【你们最近在群里聊过的事】（这些是在群聊里发生的，"
-                                    "不是私聊单独说的，别搞混）\n" + render_memories(group_mems)})
     messages += db.recent_context(config.CONTEXT_TURNS)
     return messages
 

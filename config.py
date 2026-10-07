@@ -104,4 +104,5 @@ GROUP_RESPOND_MAX = int(os.environ.get("GROUP_RESPOND_MAX", "2"))               
 
 # --- 信息调度层（P2：上下文组装与优先级） ---
 GROUP_MEMORY_BONUS = float(os.environ.get("GROUP_MEMORY_BONUS", "2.0"))               # 群聊场景下，群聊来源记忆（source=group）的召回加分
+GROUP_RECENT_BONUS = float(os.environ.get("GROUP_RECENT_BONUS", "1.2"))               # 私聊场景下，最近几条群聊记忆的温和加分（让私聊也能想起群里最近的事，弱于群聊场景的 2.0）
 GROUP_SUMMARY_ENABLED = os.environ.get("GROUP_SUMMARY_ENABLED", "on").lower() == "on"  # 长会话防遗忘：早前滚出窗口的群聊内容压成摘要兜底

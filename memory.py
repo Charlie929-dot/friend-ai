@@ -400,14 +400,21 @@ def _query_time_tokens(query: str) -> list[str]:
     return tokens
 
 
+# 私聊场景下，享受"新鲜度加分"的最近群聊记忆条数（原来兜底注入也是 5 条）
+_GROUP_RECENT_COUNT = 5
+
+
 def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
     记忆总量还小（≤10）时直接全量返回——早期每条都珍贵。
     打分：bigram/关键词重叠 + 时间标签加成（query 的相对时间词换算成日期匹配）。
     命中后同组（category+theme 完全一致）的更新进展一起带出——
     AI 看到的是时间线的最新状态，不是过时记忆。
-    group_first=True（群聊场景）：群聊来源的记忆（source='group'）加分优先——
-    同处一个群里的往事，比私聊里的事更贴合当下群聊语境。"""
+    group_first=True（群聊场景）：群聊来源的记忆（source='group'）一律加分优先——
+    同处一个群里的往事，比私聊里的事更贴合当下群聊语境。
+    group_first=False（私聊场景）：最近 _GROUP_RECENT_COUNT 条群聊记忆加分
+    （温和于群聊场景）——私聊也能自然想起群里最近聊过的事、不会"群聊失忆"；
+    更早的群聊记忆靠关键词命中召回。"""
     mems = [m for m in db.all_memories(limit=200)
             if m.get("status", "ok") == "ok"]  # 待确认删除的不参与召回
     if not mems:
@@ -423,6 +430,12 @@ def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
     q_bi = _bigrams(query)
     q_kw = _keywords(query)
     time_tokens = _query_time_tokens(query)
+    # 私聊场景：最近几条群聊记忆给温和加分（新鲜度兜底，防"群聊失忆"）
+    recent_group_ids: set[int] = set()
+    if not group_first:
+        gids = sorted((m["id"] for m in mems
+                       if m.get("source", "private") == "group"), reverse=True)
+        recent_group_ids = set(gids[:_GROUP_RECENT_COUNT])
     scored = []
     for m in mems:
         # 五维标签全部参与匹配（人物/地点/主题往往是检索入口）
@@ -431,9 +444,12 @@ def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
         score = len(q_bi & _bigrams(hay)) * 2 + len(q_kw & _keywords(hay)) * 0.5
         # 时间标签衔接："今天下午"换算成日期后命中记忆的绝对时间标签
         score += sum(3.0 for t in time_tokens if t in m.get("time_label", ""))
-        # 群聊场景：群聊来源的记忆优先（信息调度层）
-        if group_first and m.get("source", "private") == "group":
-            score += config.GROUP_MEMORY_BONUS
+        # 群聊来源记忆加分：群聊场景全量优先 / 私聊场景最近几条温和优先
+        if m.get("source", "private") == "group":
+            if group_first:
+                score += config.GROUP_MEMORY_BONUS
+            elif m["id"] in recent_group_ids:
+                score += config.GROUP_RECENT_BONUS
         if score >= 1.0:
             scored.append((score, m))
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))
@@ -469,14 +485,3 @@ def random_memory(category: str | None = None) -> dict | None:
     pick = _r.choice(mems[:max(3, len(mems) // 3)])
     db.touch_memory(pick["id"])
     return pick
-
-
-def recent_group_memories(limit: int = 5) -> list[dict]:
-    """最近的群聊记忆（source='group'），按存储时间倒序。
-
-    私聊回复时注入：让 TA 记得"我们最近在群里聊过这些"，能接上群聊里的事、
-    不会"群聊失忆"（召回靠关键词命中，问得含糊就召不回——这里直接兜底注入）。"""
-    mems = [m for m in db.all_memories(limit=200)
-            if m.get("status", "ok") == "ok" and m.get("source") == "group"]
-    mems.sort(key=lambda m: -m["id"])
-    return mems[:limit]

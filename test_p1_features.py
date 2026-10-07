@@ -1833,9 +1833,10 @@ def test_backfill_group():
 
 
 def test_group_memory_in_private_chat():
-    """私聊时群聊记忆带「群聊」标注 + 兜底注入最近群聊记忆（防群聊失忆）。"""
+    """私聊时群聊记忆统一召回（含最近群聊新鲜度加分）+「群聊」标注 + 来源提示。"""
     import tempfile
     import db as _db
+    import memory as _mem
     import context as _ctx
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
@@ -1858,13 +1859,21 @@ def test_group_memory_in_private_chat():
                                "time_label": "", "created_at": "2026-10-07T12:00:00"})
         assert "群聊" not in p, f"私聊记忆不该有群聊标注：{p}"
 
-        # 2) 私聊兜底注入最近群聊记忆
+        # 2) 私聊统一召回群聊记忆，召回含群聊记忆时补来源提示（别搞混）
         _db.add_message("user", "今天想你了")
         msgs = _ctx.build_chat_messages("AWAKE", ["今天想你了"])
         joined = "\n".join(m["content"] for m in msgs)
-        assert "你们最近在群里聊过的事" in joined, "私聊未注入最近群聊记忆"
-        assert "群聊里认识了新朋友阿燃" in joined, "群聊记忆没进私聊上下文"
-        print("ok 私聊群聊记忆（群聊标注 + 兜底注入最近群聊记忆）")
+        assert "群聊里认识了新朋友阿燃" in joined, "私聊未召回群聊记忆"
+        assert "别搞混" in joined, "私聊群聊记忆缺来源提示"
+
+        # 3) 记忆 >10 条时，私聊也能想起"最近群聊记忆"（新鲜度加分兜底）
+        for i in range(12):
+            _db.add_memory(f"无关填充{i}号天气", "事件", theme="其他")
+        hits = _mem.recall("今天想你了", top_k=5, group_first=False)
+        contents = [m["content"] for m in hits]
+        assert "群聊里认识了新朋友阿燃" in contents, \
+            f"私聊未召回最近群聊记忆：{contents}"
+        print("ok 私聊群聊记忆（统一召回 + 群聊标注 + 来源提示 + 最近群聊新鲜度加分）")
     finally:
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
