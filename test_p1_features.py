@@ -1435,6 +1435,59 @@ def test_group_llm_fallback():
         _db.init()
 
 
+def test_group_sleeping_member():
+    """群聊睡觉成员处理：回应流程里，睡觉的朋友回迷糊语（和私聊一致），醒着的正常发言。"""
+    import corpus
+    import tempfile
+    import db as _db
+    import groupchat as _gc
+    import commands as _cmd
+
+    class Ch:
+        def __init__(self):
+            self.sent = []
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = _set_timing({
+        "TYPING_ENABLED": False,
+        "READING_SECONDS_PER_CHAR": 0.0,
+        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
+        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
+    })
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)  # 小葵(friend.db) + 稳稳(friend-abc12345.db)
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: "我醒着正常说话"
+        _cmd._write_kv_file(tmp / "friend-abc12345.db", "state", "SLEEPING")  # 稳稳睡觉
+        _gc.start(parts)
+        _gc.attach_channel(ch)
+        _gc.on_user_text("在吗", ch)
+        by_speaker = {}
+        for sender, text in ch.sent:
+            by_speaker.setdefault(sender, []).append(text)
+        assert any(t in corpus.SLEEPY_REPLIES for t in by_speaker.get("稳稳", [])), \
+            f"睡觉的稳稳没回迷糊语：{ch.sent}"
+        assert any("我醒着正常说话" in t for t in by_speaker.get("小葵", [])), \
+            f"醒着的小葵没正常说话：{ch.sent}"
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
+        _gc.end()
+        print("ok 群聊睡觉成员（回应流程回迷糊语，醒着正常说话）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1459,6 +1512,7 @@ if __name__ == "__main__":
     test_groupidle_command()
     test_group_handoff_free_chat()
     test_group_llm_fallback()
+    test_group_sleeping_member()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

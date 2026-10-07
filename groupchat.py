@@ -280,35 +280,40 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
         real_db = config.DB_PATH
         try:
             config.DB_PATH = p.db_path
-            if idle and db.get_state() == "SLEEPING":
-                return ""  # 睡着的人不参与闲聊
-            members = "、".join([*(x.name for x in s.participants), "小徐（用户）"])
-            sys_prompt = (persona.build_system_prompt("AWAKE") + "\n"
-                          + GROUP_RULES.format(members=members, self_name=p.name))
-            if idle:
-                sys_prompt += "\n" + IDLE_HINT
-            # 拿最近的群聊内容召回TA自己的旧记忆
-            recent = " ".join(t for _, t in s.transcript[-6:])
-            recalled = memory.recall(recent, top_k=3) if recent else []
-            if recalled:
-                mem_text = "\n".join("- " + m["content"] for m in recalled)
-                sys_prompt += f"\n【你想起来的旧记忆】（自然使用，别生硬复述）\n{mem_text}"
-            # 闲聊时上下文带短一点，省 token
-            window = s.transcript[-14:] if idle else s.transcript[-20:]
-            log = "\n".join(f"{sp}：{tx}" for sp, tx in window)
-            msgs = [
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": f"【群聊记录】\n{log}\n\n（轮到你了，直接说内容）"},
-            ]
-            try:
-                reply = llm.chat(msgs).strip()
-            except Exception as e:
-                # 和私聊一致：LLM 挂了就说"脑子卡住了"，别让一位朋友卡死整轮群聊
-                reply = corpus.LLM_ERROR.format(e)
-            # 模型偶尔自带名字前缀，剥掉
-            for sep in ("：", ":"):
-                if reply.startswith(f"{p.name}{sep}"):
-                    reply = reply[len(p.name) + 1:].strip()
+            sleeping = db.get_state() == "SLEEPING"
+            if sleeping and idle:
+                return ""  # 自主闲聊：睡着的人不参与
+            if sleeping:
+                # 回应流程：睡着的人回一句迷糊话（和私聊一致，不调 LLM，省钱）
+                reply = corpus.pick(corpus.SLEEPY_REPLIES, "sleepy")
+            else:
+                members = "、".join([*(x.name for x in s.participants), "小徐（用户）"])
+                sys_prompt = (persona.build_system_prompt("AWAKE") + "\n"
+                              + GROUP_RULES.format(members=members, self_name=p.name))
+                if idle:
+                    sys_prompt += "\n" + IDLE_HINT
+                # 拿最近的群聊内容召回TA自己的旧记忆
+                recent = " ".join(t for _, t in s.transcript[-6:])
+                recalled = memory.recall(recent, top_k=3) if recent else []
+                if recalled:
+                    mem_text = "\n".join("- " + m["content"] for m in recalled)
+                    sys_prompt += f"\n【你想起来的旧记忆】（自然使用，别生硬复述）\n{mem_text}"
+                # 闲聊时上下文带短一点，省 token
+                window = s.transcript[-14:] if idle else s.transcript[-20:]
+                log = "\n".join(f"{sp}：{tx}" for sp, tx in window)
+                msgs = [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": f"【群聊记录】\n{log}\n\n（轮到你了，直接说内容）"},
+                ]
+                try:
+                    reply = llm.chat(msgs).strip()
+                except Exception as e:
+                    # 和私聊一致：LLM 挂了就说"脑子卡住了"，别让一位朋友卡死整轮群聊
+                    reply = corpus.LLM_ERROR.format(e)
+                # 模型偶尔自带名字前缀，剥掉
+                for sep in ("：", ":"):
+                    if reply.startswith(f"{p.name}{sep}"):
+                        reply = reply[len(p.name) + 1:].strip()
         finally:
             config.DB_PATH = real_db
 
