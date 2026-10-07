@@ -24,10 +24,17 @@ PERSONA = COMMON_RULES
 
 
 def friend_name(default: str = "老朋友") -> str:
-    """当前朋友的名字（人格卡）；没抽过卡的老朋友用默认称呼。"""
+    """当前朋友的名字：人格卡名 > 别名（初遇朋友这类 V1 老朋友的）> 默认。
+
+    别名必须回退——否则只有 alias 的老朋友（如"初遇朋友"）在私聊 prompt
+    里拿不到名字，群聊记忆里的"初遇朋友"就对不上"我"，导致"群聊失忆"。"""
     import persona_pool
     card = persona_pool.load()
-    return card["name"] if card else default
+    if card:
+        return card["name"]
+    import db
+    alias = db.get_kv("alias")
+    return alias or default
 
 STATE_HINTS = {
     "AWAKE": "你现在醒着，状态正常。",
@@ -114,6 +121,7 @@ def build_system_prompt(state: str) -> str:
     stage_hint = NEW_STAGE_HINT if stage == "new" else FAMILIAR_STAGE_HINT
 
     parts = [COMMON_RULES,
+             f"【你的名字】你叫{friend_name()}，别人这么称呼你。",
              f"【你的人格】{flavor}",
              f"【当前时间】{time_info}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
              f"【当前状态】{STATE_HINTS.get(state, STATE_HINTS['AWAKE'])}",

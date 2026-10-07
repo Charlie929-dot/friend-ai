@@ -176,7 +176,9 @@ def _respond_loop(self) -> None:
                     self.last_idle_ts = 0.0
                     self.idle_after = config.GROUP_HANDOFF_IDLE_SECONDS
         except Exception as e:
+            import traceback
             print(f"[group] 回应出错：{e}")
+            traceback.print_exc()
         finally:
             self.respond_done.set()
             with self._cond:

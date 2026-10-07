@@ -63,8 +63,13 @@ class Engine:
         self._reading_until = 0.0
         self._reading_deadline = 0.0  # 本轮等待的绝对上限
         self._sending = False
+        self._stopped = False  # 停止后台回复线程（测试用）
         self._lock = threading.Lock()
         threading.Thread(target=self._reply_worker, daemon=True).start()
+
+    def stop(self) -> None:
+        """停止后台回复线程（测试/进程收尾用）。"""
+        self._stopped = True
 
     # --- 收到用户消息 ---
     def on_user_message(self, text: str) -> None:
@@ -110,7 +115,7 @@ class Engine:
             return bool(self._pending)
 
     def _reply_worker(self) -> None:
-        while True:
+        while not self._stopped:
             _time.sleep(0.2)
             with self._lock:
                 if self._sending or not self._pending:

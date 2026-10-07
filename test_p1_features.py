@@ -343,6 +343,7 @@ def test_session_end_and_outbox():
         assert not any("条留言" in s for s in ch.sent), "空队列也重放了"
         print("ok 话题结束 AI 判断 + outbox 未读队列重放")
     finally:
+        engine.stop()  # 停掉后台回复线程，别让它拿真实 llm.chat 调 API 卡住 PATH_LOCK
         _llm.chat = real_chat
         _memory.extract_async = real_extract
         config.BASE_DIR, config.DB_PATH = real_base, real_db
@@ -667,6 +668,7 @@ def test_typing_indicator():
         assert sends == ["好呀好呀", "就这么说定了"], f"分段发送不对：{sends}"
         print("ok 正在输入（typing 先于正文 + 分段发送）")
     finally:
+        eng.stop()  # 停掉后台回复线程，别让它拿真实 llm.chat 卡住 PATH_LOCK
         (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
          config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
          config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR) = saved
@@ -811,6 +813,8 @@ def test_interrupt_detection():
             f"缺让步语（{ _persona.INTERRUPT_ACKS }）：{sent2}"
         print("ok 插话检测（打字打断作废 + 中途停发让步）")
     finally:
+        eng.stop()
+        eng2.stop()
         _mem.llm.chat = real_chat
         (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
          config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
@@ -1026,6 +1030,7 @@ def test_bubble_fixed_corpus():
             f"冒泡没走固定语料：{ch.sent}"
         print("ok 冒泡固定语料（不走 LLM，省 token）")
     finally:
+        engine.stop()  # 停掉后台回复线程
         _llm.chat = real_chat
         config.BUBBLE_FIXED_PROB = saved_prob
         config.BASE_DIR, config.DB_PATH = real_base, real_db
@@ -1361,6 +1366,8 @@ def test_group_handoff_free_chat():
             _t.sleep(0.03)
         assert len(ch.sent) > after_respond, \
             f"焦点交接后没开自由闲聊：{ch.sent}"
+        # 等这轮闲聊彻底跑完（最多 GROUP_IDLE_MAX_TURNS=3 轮），别让它混进后面的"在吗"
+        _t.sleep(0.6)
 
         # 非交接消息则不受影响：仍走正常长空闲（这里只验证不立即触发）
         ch.sent.clear()
