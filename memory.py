@@ -37,6 +37,11 @@ EXTRACT_PROMPT = """你在整理{WHO}和小徐的聊天记录，从最近的对�
   "person": "涉及的人物（没有就空字符串）",
   "theme": "学业 | 技术 | 健康作息 | 饮食 | 娱乐 | 社交情感 | 出行 | 财务 | 其他"
 }
+如果这条信息"一句两句说不完"——比如 TA 给你完整讲了一段经历/故事、一次深入的讨论、
+一个详细的技术方案、一起做过的某件事的完整过程——不要硬压成一句话。这时：
+- "content" 仍写一句摘要（<50字，说清这是件什么事）
+- 额外加 "long": true 和 "full": "完整内容"（把细节尽量原样保留，可写到几百字）
+普通的一句话事实、偏好、计划、情绪不需要 long/full，只要 content 即可。
 如果这条信息属于用户的"个人清单"字段（称呼/生日/城市/学校专业/年级/作息习惯/
 兴趣爱好/在忙的事/雷区），额外加一项 "profile": "字段名：值"
 （如 "profile": "作息习惯：夜猫子，凌晨才睡"）。只有用户亲口陈述的确定性事实才能进清单；
@@ -230,7 +235,14 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
             print(f"[memory] 提议删除（待确认）：{old['content'][:30]}")
         return False
 
-    if len(content) < 4 or len(content) > 200:  # 太短没信息量，太长是模型跑偏
+    # A/B 两级库：带 long+full 的是"一句两句说不完"的长内容——摘要进 A 库
+    # （memories，召回只看它），全文进 B 库（long_memories），A 库带 long_id 伪链接
+    full = str(item.get("full", "")).strip()
+    is_long = bool(item.get("long")) and len(full) >= 20
+
+    # 长度约束：长文摘要放宽（正文在 B 库），普通记忆仍 4~200
+    max_len = 100 if is_long else 200
+    if len(content) < 4 or len(content) > max_len:  # 太短没信息量，太长是模型跑偏
         return False
 
     # 确定性红线（推测/元信息/自称/承诺时序安全网），能代码判断的不占 prompt
@@ -256,11 +268,29 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
     person = str(item.get("person", "")).strip()
     tags = str(item.get("tags", "")).strip()
 
+    # 长文全文也过确定性红线 + 截断防失控（B 库单条上限 2000 字）
+    if is_long:
+        full = full[:2000]
+        cleaned_full = _validate(full, assistant_tail)
+        if cleaned_full is None:   # 全文被污染 → 摘要一起丢弃
+            return False
+        full = cleaned_full
+
     # 追加式时间线：不去重不合并（同主题的新进展是历史的一部分），
     # 仅跳过原文完全相同的（防相邻轮次把同一段话重复提取）
     for m in db.all_memories(limit=200):
         if m["content"] == content:
             return False
+
+    if is_long:
+        long_id = db.add_long_memory(content, full, category, tags, time_label,
+                                     place, person, theme, source)
+        db.add_memory(content, category, tags, time_label, place, person, theme,
+                      source, long_id=long_id)
+        print(f"[memory] 记住长文：({category}|{theme or '—'}) {content[:30]}…"
+              f"（全文 {len(full)} 字，B库#{long_id}）")
+        return True
+
     db.add_memory(content, category, tags, time_label, place, person, theme, source)
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
@@ -441,7 +471,42 @@ def _query_person_names(query: str) -> list[str]:
     return [n for n in names if n in query]
 
 
-def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
+# 追问细节的意图词：query 含这些词时，命中的长记忆（B 库）应展开全文
+_EXPAND_QUERY = re.compile(r"详细|完整|具体|展开|说说|讲讲|细节|全过程|完整版|具体点")
+
+
+def wants_expansion(query: str) -> bool:
+    """判断 query 是否在追问细节——此时命中的长记忆应展开全文（B 库）。"""
+    return bool(_EXPAND_QUERY.search(query))
+
+
+def _attach_long(mems_out: list[dict], expand_long: bool) -> list[dict]:
+    """expand_long 时，把命中的长记忆全文从 B 库取出来附到 long_content。"""
+    if not expand_long:
+        return mems_out
+    for m in mems_out:
+        if m.get("long_id"):
+            long = db.get_long_memory(m["long_id"])
+            if long and long.get("status", "ok") == "ok":
+                m["long_content"] = long["content"]
+                db.touch_long_memory(m["long_id"])
+    return mems_out
+
+
+def expand_long_memory(mem: dict) -> str | None:
+    """取一条 A 库记忆对应的 B 库全文；无长文（long_id=0）返回 None。"""
+    long_id = mem.get("long_id")
+    if not long_id:
+        return None
+    long = db.get_long_memory(long_id)
+    if long and long.get("status", "ok") == "ok":
+        db.touch_long_memory(long_id)
+        return long["content"]
+    return None
+
+
+def recall(query: str, top_k: int = 5, group_first: bool = False,
+           expand_long: bool = False) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
     记忆总量还小（≤10）时直接全量返回——早期每条都珍贵。
     打分：bigram/关键词重叠 + 时间标签加成（query 的相对时间词换算成日期匹配）。
@@ -463,7 +528,7 @@ def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
                                      -m["id"]))
         for m in mems:
             db.touch_memory(m["id"])
-        return mems[:top_k * 2]
+        return _attach_long(mems[:top_k * 2], expand_long)
     q_bi = _bigrams(query)
     q_kw = _keywords(query)
     time_tokens = _query_time_tokens(query)
@@ -516,7 +581,7 @@ def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
     out = hits + extras
     for m in out:
         db.touch_memory(m["id"])
-    return out
+    return _attach_long(out, expand_long)
 
 
 def random_memory(category: str | None = None) -> dict | None:

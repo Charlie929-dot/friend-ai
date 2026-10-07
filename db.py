@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS diary (
     mood TEXT NOT NULL DEFAULT '',        -- 当天心情词
     created_at TEXT NOT NULL            -- 写日记的时间
 );
+CREATE TABLE IF NOT EXISTS long_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    summary TEXT NOT NULL,             -- 文档字符串（摘要，一两句；召回只看这个）
+    content TEXT NOT NULL,             -- 全文（一句两句说不完的长内容）
+    category TEXT NOT NULL,            -- 类别：画像/偏好/计划/事件/人际/情绪
+    tags TEXT NOT NULL DEFAULT '',
+    time_label TEXT NOT NULL DEFAULT '',  -- 事发时间标签
+    place TEXT NOT NULL DEFAULT '',
+    person TEXT NOT NULL DEFAULT '',
+    theme TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    recalled_at TEXT NOT NULL DEFAULT '',
+    recall_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'ok',    -- ok / pending_delete
+    source TEXT NOT NULL DEFAULT 'private'  -- private / group
+);
 """
 
 
@@ -75,12 +91,15 @@ def init():
         # 旧库迁移：记忆来源标签（信息调度层：群聊记忆 group / 1:1 记忆 private）
         if "source" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'private'")
+        # 旧库迁移：A/B 两级库——A 库记忆可挂一条 B 库长文（long_id 指向 long_memories.id，0=无）
+        if "long_id" not in cols:
+            c.execute("ALTER TABLE memories ADD COLUMN long_id INTEGER NOT NULL DEFAULT 0")
 
 
 def clear_all():
     """清空所有数据（/new-friend 用），保留表结构。"""
     with _conn() as c:
-        for table in ("kv", "messages", "counters", "memories"):
+        for table in ("kv", "messages", "counters", "memories", "long_memories"):
             c.execute(f"DELETE FROM {table}")
 
 
@@ -224,13 +243,13 @@ def reset_counter(key: str):
 # --- 记忆系统 v1：AI 自动从对话提取的长期记忆（五维标签） ---
 def add_memory(content: str, category: str = "画像", tags: str = "",
                time_label: str = "", place: str = "", person: str = "",
-               theme: str = "", source: str = "private") -> int:
+               theme: str = "", source: str = "private", long_id: int = 0) -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at, source)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at, source, long_id)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (content, category, tags, time_label, place, person, theme,
-             datetime.now().isoformat(timespec="seconds"), source),
+             datetime.now().isoformat(timespec="seconds"), source, long_id),
         )
         return cur.lastrowid
 
@@ -296,6 +315,67 @@ def touch_memory(mem_id: int):
 def memory_count() -> int:
     with _conn() as c:
         return c.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"]
+
+
+# --- 记忆系统 v3：B 库长文本（A/B 两级库） ---
+# A 库 = memories 表（概要/短内容，一句话），召回只看 A 库；B 库 = long_memories
+# 表（长文本全文）。A 库记忆带 long_id 时是一条"伪链接"，指向 B 库全文——
+# AI 先看摘要，觉得相关才"跳转"展开全文，避免把长文全塞进上下文。
+def add_long_memory(summary: str, content: str, category: str = "事件", tags: str = "",
+                    time_label: str = "", place: str = "", person: str = "",
+                    theme: str = "", source: str = "private") -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, theme, created_at, source)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (summary, content, category, tags, time_label, place, person, theme,
+             datetime.now().isoformat(timespec="seconds"), source),
+        )
+        return cur.lastrowid
+
+
+def get_long_memory(long_id: int) -> dict | None:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM long_memories WHERE id=?", (long_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def all_long_memories(limit: int = 100) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM long_memories ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_long_memory(long_id: int) -> str | None:
+    with _conn() as c:
+        row = c.execute("SELECT summary FROM long_memories WHERE id=?", (long_id,)).fetchone()
+        if not row:
+            return None
+        c.execute("DELETE FROM long_memories WHERE id=?", (long_id,))
+        # 断开 A 库记忆对这条长文的引用，避免留下悬空伪链接
+        c.execute("UPDATE memories SET long_id=0 WHERE long_id=?", (long_id,))
+        return row["summary"]
+
+
+def touch_long_memory(long_id: int):
+    """展开长文时更新统计。"""
+    with _conn() as c:
+        c.execute(
+            "UPDATE long_memories SET recalled_at=?, recall_count=recall_count+1 WHERE id=?",
+            (datetime.now().isoformat(timespec="seconds"), long_id),
+        )
+
+
+def set_long_memory_status(long_id: int, status: str):
+    with _conn() as c:
+        c.execute("UPDATE long_memories SET status=? WHERE id=?", (status, long_id))
+
+
+def long_memory_count() -> int:
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) AS n FROM long_memories").fetchone()["n"]
 
 
 # --- 日记 + 每日回顾（P2：记忆 v3 每日回顾 + 日记系统 + 今日对话回顾线） ---

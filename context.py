@@ -43,7 +43,11 @@ def _memory_line(m: dict) -> str:
     tag = "（群聊）" if m.get("source") == "group" else ""
     anchor = (f"（{m['time_label']}）" if m.get("time_label")
               else (f"（{m['created_at'][5:10]} 记）" if m.get("created_at") else ""))
-    return "- " + tag + anchor + m["content"]
+    line = "- " + tag + anchor + m["content"]
+    # A/B 库：带 long_id 的记忆是一条"伪链接"，只给摘要 + 提示，需要时才展开全文
+    if m.get("long_id"):
+        line += "【有长文，可说「详细讲讲」】"
+    return line
 
 
 def render_memories(mems: list[dict]) -> str:
@@ -60,8 +64,14 @@ def _memory_message(mems: list[dict], private: bool = False) -> dict | None:
     hint = _MEMORY_HINT
     if private and any(m.get("source") == "group" for m in mems):
         hint += "；带「群聊」标记的是在群里发生的，不是私聊单独说的，别搞混"
+    # A/B 库：召回里已展开的长记忆（long_content）把全文一并渲染进去
+    lines = []
+    for m in mems:
+        lines.append(_memory_line(m))
+        if m.get("long_content"):
+            lines.append("  （详情全文）" + m["long_content"])
     return {"role": "system",
-            "content": f"【你想起来的旧记忆】（{hint}）\n{render_memories(mems)}"}
+            "content": f"【你想起来的旧记忆】（{hint}）\n" + "\n".join(lines)}
 
 
 # ---------- 私聊回复 ----------
@@ -75,7 +85,10 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> l
         messages.append({"role": "system", "content": game_rules})
     combined = " ".join(batch)
     if combined:
-        mem_msg = _memory_message(memory.recall(combined), private=True)
+        # 追问细节（"详细讲讲/完整说说"）时展开命中的长记忆全文
+        mem_msg = _memory_message(
+            memory.recall(combined, expand_long=memory.wants_expansion(combined)),
+            private=True)
         if mem_msg:
             messages.append(mem_msg)
     messages += db.recent_context(config.CONTEXT_TURNS)

@@ -1908,6 +1908,67 @@ def test_identity_recall():
         _db.init()
 
 
+def test_long_memory():
+    """A/B 两级库：长文存 B 库（全文+摘要）、A 库挂 long_id 伪链接；追问细节时展开。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+    import context as _ctx
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+
+        # 1) 长文：_apply 分流——摘要进 A 库、全文进 B 库、long_id 关联
+        full_text = "小徐从头讲了奇异值分解怎么压缩图像，先把图切成 8x8 小块，再对每块做分解，" * 8
+        ok = _mem._apply({"content": "小徐给我详细讲了SVD图像压缩的完整思路",
+                          "category": "事件", "long": True, "full": full_text,
+                          "theme": "技术"}, assistant_tail=False)
+        assert ok, "长文落库失败"
+        assert _db.memory_count() == 1, "A 库应有 1 条摘要记忆"
+        assert _db.long_memory_count() == 1, "B 库应有 1 条长文"
+        m = _db.all_memories(limit=1)[0]
+        assert m["long_id"] > 0, f"A 库记忆应带 long_id 伪链接：{m}"
+        long = _db.get_long_memory(m["long_id"])
+        assert long and long["content"] == full_text, "B 库全文应与原文一致"
+
+        # 2) 短记忆照旧：无 long_id
+        _db.add_memory("小徐爱吃辣", "偏好")
+        short = [x for x in _db.all_memories(limit=5) if x["content"] == "小徐爱吃辣"][0]
+        assert short["long_id"] == 0, "短记忆不应挂 long_id"
+
+        # 3) 召回默认不展开（只给摘要，不附全文）
+        hits = _mem.recall("SVD图像压缩", top_k=3)
+        hit = [h for h in hits if h.get("long_id")][0]
+        assert "long_content" not in hit, "默认召回不该展开全文"
+
+        # 4) 追问细节时展开全文
+        hits2 = _mem.recall("你详细讲讲SVD那事", top_k=3, expand_long=True)
+        hit2 = [h for h in hits2 if h.get("long_id")][0]
+        assert "long_content" in hit2, "追问细节应展开全文"
+        assert hit2["long_content"] == full_text, "展开的全文应与原文一致"
+
+        # 5) expand_long_memory 接口
+        assert _mem.expand_long_memory(m) == full_text
+        assert _mem.expand_long_memory(short) is None, "短记忆展开应返回 None"
+
+        # 6) 渲染：_memory_line 带长文标记；build_chat_messages 追问细节注入全文
+        line = _ctx._memory_line(m)
+        assert "有长文" in line, f"长记忆缺展开提示：{line}"
+        _db.add_message("user", "你详细讲讲SVD那事")
+        msgs = _ctx.build_chat_messages("AWAKE", ["你详细讲讲SVD那事"])
+        joined = "\n".join(x["content"] for x in msgs)
+        assert "详情全文" in joined, "追问细节时上下文应含长文全文"
+        assert "先把图切成" in joined, "全文应真正注入上下文"
+        print("ok A/B 两级库（长文落库 + 伪链接 + 追问展开 + 渲染标记）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1940,6 +2001,7 @@ if __name__ == "__main__":
     test_backfill_group()
     test_group_memory_in_private_chat()
     test_identity_recall()
+    test_long_memory()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")
