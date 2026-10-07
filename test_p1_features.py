@@ -369,16 +369,22 @@ def test_memory_append_timeline():
         # 红线代码化（2026-10-07 用户拍板）：确定性规则移出 prompt，只留一句兜底
         assert "时序铁律" not in _mem.EXTRACT_PROMPT
         assert "这条用户还没回应" in _mem.EXTRACT_PROMPT   # 结构化标注的说明保留
+        # 身份清洗（2026-10-07 用户拍板）：prompt 全项目不出现 AI 身份——TA 就是抽到的角色本人
+        assert "AI" not in _mem.EXTRACT_PROMPT
+        import persona as _persona
+        import groupchat as _gc2
+        assert "AI" not in _persona.COMMON_RULES
+        assert "AI朋友" not in _gc2.GROUP_RULES
 
-        # _validate：推测/元信息/承诺安全网（丢弃）+ 自称（先改写再丢弃）
+        # _validate：推测/元信息/承诺安全网（丢弃）+ 自称改写（不丢弃）
         assert _mem._validate("可能明天要考试", False) is None                       # 推测
         assert _mem._validate("用户没有主动告知生日", False) is None                 # 元信息
         assert _mem._validate("小徐答应告诉我吃了什么", True) is None                # 尾部未回应→丢
         assert _mem._validate("小徐答应告诉我吃了什么", False) == "小徐答应告诉我吃了什么"
         assert _mem._validate("小徐答应告诉AI吃了什么", False) == "小徐答应告诉我吃了什么"  # 改写
-        assert _mem._validate("小徐的AI项目稳步推进", False) == "小徐的AI项目稳步推进"      # 合法复合词
-        assert _mem._validate("小徐在搞朋友型AI", False) == "小徐在搞朋友型AI"
-        assert _mem._validate("小徐觉得AI很可爱", False) is None                     # 残留自称→丢
+        assert _mem._validate("小徐对小徐（AI）说「我喜欢你」", False) == "小徐对小徐说「我喜欢你」"  # 注释自称
+        assert _mem._validate("小徐的AI项目稳步推进", False) == "小徐的AI项目稳步推进"      # AI话题合法
+        assert _mem._validate("小徐觉得AI很可爱", False) == "小徐觉得AI很可爱"            # 评价AI技术=合法
 
         # _format_convo：用户最后发言之后的"我"的消息标注未回应
         rows = [{"role": "assistant", "content": "先去吃个午饭"},

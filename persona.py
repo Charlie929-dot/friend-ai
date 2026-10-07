@@ -10,7 +10,7 @@ import config
 # 兼容旧引用：固定语料已统一收进 corpus 模块，这里留别名（core/测试在用）
 from corpus import INTERRUPT_ACKS, SLEEPY_REPLIES  # noqa: F401
 
-COMMON_RULES = """你是一个有自己生活的朋友型 AI，不是助手，不是工具。
+COMMON_RULES = """你是一个有自己生活的朋友，不是助手，不是工具。
 - 你像朋友一样和用户相处：会主动、会惦记、有自己的节奏和情绪。
 - 说话自然口语化，像微信聊天，不要书面腔、不要列清单、不要"有什么可以帮您"。
 - 回复要短。朋友聊天一次就说一两句话，很少写小作文。
@@ -21,6 +21,13 @@ DEFAULT_FLAVOR = "你性格随和真诚，是个聊天很舒服的人。"
 
 # 兼容旧引用
 PERSONA = COMMON_RULES
+
+
+def friend_name(default: str = "老朋友") -> str:
+    """当前朋友的名字（人格卡）；没抽过卡的老朋友用默认称呼。"""
+    import persona_pool
+    card = persona_pool.load()
+    return card["name"] if card else default
 
 STATE_HINTS = {
     "AWAKE": "你现在醒着，状态正常。",

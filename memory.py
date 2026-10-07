@@ -20,8 +20,8 @@ from datetime import datetime, timedelta
 import db
 import llm
 
-EXTRACT_PROMPT = """你是记忆提取器。从最近的对话片段里，提取值得长期记住的事。
-对话里"我"就是这位朋友自己，"用户"是小徐。标注"（这条用户还没回应）"的
+EXTRACT_PROMPT = """你在整理{WHO}和小徐的聊天记录，从最近的对话片段里提取值得长期记住的事。
+对话里"我"是{WHO}，"用户"是小徐。标注"（这条用户还没回应）"的
 "我"的消息用户还没看到——不能记成用户已回应/已答应。
 
 输出：一个 JSON 数组，不要输出任何其他文字。每项格式：
@@ -63,10 +63,25 @@ EXTRACT_PROMPT = """你是记忆提取器。从最近的对话片段里，提取
   只有用户亲口陈述或明确确认过的事才能记。
 - 不记闲聊客套、一次性话题、"我"自己的事
 - 一条记忆只说一件事，别囫囵吞枣把多个事实塞进一句
-- 兜底（程序还会再过滤一道，漏网=失败）：元信息、不确定推测、用"AI/助手"自称、
+- 兜底（程序还会再过滤一道，漏网=失败）：元信息、不确定推测、
   把用户还没回应的提议记成"小徐答应…"
 
 没有合格的新信息就输出：[]"""
+
+
+def _extract_prompt() -> str:
+    """提取器 system prompt：注入当前朋友的名字，模型才知道"我"是谁。
+
+    不注名字时模型只能靠猜，会写出"小徐对小徐（AI）说…"这种四不像自称
+    （2026-10-07 实测）；prompt 里全项目不出现"AI"身份——TA 就是抽到的角色本人。
+    """
+    try:
+        import persona_pool
+        card = persona_pool.load()
+        name = card["name"] if card else ""
+    except Exception:
+        name = ""
+    return EXTRACT_PROMPT.replace("{WHO}", name or "这位朋友")
 
 
 # ---------- 确定性后处理：能正则判断的红线不进 prompt（2026-10-07 用户拍板）----------
@@ -74,16 +89,14 @@ EXTRACT_PROMPT = """你是记忆提取器。从最近的对话片段里，提取
 _SPECULATION = re.compile(r"^(可能|应该|也许|大概|估计|疑似)")
 # 元信息（对对话过程的描述而非事实）→ 丢弃
 _META = re.compile(r"用户(没有|未)(主动)?(告知|提及|说)|用户不知道|AI没看到|没有看到相关|没有主动告知")
-# 高置信自称改写：这位朋友的口误"AI"→"我"（先改写）
-_SELF_REWRITE = (("AI助手", "我"), ("告诉AI", "告诉我"), ("对AI", "对我"), ("跟AI", "跟我"),
+# 高置信自称改写：口误"AI"→"我"（先改写）。prompt 已无 AI 身份提示，
+# 这些改写只兜历史习惯/偶发口误；合法话题（AI项目/朋友型AI）不受影响。
+_SELF_REWRITE = (("（AI）", ""), ("(AI)", ""),
+                 ("AI助手", "我"), ("告诉AI", "告诉我"), ("对AI", "对我"), ("跟AI", "跟我"),
                  ("和AI", "和我"), ("被AI", "被我"), ("向AI", "向我"),
                  ("AI问", "我问"), ("AI说", "我说"), ("AI叫", "我叫"), ("AI称", "我称"),
                  ("AI提醒", "我提醒"), ("AI邀请", "我邀请"), ("AI提议", "我提议"), ("AI推荐", "我推荐"),
                  ("AI给", "我给"), ("AI帮", "我帮"), ("AI陪", "我陪"), ("AI夸", "我夸"))
-# 残留"AI"属于这些复合词则合法（AI项目/朋友型AI…），否则视为自称漏网 → 丢弃
-_AI_LEGIT_AFTER = ("项目", "技术", "模型", "产品", "应用", "工具", "时代", "行业",
-                   "课", "绘画", "视频", "公司", "专业", "方向", "领域", "开发", "创业", "浪潮")
-_AI_TOKEN = re.compile(r"(?<![A-Za-z])AI(?![A-Za-z])")
 # 承诺类安全网：窗口尾部是"我"的发言（用户未回应）时，"答应/承诺"必是错位归因 → 丢弃
 _PROMISE = re.compile(r"(答应|承诺|保证)")
 
@@ -106,13 +119,6 @@ def _validate(content: str, assistant_tail: bool) -> str | None:
         return None
     for old, new in _SELF_REWRITE:
         content = content.replace(old, new)
-    for m in _AI_TOKEN.finditer(content):
-        if content[m.start() - 1:m.start()] == "型":      # 朋友型AI 等复合词
-            continue
-        if content[m.end():].startswith(_AI_LEGIT_AFTER):  # AI项目/AI技术…
-            continue
-        print(f"[memory] 过滤（自称漏网）：{content[:30]}")
-        return None
     return content
 
 
@@ -162,7 +168,7 @@ def _extract() -> None:
             f"- {x}" for x in (facts + known)[:60])
 
     raw = llm.chat([
-        {"role": "system", "content": EXTRACT_PROMPT},
+        {"role": "system", "content": _extract_prompt()},
         {"role": "user", "content": user_msg},
     ], temperature=0.2)
     items = _parse_json_array(raw)
@@ -298,7 +304,7 @@ def backfill_history(batch: int = 16, progress=print) -> int:
             user_msg += "\n\n【已知记忆（内容几乎一样的不要重复提取）】\n" + "\n".join(
                 f"- {x}" for x in (known_facts + known)[:60])
         raw = llm.chat([
-            {"role": "system", "content": EXTRACT_PROMPT},
+            {"role": "system", "content": _extract_prompt()},
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in _parse_json_array(raw):

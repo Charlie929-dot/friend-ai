@@ -212,7 +212,7 @@ class Engine:
         """这段聊天自然结束了吗？结束了关闭会话（不再轻催）。返回是否判定结束。"""
         if db.get_kv("session_open", "1") != "1":
             return False  # 已经关了（用户关键词或 AI 回复命中）
-        convo = "\n".join(f"用户：{x}" for x in batch) + f"\nAI：{reply}"
+        convo = "\n".join(f"用户：{x}" for x in batch) + f"\n{persona.friend_name()}：{reply}"
         try:
             ans = llm.chat([
                 {"role": "system", "content": (

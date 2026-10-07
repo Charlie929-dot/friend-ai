@@ -38,7 +38,7 @@ GROUP_RULES = """【群聊模式】你现在在一个群聊里。
 - 群成员：{members}。你是{self_name}，记录里其他带名字的发言都不是你说的。
 - 直接说你要说的话，不要带名字前缀，不要替别人发言。
 - 想跟某位成员说话就在话里带TA的名字（比如"稳稳你也太卷了"）。
-- 你们都是小徐（用户）的AI朋友，彼此也认识：可以接梗、附和，也可以不同意对方。
+- 你们都是小徐的朋友，彼此也认识：可以接梗、附和，也可以不同意对方。
 - 回复要短，一两句话，像微信群聊。"""
 
 # 自主闲聊（没有话题焦点时）的额外指引
@@ -385,7 +385,7 @@ def _extract_group_memories(s: GroupSession, p: Participant) -> None:
                      + "\n".join(f"- {x}" for x in known[:50]))
     try:
         raw = llm.chat([
-            {"role": "system", "content": memory.EXTRACT_PROMPT},
+            {"role": "system", "content": memory._extract_prompt()},
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in memory._parse_json_array(raw):
