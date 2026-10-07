@@ -1825,6 +1825,44 @@ def test_backfill_group():
         _db.init()
 
 
+def test_group_memory_in_private_chat():
+    """私聊时群聊记忆带「群聊」标注 + 兜底注入最近群聊记忆（防群聊失忆）。"""
+    import tempfile
+    import db as _db
+    import context as _ctx
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
+                                   '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
+                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
+        _db.add_memory("群聊里认识了新朋友阿燃", "人际", source="group")
+        _db.add_memory("小徐爱吃辣", "偏好", source="private")
+
+        # 1) 群聊记忆带「群聊」标注，私聊记忆不带
+        g = _ctx._memory_line({"content": "群聊里认识了新朋友阿燃", "source": "group",
+                               "time_label": "", "created_at": "2026-10-07T12:00:00"})
+        assert "群聊" in g, f"群聊记忆缺标注：{g}"
+        p = _ctx._memory_line({"content": "小徐爱吃辣", "source": "private",
+                               "time_label": "", "created_at": "2026-10-07T12:00:00"})
+        assert "群聊" not in p, f"私聊记忆不该有群聊标注：{p}"
+
+        # 2) 私聊兜底注入最近群聊记忆
+        _db.add_message("user", "今天想你了")
+        msgs = _ctx.build_chat_messages("AWAKE", ["今天想你了"])
+        joined = "\n".join(m["content"] for m in msgs)
+        assert "你们最近在群里聊过的事" in joined, "私聊未注入最近群聊记忆"
+        assert "群聊里认识了新朋友阿燃" in joined, "群聊记忆没进私聊上下文"
+        print("ok 私聊群聊记忆（群聊标注 + 兜底注入最近群聊记忆）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1855,6 +1893,7 @@ if __name__ == "__main__":
     test_group_interject()
     test_info_dispatch()
     test_backfill_group()
+    test_group_memory_in_private_chat()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

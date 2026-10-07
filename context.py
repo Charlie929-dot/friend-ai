@@ -37,10 +37,13 @@ _SUMMARY_PROMPT = """把下面这段群聊记录压缩成一段简短的摘要�
 
 def _memory_line(m: dict) -> str:
     """一条记忆 → 一行注入文本。事发时间（time_label）与存储时间（created_at）
-    是两个维度：AI 既能说出"你今天下午不是说……"，也知道这条是啥时候记下的。"""
+    是两个维度：AI 既能说出"你今天下午不是说……"，也知道这条是啥时候记下的。
+    群聊来源的记忆（source='group'）标注「群聊」，AI 才知道这是群里发生的、
+    不是私聊里 TA 单独听说的。"""
+    tag = "（群聊）" if m.get("source") == "group" else ""
     anchor = (f"（{m['time_label']}）" if m.get("time_label")
               else (f"（{m['created_at'][5:10]} 记）" if m.get("created_at") else ""))
-    return "- " + anchor + m["content"]
+    return "- " + tag + anchor + m["content"]
 
 
 def render_memories(mems: list[dict]) -> str:
@@ -59,7 +62,8 @@ def _memory_message(mems: list[dict]) -> dict | None:
 
 def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> list[dict]:
     """私聊回复的完整 messages：system（人设+便签+profile）→ 游戏规则 →
-    相关记忆（system）→ 最近聊天上下文（user）。"""
+    相关记忆（system）→ 最近的群聊记忆（system，兜底防"群聊失忆"）→
+    最近聊天上下文（user）。"""
     messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
@@ -68,6 +72,13 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> l
         mem_msg = _memory_message(memory.recall(combined))
         if mem_msg:
             messages.append(mem_msg)
+    # 最近的群聊记忆：关键词召回靠命中，问得含糊就召不回——这里兜底注入，
+    # 让 TA 私聊里也记得"我们最近在群里聊过这些"，能接上、不会失忆
+    group_mems = memory.recent_group_memories(limit=5)
+    if group_mems:
+        messages.append({"role": "system",
+                         "content": "【你们最近在群里聊过的事】（这些是在群聊里发生的，"
+                                    "不是私聊单独说的，别搞混）\n" + render_memories(group_mems)})
     messages += db.recent_context(config.CONTEXT_TURNS)
     return messages
 

@@ -469,3 +469,14 @@ def random_memory(category: str | None = None) -> dict | None:
     pick = _r.choice(mems[:max(3, len(mems) // 3)])
     db.touch_memory(pick["id"])
     return pick
+
+
+def recent_group_memories(limit: int = 5) -> list[dict]:
+    """最近的群聊记忆（source='group'），按存储时间倒序。
+
+    私聊回复时注入：让 TA 记得"我们最近在群里聊过这些"，能接上群聊里的事、
+    不会"群聊失忆"（召回靠关键词命中，问得含糊就召不回——这里直接兜底注入）。"""
+    mems = [m for m in db.all_memories(limit=200)
+            if m.get("status", "ok") == "ok" and m.get("source") == "group"]
+    mems.sort(key=lambda m: -m["id"])
+    return mems[:limit]
