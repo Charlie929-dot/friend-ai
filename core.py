@@ -140,10 +140,7 @@ class Engine:
 
         # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
         messages = context.build_chat_messages(state, batch, game.prompt_injection())
-        try:
-            reply = llm.chat(messages)
-        except llm.LLMUnavailable as e:
-            reply = corpus.LLM_ERROR.format(e)
+        reply = self._generate_reply_text(messages, batch)
 
         # 分段连发：按换行拆成几条消息，像真人连着发
         segments = [s.strip() for s in reply.split("\n") if s.strip()]
@@ -184,6 +181,63 @@ class Engine:
 
         memory.extract_async()  # 后台提取这段对话里值得记住的事
         self.check_auto_familiar()
+
+    def _generate_reply_text(self, messages: list[dict], batch: list[str]) -> str:
+        """生成回复：回忆/追问信号下让 AI 主动调记忆检索工具，否则走普通快速路径。
+
+        普通闲聊不带工具（省 token、省延迟），只有用户"反复要求回忆/追问细节"
+        时才启用 function calling——AI 自己决定查什么、查 A 库还是展开 B 库。"""
+        if config.MEMORY_TOOLS_ENABLED and memory.wants_memory_search(" ".join(batch)):
+            return self._chat_with_memory_tools(messages)
+        try:
+            return llm.chat(messages)
+        except llm.LLMUnavailable as e:
+            return corpus.LLM_ERROR.format(e)
+
+    def _chat_with_memory_tools(self, messages: list[dict]) -> str:
+        """带记忆检索工具的回复生成（function calling）。
+
+        程序自动召回仍是第一层兜底（messages 里已注入相关记忆），工具调用是
+        "主动深挖"——用户反复要求回忆、想不起、要细节时，AI 主动调
+        search_memories / recall_detail。最多 MEMORY_TOOL_MAX_ROUNDS 轮，
+        防止无限循环；最终没生成文本时用无工具调用兜底。"""
+        final_text = ""
+        for _ in range(config.MEMORY_TOOL_MAX_ROUNDS):
+            try:
+                msg = llm.chat_with_tools(messages, memory.MEMORY_TOOLS)
+            except llm.LLMUnavailable as e:
+                return corpus.LLM_ERROR.format(e)
+            tool_calls = msg.get("tool_calls") or []
+            final_text = msg.get("content") or ""
+            if not tool_calls:
+                return final_text  # 不调工具：直接用这轮的文本
+            # 回填 assistant 的工具调用消息
+            messages.append({
+                "role": "assistant",
+                "content": final_text,
+                "tool_calls": tool_calls,
+            })
+            # 执行每个工具，结果作为 tool 消息回填给下一轮
+            for tc in tool_calls:
+                fn = tc.get("function") or {}
+                name = fn.get("name", "")
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except ValueError:
+                    args = {}
+                result = memory.run_memory_tool(name, args)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": result,
+                })
+        # 超过轮数上限仍无文本：无工具兜底拿一个回复
+        if not final_text.strip():
+            try:
+                return llm.chat(messages)
+            except llm.LLMUnavailable as e:
+                return corpus.LLM_ERROR.format(e)
+        return final_text
 
     def _judge_locked(self, batch: list[str], reply: str) -> None:
         with db.PATH_LOCK:  # 与切换朋友互斥

@@ -1969,6 +1969,84 @@ def test_long_memory():
         _db.init()
 
 
+def test_memory_tool_calling():
+    """回忆/追问信号下 AI 主动调记忆检索工具（function calling），普通聊天走快速路径。"""
+    import tempfile
+    import db as _db
+    import llm as _llm
+    import memory as _mem
+    from core import Engine
+
+    class DummyChannel:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, text):
+            self.sent.append(text)
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_ct = _llm.chat_with_tools
+    real_chat = _llm.chat
+    saved_enabled = config.MEMORY_TOOLS_ENABLED
+    try:
+        config.MEMORY_TOOLS_ENABLED = True  # 本测试显式开启工具调用
+        _db.init()
+        _db.add_memory("小徐拉了一个群，把初遇朋友和小葵拉进来互相认识", "人际", person="小葵")
+        ch = DummyChannel()
+        engine = Engine(ch)
+
+        # 1) 信号判断：含"记得"→ 启用工具；普通闲聊 → 不启用
+        assert _mem.wants_memory_search("你还记得小葵吗") is True
+        assert _mem.wants_memory_search("今天天气不错") is False
+
+        # 2) 回忆信号下，_generate_reply_text 走 tool loop（mock chat_with_tools）
+        calls = []
+
+        def fake_ct(messages, tools, temperature=0.8):
+            if not any(m.get("role") == "tool" for m in messages):
+                calls.append("tool_round")
+                return {"content": "", "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "search_memories",
+                                  "arguments": '{"query": "小葵"}'}}
+                ]}
+            calls.append("final_round")
+            return {"content": "哦对，小葵就是群里拉进来认识的那位", "tool_calls": []}
+
+        _llm.chat_with_tools = fake_ct
+        reply = engine._generate_reply_text(
+            [{"role": "system", "content": "人设"},
+             {"role": "user", "content": "你还记得小葵吗"}],
+            ["你还记得小葵吗"])
+        assert "小葵" in reply and "拉进来" in reply, f"工具结果没被 AI 采用：{reply}"
+        assert calls == ["tool_round", "final_round"], f"工具循环轮次不对：{calls}"
+
+        # 3) 普通聊天（无回忆信号）→ 走 llm.chat，不碰 chat_with_tools
+        _llm.chat = lambda *a, **k: "普通回复"
+        _llm.chat_with_tools = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("普通聊天不该调工具"))
+        assert engine._generate_reply_text([{"role": "user", "content": "在吗"}],
+                                           ["在吗"]) == "普通回复"
+
+        # 4) 开关关闭 → 即使有回忆信号也走 chat
+        config.MEMORY_TOOLS_ENABLED = False
+        _llm.chat = lambda *a, **k: "普通回复2"
+        assert engine._generate_reply_text([{"role": "user", "content": "你记得吗"}],
+                                           ["你记得吗"]) == "普通回复2"
+        config.MEMORY_TOOLS_ENABLED = True
+
+        print("ok 记忆工具调用（回忆信号分流 + tool loop 回填 + 普通聊天快速路径）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        config.MEMORY_TOOLS_ENABLED = saved_enabled
+        _llm.chat_with_tools = real_ct
+        _llm.chat = real_chat
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -2002,6 +2080,7 @@ if __name__ == "__main__":
     test_group_memory_in_private_chat()
     test_identity_recall()
     test_long_memory()
+    test_memory_tool_calling()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

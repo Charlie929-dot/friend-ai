@@ -480,6 +480,19 @@ def wants_expansion(query: str) -> bool:
     return bool(_EXPAND_QUERY.search(query))
 
 
+# 回忆/追问信号：用户消息含这些词时，启用 function calling 让 AI 主动查记忆。
+# 普通闲聊不含这些词，走快速路径（省 token、省延迟），只有"反复要求回忆"才主动检索。
+_MEMORY_SEARCH_QUERY = re.compile(
+    r"回忆|记得|想起|想不起|想不起来|还记得|记不记得|当时|之前|以前|那时候|那时|"
+    r"啥时候|什么时候|怎么回事|怎么认识|认识吗|介绍|谁啊|是谁|"
+    r"详细|完整|具体|展开|说说|讲讲|细节|全过程")
+
+
+def wants_memory_search(text: str) -> bool:
+    """判断用户消息是否在要求回忆/追问——此时启用 function calling 主动检索。"""
+    return bool(_MEMORY_SEARCH_QUERY.search(text))
+
+
 def _attach_long(mems_out: list[dict], expand_long: bool) -> list[dict]:
     """expand_long 时，把命中的长记忆全文从 B 库取出来附到 long_content。"""
     if not expand_long:
@@ -582,6 +595,89 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
     for m in out:
         db.touch_memory(m["id"])
     return _attach_long(out, expand_long)
+
+
+# ---------- 记忆检索工具（function calling / MCP 阶段） ----------
+# 让 AI 在对话里自己决定何时查记忆、查什么，而不是程序预先塞给它（程序自动召回
+# 仍保留做第一层兜底）。两个工具对应 A/B 两级库：
+#   search_memories → 查 A 库摘要（短内容直接给，长内容给摘要 + 长文标记）
+#   recall_detail   → 深挖细节，展开 B 库全文
+MEMORY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_memories",
+            "description": (
+                "搜索你关于小徐的记忆库，返回相关的记忆摘要。"
+                "当你想不起某件事、需要回忆过去聊过的内容时调用。"
+                "只在确实需要查证时才调，别每句话都查。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "检索关键词或问题，如人名、事件、话题",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_detail",
+            "description": (
+                "深入回忆某件事的完整细节（展开长文本）。"
+                "当 search_memories 的结果里某条标了【有长文】，"
+                "且你想听完整经过时，用这个把全文取出来。"),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "要展开细节的检索关键词",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+def _render_tool_memories(mems: list[dict]) -> str:
+    """把召回结果渲染成给 AI 看的文本（工具返回内容）。与 context._memory_line
+    语义一致，但这里自包含，避免 memory↔context 循环依赖。"""
+    lines = []
+    for m in mems:
+        tag = "（群聊）" if m.get("source") == "group" else ""
+        anchor = f"（{m['time_label']}）" if m.get("time_label") else ""
+        line = f"- {tag}{anchor}{m['content']}"
+        if m.get("long_id"):
+            line += "【有长文，可调 recall_detail 展开】"
+        lines.append(line)
+        if m.get("long_content"):
+            lines.append(f"  （全文）{m['long_content']}")
+    return "\n".join(lines)
+
+
+def run_memory_tool(name: str, args: dict) -> str:
+    """执行记忆检索工具，返回渲染好的文本结果（供 AI 阅读后继续回复）。"""
+    query = str(args.get("query", "")).strip()
+    if not query:
+        return "（没有提供检索关键词）"
+    if name == "search_memories":
+        hits = recall(query, top_k=5, group_first=False)
+        if not hits:
+            return "（记忆库里没找到相关的内容）"
+        return "找到这些相关记忆：\n" + _render_tool_memories(hits)
+    if name == "recall_detail":
+        hits = recall(query, top_k=3, group_first=False, expand_long=True)
+        if not hits:
+            return "（没找到相关记忆）"
+        return "相关记忆的完整内容：\n" + _render_tool_memories(hits)
+    return "（未知工具）"
 
 
 def random_memory(category: str | None = None) -> dict | None:

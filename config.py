@@ -106,3 +106,7 @@ GROUP_RESPOND_MAX = int(os.environ.get("GROUP_RESPOND_MAX", "2"))               
 GROUP_MEMORY_BONUS = float(os.environ.get("GROUP_MEMORY_BONUS", "2.0"))               # 群聊场景下，群聊来源记忆（source=group）的召回加分
 GROUP_RECENT_BONUS = float(os.environ.get("GROUP_RECENT_BONUS", "1.2"))               # 私聊场景下，最近几条群聊记忆的温和加分（让私聊也能想起群里最近的事，弱于群聊场景的 2.0）
 GROUP_SUMMARY_ENABLED = os.environ.get("GROUP_SUMMARY_ENABLED", "on").lower() == "on"  # 长会话防遗忘：早前滚出窗口的群聊内容压成摘要兜底
+
+# --- 记忆主动检索（function calling / MCP 阶段） ---
+MEMORY_TOOLS_ENABLED = os.environ.get("MEMORY_TOOLS_ENABLED", "on").lower() == "on"   # AI 在对话里主动调检索工具的总开关（反复要求回忆时自己翻记忆库）
+MEMORY_TOOL_MAX_ROUNDS = int(os.environ.get("MEMORY_TOOL_MAX_ROUNDS", "3"))           # 一轮回复里工具调用循环的最大轮数（防无限循环/失控）
