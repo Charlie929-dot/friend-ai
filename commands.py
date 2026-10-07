@@ -464,6 +464,7 @@ def handle(cmd_line: str) -> str:
         # 范围：.env/config 参数、人格池、人设 prompt、LLM、记忆、防打扰、游戏规则。
         # 不重载 core/db/scheduler/通道（引擎实例已创建，结构改动仍需重启）。
         import importlib
+        import context as _context
         import corpus as _corpus
         import diary as _diary
         import game as _game
@@ -480,7 +481,7 @@ def handle(cmd_line: str) -> str:
             group_note = "（群聊已先散场，大家都记下了）"
         config.load_dotenv(force=True)   # .env 改过的值强制生效
         importlib.reload(config)         # 重读全部配置参数
-        for m in (_corpus, _pool, _persona, _llm, _memory, _diary, _guard, _game, _groupchat):
+        for m in (_corpus, _pool, _persona, _llm, _memory, _diary, _guard, _game, _context, _groupchat):
             importlib.reload(m)
         return "刷新成功" + group_note
 

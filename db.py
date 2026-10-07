@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at TEXT NOT NULL,  -- 存储时间（什么时候记下的，与事发时间是两个维度）
     recalled_at TEXT NOT NULL DEFAULT '',  -- 上次被召回时间
     recall_count INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'ok'  -- ok / pending_delete（AI 提议删除，待用户确认）
+    status TEXT NOT NULL DEFAULT 'ok',  -- ok / pending_delete（AI 提议删除，待用户确认）
+    source TEXT NOT NULL DEFAULT 'private'  -- private（1:1 提取）/ group（群聊提取）
 );
 CREATE TABLE IF NOT EXISTS diary (
     date TEXT PRIMARY KEY,              -- 生活日日期（YYYY-MM-DD，睡一觉才算新的一天）
@@ -71,6 +72,9 @@ def init():
         # 旧库迁移：删除待确认状态（记忆系统 v2）
         if "status" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'")
+        # 旧库迁移：记忆来源标签（信息调度层：群聊记忆 group / 1:1 记忆 private）
+        if "source" not in cols:
+            c.execute("ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'private'")
 
 
 def clear_all():
@@ -209,13 +213,13 @@ def reset_counter(key: str):
 # --- 记忆系统 v1：AI 自动从对话提取的长期记忆（五维标签） ---
 def add_memory(content: str, category: str = "画像", tags: str = "",
                time_label: str = "", place: str = "", person: str = "",
-               theme: str = "") -> int:
+               theme: str = "", source: str = "private") -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at, source)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (content, category, tags, time_label, place, person, theme,
-             datetime.now().isoformat(timespec="seconds")),
+             datetime.now().isoformat(timespec="seconds"), source),
         )
         return cur.lastrowid
 

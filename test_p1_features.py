@@ -1488,6 +1488,91 @@ def test_group_sleeping_member():
         _db.init()
 
 
+def test_info_dispatch():
+    """信息调度层（P2）：source 迁移 + 群聊记忆优先 + 统一优先级 + 长会话摘要兜底。"""
+    import sqlite3
+    import tempfile
+    import db as _db
+    import memory as _mem
+    import context as _ctx
+    import groupchat as _gc
+    import llm as _llm
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _llm.chat
+    real_win = config.GROUP_CONTEXT_MESSAGES
+    try:
+        _db.init()
+        # 0) source 列迁移：模拟旧库（删 source 列）后 init 应自动补回
+        with sqlite3.connect(str(config.DB_PATH)) as c:
+            c.execute("ALTER TABLE memories DROP COLUMN source")
+        _db.init()
+        with sqlite3.connect(str(config.DB_PATH)) as c:
+            cols = [r[1] for r in c.execute("PRAGMA table_info(memories)")]
+        assert "source" in cols, "旧库迁移未补 source 列"
+
+        # 1) 记忆 source 标签：1:1 默认 private；_apply(source='group') 记 group
+        _db.add_memory("小徐爱吃辣", "偏好")
+        _mem._apply({"content": "群聊里认识了新朋友阿燃", "category": "人际"},
+                    source="group")
+        by_content = {m["content"]: m for m in _db.all_memories()}
+        assert by_content["小徐爱吃辣"]["source"] == "private"
+        assert by_content["群聊里认识了新朋友阿燃"]["source"] == "group"
+
+        # 2) 群聊记忆优先召回：超过全量阈值后，group_first 让 group 记忆排最前
+        for i in range(12):  # 填充超过全量返回阈值（10 条）
+            _db.add_memory(f"无关填充{i}号天气", "事件", theme="其他")
+        hits = _mem.recall("阿燃是谁", top_k=3, group_first=True)
+        assert hits and "阿燃" in hits[0]["content"], \
+            f"群聊记忆未优先召回：{[m['content'] for m in hits]}"
+
+        # 3) 统一优先级：便签 > profile 在 system（"以这里为准"），
+        #    记忆作为 system 注入、排在聊天上下文（user/assistant）之前
+        _db.add_fact("叫我小徐")
+        _db.add_message("user", "阿燃是谁来着")
+        _db.add_message("assistant", "我也有点记不清了")
+        msgs = _ctx.build_chat_messages("AWAKE", ["阿燃是谁来着"])
+        assert msgs[0]["role"] == "system", "首条应为 system（人设+便签+profile）"
+        assert "叫我小徐" in msgs[0]["content"], "事实便签未注入 system"
+        assert "以这里为准" in msgs[0]["content"], "便签优先级标注缺失"
+        roles = [m["role"] for m in msgs]
+        assert roles.count("system") >= 2, f"记忆应作为 system 注入：{roles}"
+        assert any("旧记忆" in m["content"] and "阿燃" in m["content"]
+                   for m in msgs if m["role"] == "system"), "记忆内容未注入"
+        last_system = max(i for i, r in enumerate(roles) if r == "system")
+        first_convo = min(i for i, r in enumerate(roles) if r in ("user", "assistant"))
+        assert last_system < first_convo, "记忆(system) 应排在聊天上下文之前"
+
+        # 4) 长会话摘要兜底：滚出窗口的更早内容压成摘要注入
+        config.GROUP_CONTEXT_MESSAGES = 5
+        s = _gc.GroupSession([_gc.Participant(tmp / "friend.db", "小葵"),
+                              _gc.Participant(tmp / "friend-b.db", "稳稳")])
+        s.transcript = [("小徐", f"第{i}句") for i in range(9)]
+        _llm.chat = lambda messages, temperature=0.7: "早前摘要：介绍了新朋友阿燃"
+        _gc._maybe_summarize(s)
+        assert s.summarized_upto == 4, f"应摘要 9-5=4 条：{s.summarized_upto}"
+        assert "阿燃" in s.summary, f"摘要未生成：{s.summary!r}"
+        _llm.chat = lambda *a, **k: "不应再被调用"  # 无新内容滚出时幂等
+        _gc._maybe_summarize(s)
+        assert s.summarized_upto == 4, "摘要不幂等"
+        # 摘要注入 + 窗口只留最近 5 条
+        msgs = _ctx.build_group_messages("sys", s.transcript, idle=False,
+                                         summary=s.summary)
+        joined = "\n".join(m["content"] for m in msgs)
+        assert "更早的群聊摘要" in joined and "阿燃" in joined, "摘要未注入"
+        assert "第8句" in msgs[-1]["content"], "窗口未保留最近内容"
+        assert "第0句" not in msgs[-1]["content"], "滚出窗口的内容仍在上下文里"
+        print("ok 信息调度层（source迁移/群聊记忆优先/统一优先级/长会话摘要兜底）")
+    finally:
+        _llm.chat = real_chat
+        config.GROUP_CONTEXT_MESSAGES = real_win
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1513,6 +1598,7 @@ if __name__ == "__main__":
     test_group_handoff_free_chat()
     test_group_llm_fallback()
     test_group_sleeping_member()
+    test_info_dispatch()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

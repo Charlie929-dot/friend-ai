@@ -17,6 +17,7 @@ import re
 import threading
 from datetime import datetime, timedelta
 
+import config
 import db
 import llm
 
@@ -195,8 +196,11 @@ _LEGACY_CATEGORY = {"fact": "画像", "preference": "偏好", "plan": "计划",
                     "event": "事件", "person": "人际"}
 
 
-def _apply(item: dict, assistant_tail: bool = False) -> bool:
-    """落库一条提取结果。返回是否新记了一条。"""
+def _apply(item: dict, assistant_tail: bool = False, source: str = "private") -> bool:
+    """落库一条提取结果。返回是否新记了一条。
+
+    source: 'private'（1:1 提取）/ 'group'（群聊提取）——信息调度层据此
+    在群聊场景下优先召回群聊来源的记忆。"""
     content = str(item["content"]).strip()
 
     # AI 提议删除：只标记待确认，不真删（用户 /delmem 确认、/keepmem 保留）
@@ -238,7 +242,7 @@ def _apply(item: dict, assistant_tail: bool = False) -> bool:
     for m in db.all_memories(limit=200):
         if m["content"] == content:
             return False
-    db.add_memory(content, category, tags, time_label, place, person, theme)
+    db.add_memory(content, category, tags, time_label, place, person, theme, source)
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
     return True
@@ -345,17 +349,23 @@ def _query_time_tokens(query: str) -> list[str]:
     return tokens
 
 
-def recall(query: str, top_k: int = 5) -> list[dict]:
+def recall(query: str, top_k: int = 5, group_first: bool = False) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
     记忆总量还小（≤10）时直接全量返回——早期每条都珍贵。
     打分：bigram/关键词重叠 + 时间标签加成（query 的相对时间词换算成日期匹配）。
     命中后同组（category+theme 完全一致）的更新进展一起带出——
-    AI 看到的是时间线的最新状态，不是过时记忆。"""
+    AI 看到的是时间线的最新状态，不是过时记忆。
+    group_first=True（群聊场景）：群聊来源的记忆（source='group'）加分优先——
+    同处一个群里的往事，比私聊里的事更贴合当下群聊语境。"""
     mems = [m for m in db.all_memories(limit=200)
             if m.get("status", "ok") == "ok"]  # 待确认删除的不参与召回
     if not mems:
         return []
     if len(mems) <= 10:
+        if group_first:
+            # 记忆少时也把群聊来源的排前面
+            mems.sort(key=lambda m: (0 if m.get("source", "private") == "group" else 1,
+                                     -m["id"]))
         for m in mems:
             db.touch_memory(m["id"])
         return mems[:top_k * 2]
@@ -370,6 +380,9 @@ def recall(query: str, top_k: int = 5) -> list[dict]:
         score = len(q_bi & _bigrams(hay)) * 2 + len(q_kw & _keywords(hay)) * 0.5
         # 时间标签衔接："今天下午"换算成日期后命中记忆的绝对时间标签
         score += sum(3.0 for t in time_tokens if t in m.get("time_label", ""))
+        # 群聊场景：群聊来源的记忆优先（信息调度层）
+        if group_first and m.get("source", "private") == "group":
+            score += config.GROUP_MEMORY_BONUS
         if score >= 1.0:
             scored.append((score, m))
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))

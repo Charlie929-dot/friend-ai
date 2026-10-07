@@ -6,6 +6,7 @@ import time as _time
 from datetime import datetime, timedelta
 
 import config
+import context
 import corpus
 import db
 import game
@@ -132,27 +133,8 @@ class Engine:
             self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
             return
 
-        messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
-        # 娱乐模式：游戏中把规则注入上下文，AI 按规则陪玩
-        game_rules = game.prompt_injection()
-        if game_rules:
-            messages.append({"role": "system", "content": game_rules})
-        # 记忆召回：和这段话相关的旧记忆注入上下文（跨越 10 轮窗口的限制）
-        combined = " ".join(batch)
-        if combined:
-            recalled = memory.recall(combined)
-            if recalled:
-                # 带时间锚点：事发时间（time_label）+ 存储时间（created_at）是两个维度，
-                # AI 能说出"你今天下午不是说……"，也知道这条是啥时候记下的
-                def _mem_line(m):
-                    anchor = f"（{m['time_label']}）" if m.get("time_label") \
-                        else (f"（{m['created_at'][5:10]} 记）" if m.get("created_at") else "")
-                    return "- " + anchor + m["content"]
-                mem_text = "\n".join(_mem_line(m) for m in recalled)
-                messages.append({"role": "system",
-                                 "content": f"【你想起来的旧记忆】（自然使用，别生硬复述；"
-                                            f"同主题多条按时间先后排列，靠后的是最新进展）\n{mem_text}"})
-        messages += db.recent_context(config.CONTEXT_TURNS)
+        # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
+        messages = context.build_chat_messages(state, batch, game.prompt_injection())
         try:
             reply = llm.chat(messages)
         except llm.LLMUnavailable as e:
@@ -246,14 +228,7 @@ class Engine:
         if scenario == "bubble" and random.random() < config.BUBBLE_FIXED_PROB:
             reply = corpus.pick(corpus.BUBBLE_LINES, "bubble")
         if reply is None:
-            prompt = persona.build_proactive_prompt(state, scenario)
-            # 主动话题接记忆：random 场景一半概率翻一条旧记忆接着聊
-            if scenario == "random" and random.random() < 0.5:
-                mem = memory.random_memory()
-                if mem:
-                    prompt[-1]["content"] += (
-                        f"\n（你忽然想起关于TA的一件事：「{mem['content']}」。"
-                        f"可以就着它聊，比如问问后续；想聊别的也行。）")
+            prompt = context.build_proactive_messages(state, scenario)
             try:
                 reply = llm.chat(prompt, temperature=1.0)
             except llm.LLMUnavailable as e:

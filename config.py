@@ -99,3 +99,7 @@ GROUP_IDLE_MAX_TURNS = int(os.environ.get("GROUP_IDLE_MAX_TURNS", "6"))   # 一�
 GROUP_HANDOFF_IDLE_SECONDS = float(os.environ.get("GROUP_HANDOFF_IDLE_SECONDS", "5"))  # 用户把焦点交给朋友们（"你们认识一下"）后，多快开始自由闲聊
 GROUP_CONTEXT_MESSAGES = int(os.environ.get("GROUP_CONTEXT_MESSAGES", "30"))         # 群聊回应流程注入的上下文条数（越大越记得住早前内容，越耗 token）
 GROUP_IDLE_CONTEXT_MESSAGES = int(os.environ.get("GROUP_IDLE_CONTEXT_MESSAGES", "20"))  # 自主闲聊的上下文条数（短一点省 token）
+
+# --- 信息调度层（P2：上下文组装与优先级） ---
+GROUP_MEMORY_BONUS = float(os.environ.get("GROUP_MEMORY_BONUS", "2.0"))               # 群聊场景下，群聊来源记忆（source=group）的召回加分
+GROUP_SUMMARY_ENABLED = os.environ.get("GROUP_SUMMARY_ENABLED", "on").lower() == "on"  # 长会话防遗忘：早前滚出窗口的群聊内容压成摘要兜底

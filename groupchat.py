@@ -24,6 +24,7 @@ import time as _time
 from datetime import datetime
 
 import config
+import context
 import corpus
 import db
 import llm
@@ -80,6 +81,8 @@ class GroupSession:
         self.last_user_ts = _time.time()       # 用户最近一次说话时间
         self.last_idle_ts = 0.0                # 上一轮自主闲聊结束时间
         self.idle_after = _idle_after_seconds()  # 本轮触发闲聊需要的空闲时长
+        self.summary = ""                      # 滚出窗口内容的累计摘要（长会话防遗忘）
+        self.summarized_upto = 0               # 已摘要到的 transcript 下标
 
 
 def is_active() -> bool:
@@ -292,21 +295,12 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
                               + GROUP_RULES.format(members=members, self_name=p.name))
                 if idle:
                     sys_prompt += "\n" + IDLE_HINT
-                # 拿最近的群聊内容召回TA自己的旧记忆（比私聊看得更远一点）
-                recent = " ".join(t for _, t in s.transcript[-15:])
-                recalled = memory.recall(recent, top_k=3) if recent else []
-                if recalled:
-                    mem_text = "\n".join("- " + m["content"] for m in recalled)
-                    sys_prompt += f"\n【你想起来的旧记忆】（自然使用，别生硬复述）\n{mem_text}"
-                # 上下文窗口：回应流程多带点（记住"这是新朋友阿燃"这类早前介绍），
-                # 自主闲聊带短一点省 token
-                window = (s.transcript[-config.GROUP_IDLE_CONTEXT_MESSAGES:] if idle
-                          else s.transcript[-config.GROUP_CONTEXT_MESSAGES:])
-                log = "\n".join(f"{sp}：{tx}" for sp, tx in window)
-                msgs = [
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": f"【群聊记录】\n{log}\n\n（轮到你了，直接说内容）"},
-                ]
+                # 长会话防遗忘：滚出窗口的更早内容压成摘要，别把"这是新朋友阿燃"忘了
+                _maybe_summarize(s)
+                # 信息调度层统一组装：人设+群聊规则 → 群聊记忆优先召回 →
+                # 摘要兜底 → 窗口内群聊记录
+                msgs = context.build_group_messages(
+                    sys_prompt, s.transcript, idle=idle, summary=s.summary)
                 try:
                     reply = llm.chat(msgs).strip()
                 except Exception as e:
@@ -343,6 +337,23 @@ def _send_segments(channel, name: str, text: str) -> None:
             _time.sleep(min(max(len(segs[i - 1]) * config.SEND_SECONDS_PER_CHAR,
                                 config.SEND_MIN_SECONDS), config.SEND_MAX_SECONDS))
         channel.send(seg, sender=name)
+
+
+def _maybe_summarize(s: GroupSession) -> None:
+    """长会话防遗忘（信息调度层）：把滚出窗口的更早群聊内容增量压进摘要。
+
+    只在 transcript 超过窗口、且有新内容滚出时触发一次；摘要结果挂到
+    session.summary 上，由 context.build_group_messages 注入。摘要失败不阻塞发言。"""
+    if not config.GROUP_SUMMARY_ENABLED:
+        return
+    overflow = len(s.transcript) - config.GROUP_CONTEXT_MESSAGES
+    if overflow <= 0 or s.summarized_upto >= overflow:
+        return
+    head = s.transcript[s.summarized_upto:overflow]
+    s.summarized_upto = overflow
+    new_sum = context.summarize_transcript(head)
+    if new_sum:
+        s.summary = (s.summary + "\n" + new_sum).strip() if s.summary else new_sum
 
 
 # --- 自主闲聊：没有话题焦点时，AI 们自己聊 ---
@@ -424,6 +435,6 @@ def _extract_group_memories(s: GroupSession, p: Participant) -> None:
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in memory._parse_json_array(raw):
-            memory._apply(it)
+            memory._apply(it, source="group")
     except Exception as e:
         print(f"[group] {p.name} 提取群聊记忆失败：{e}")
