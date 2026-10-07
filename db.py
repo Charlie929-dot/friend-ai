@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS memories (
     recall_count INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'ok'  -- ok / pending_delete（AI 提议删除，待用户确认）
 );
+CREATE TABLE IF NOT EXISTS diary (
+    date TEXT PRIMARY KEY,              -- 生活日日期（YYYY-MM-DD，睡一觉才算新的一天）
+    content TEXT NOT NULL,              -- 日记正文（第一人称）
+    reflection TEXT NOT NULL DEFAULT '',  -- 当日复盘（答得如何/误解/感受）
+    mood TEXT NOT NULL DEFAULT '',        -- 当天心情词
+    created_at TEXT NOT NULL            -- 写日记的时间
+);
 """
 
 
@@ -274,3 +281,48 @@ def touch_memory(mem_id: int):
 def memory_count() -> int:
     with _conn() as c:
         return c.execute("SELECT COUNT(*) AS n FROM memories").fetchone()["n"]
+
+
+# --- 日记 + 每日回顾（P2：记忆 v3 每日回顾 + 日记系统 + 今日对话回顾线） ---
+def today_messages(day: str | None = None) -> list[dict]:
+    """某一天（生活日）的完整对话（回顾线）：id/ts/role/content，按时间正序。"""
+    day = day or date.today().isoformat()
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, ts, role, content FROM messages "
+            "WHERE kind IN ('chat','proactive') AND ts LIKE ? ORDER BY id",
+            (day + "%",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_diary(day: str, content: str, reflection: str = "", mood: str = "") -> None:
+    """写一条日记（同一生活日覆盖更新）。"""
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO diary(date, content, reflection, mood, created_at) "
+            "VALUES(?, ?, ?, ?, ?) "
+            "ON CONFLICT(date) DO UPDATE SET content=excluded.content, "
+            "reflection=excluded.reflection, mood=excluded.mood, "
+            "created_at=excluded.created_at",
+            (day, content, reflection, mood, datetime.now().isoformat(timespec="seconds")),
+        )
+
+
+def get_diary(day: str) -> dict | None:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM diary WHERE date=?", (day,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_diary_dates() -> list[str]:
+    with _conn() as c:
+        rows = c.execute("SELECT date FROM diary ORDER BY date DESC").fetchall()
+    return [r["date"] for r in rows]
+
+
+def purge_messages_before(ts_cutoff: str) -> int:
+    """回顾线彻底删除：清掉 ts_cutoff 之前的原始对话消息。返回删除条数。"""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM messages WHERE ts < ?", (ts_cutoff,))
+        return cur.rowcount

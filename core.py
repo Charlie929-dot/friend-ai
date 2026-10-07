@@ -355,7 +355,20 @@ class Engine:
     def go_sleep(self) -> None:
         # 晚安消息要在睡前发，所以先临时保持 AWAKE 发出去
         self.proactive("night")
+        # 睡前写日记 + 复盘当天（P2：记忆 v3 每日回顾 + 日记系统 + 回顾线）
+        if config.DIARY_ENABLED:
+            self.daily_review()
         db.set_state("SLEEPING")
+
+    # --- 每日回顾 + 写日记（P2） ---
+    def daily_review(self) -> str:
+        """睡前/手动触发：读当日完整对话 → 复盘 + 写日记 + 补记/修正记忆。幂等。"""
+        import diary
+        try:
+            with db.PATH_LOCK:  # 与切换朋友互斥：复盘/写日记全程读写同一个库
+                return diary.daily_review()
+        except llm.LLMUnavailable as e:
+            return f"（脑子卡住了：{e}）"
 
     def _send(self, text: str, kind: str) -> None:
         db.add_message("assistant", text, kind=kind)

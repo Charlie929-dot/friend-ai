@@ -1221,6 +1221,86 @@ def test_groupidle_command():
         _db.init()
 
 
+def test_diary_daily_review():
+    """P2 日记系统：每日回顾复盘 + 写日记 + 补记/修正记忆 + 幂等 + 命令。"""
+    import tempfile
+    import db as _db
+    import diary as _diary
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        _db.add_message("user", "今天好累啊")
+        _db.add_message("assistant", "辛苦啦，早点休息")
+        day = _diary._life_day_str()
+        _db.add_memory("小徐在准备考研", "事件")
+
+        real_chat = _diary.llm.chat
+        _diary.llm.chat = lambda *a, **k: (
+            '{"reflection": "今天有点没接住你的累",'
+            '"diary": "今天小徐说好累，我让他早点休息。有点心疼。",'
+            '"mood": "心疼",'
+            '"memory_add": ["小徐今天很累"],'
+            '"memory_delete": ["考研"]}')
+        try:
+            out = _diary.daily_review(force=True)
+            assert "日记写好啦" in out, f"返回：{out}"
+            entry = _db.get_diary(day)
+            assert entry and "心疼" in entry["content"], f"日记没落库：{entry}"
+            assert "没接住" in entry["reflection"], f"复盘没落库：{entry}"
+            assert entry["mood"] == "心疼"
+            assert _db.find_memory_by_keyword("小徐今天很累"), "memory_add 没补记"
+            pend = _db.pending_delete_memories()
+            assert any("考研" in m["content"] for m in pend), "memory_delete 没标记待确认"
+        finally:
+            _diary.llm.chat = real_chat
+
+        # 幂等：第二次不重写（也不该再调 LLM）
+        _diary.llm.chat = lambda *a, **k: "第二次不该调用"
+        out2 = _diary.daily_review()
+        assert "已经写过" in out2, f"应该跳过：{out2}"
+        _diary.llm.chat = real_chat
+
+        # /diary /diaries 命令
+        assert "心疼" in commands.handle("/diary"), "/diary 没显示日记"
+        assert day in commands.handle("/diaries"), "/diaries 没列出日期"
+        print("ok 日记系统（复盘/写日记/补记/提议删/幂等/命令）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_diary_purge_reviewed_messages():
+    """回顾线彻底删除：PURGE_REVIEWED_MESSAGES=on 时复盘后清掉当日原始对话。"""
+    import tempfile
+    import db as _db
+    import diary as _diary
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_purge = config.PURGE_REVIEWED_MESSAGES
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    config.PURGE_REVIEWED_MESSAGES = True
+    try:
+        _db.init()
+        _db.add_message("user", "今天聊点什么")
+        _db.add_message("assistant", "随便聊呀")
+        assert len(_db.today_messages()) == 2
+        _diary.llm.chat = lambda *a, **k: '{"diary": "聊了聊", "memory_add": [], "memory_delete": []}'
+        _diary.daily_review(force=True)
+        assert len(_db.today_messages()) == 0, "回顾线没删干净"
+        assert _db.get_diary(_diary._life_day_str()) is not None, "日记应保留"
+        print("ok 回顾线彻底删除（PURGE_REVIEWED_MESSAGES=on）")
+    finally:
+        config.BASE_DIR, config.DB_PATH, config.PURGE_REVIEWED_MESSAGES = \
+            real_base, real_db, real_purge
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1242,4 +1322,6 @@ if __name__ == "__main__":
     test_group_timing()
     test_group_idle_chatter()
     test_groupidle_command()
+    test_diary_daily_review()
+    test_diary_purge_reviewed_messages()
     print("\n全部通过")

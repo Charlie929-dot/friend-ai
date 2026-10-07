@@ -38,6 +38,9 @@ HELP = """可用命令：
   /delmem <编号>   删掉一条自动记忆（也用于确认 AI 提议的删除）
   /keepmem <编号>  保留一条 AI 提议删除的记忆（取消待删除标记）
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
+  /diary           看今天的日记（含复盘）；/diary <日期> 看指定那天
+  /diaries         列出所有写过日记的日期
+  /review          现在立刻复盘今天并写日记（睡前会自动写）
   /group <编号...> 拉群：当前朋友和指定的归档老朋友一起聊天（编号见 /friends）
   /endgroup        散群：群聊记录写回每位朋友的库并各自记进记忆
   /groupidle       查看群聊自主闲聊开关（你不说话时 AI 们会自己慢慢聊）
@@ -438,12 +441,30 @@ def handle(cmd_line: str) -> str:
             return "历史里没有新东西可记（或已经全部回填过了）。"
         return f"回填完成：从旧聊天里新记住 {added} 条。用 /memories 看看吧。"
 
+    if cmd == "/diary":
+        import diary as _diary
+        if arg:
+            return _diary.read_diary(arg)
+        return _diary.read_diary()
+
+    if cmd == "/diaries":
+        import diary as _diary
+        dates = _diary.list_diaries()
+        if not dates:
+            return "还没写过日记。睡前会自动写，也可以 /review 现在写。"
+        return "写过日记的日子：\n" + "\n".join(f"  {d}" for d in dates)
+
+    if cmd == "/review":
+        import diary as _diary
+        return _diary.daily_review(force=True)
+
     if cmd == "/refresh":
         # 热重载：不重启进程让文件改动生效，聊天界面只回一句"刷新成功"。
         # 范围：.env/config 参数、人格池、人设 prompt、LLM、记忆、防打扰、游戏规则。
         # 不重载 core/db/scheduler/通道（引擎实例已创建，结构改动仍需重启）。
         import importlib
         import corpus as _corpus
+        import diary as _diary
         import game as _game
         import groupchat as _groupchat
         import guard as _guard
@@ -458,7 +479,7 @@ def handle(cmd_line: str) -> str:
             group_note = "（群聊已先散场，大家都记下了）"
         config.load_dotenv(force=True)   # .env 改过的值强制生效
         importlib.reload(config)         # 重读全部配置参数
-        for m in (_corpus, _pool, _persona, _llm, _memory, _guard, _game, _groupchat):
+        for m in (_corpus, _pool, _persona, _llm, _memory, _diary, _guard, _game, _groupchat):
             importlib.reload(m)
         return "刷新成功" + group_note
 

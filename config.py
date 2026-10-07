@@ -81,6 +81,10 @@ NUDGE_PROBABILITY = float(os.environ.get("NUDGE_PROBABILITY", "0.6"))  # 剩下 
 # --- 固定语料策略 ---
 BUBBLE_FIXED_PROB = float(os.environ.get("BUBBLE_FIXED_PROB", "0.35"))  # 冒泡直接抽固定语料的概率（省 token）
 
+# --- 每日回顾 + 日记（P2：记忆 v3 每日回顾 + 日记系统 + 今日对话回顾线） ---
+DIARY_ENABLED = os.environ.get("DIARY_ENABLED", "on").lower() == "on"          # 每日回顾/写日记总开关
+PURGE_REVIEWED_MESSAGES = os.environ.get("PURGE_REVIEWED_MESSAGES", "off").lower() == "on"  # 回顾线彻底删除：复盘写日记后清掉当日原始对话（默认关，安全）
+
 # --- 群聊：成员间的时间感 ---
 GROUP_SPEAKER_GAP_MIN_SECONDS = float(os.environ.get("GROUP_SPEAKER_GAP_MIN_SECONDS", "0.8"))  # 上一位说完，下一位接话的间隔
 GROUP_SPEAKER_GAP_MAX_SECONDS = float(os.environ.get("GROUP_SPEAKER_GAP_MAX_SECONDS", "2.5"))
