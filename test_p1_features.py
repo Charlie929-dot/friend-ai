@@ -366,6 +366,11 @@ def test_memory_append_timeline():
         # prompt 新规则：绝对日期 + 追加式，不再有合并规则
         assert "YYYY-MM-DD" in _mem.EXTRACT_PROMPT
         assert "一件事只留一条" not in _mem.EXTRACT_PROMPT
+        # prompt 红线（2026-10-07 反馈记录 #4）：承诺时序铁律 + 第一人称视角
+        assert "时序铁律" in _mem.EXTRACT_PROMPT
+        assert "提议在前" in _mem.EXTRACT_PROMPT
+        assert "用户还没回应" in _mem.EXTRACT_PROMPT
+        assert "禁止自称" in _mem.EXTRACT_PROMPT
 
         # 1) 同主题换说法 → 两条都保留（追加，不合并）
         _db.add_memory("小徐的AI项目正在稳步推进", "事件", theme="技术")
