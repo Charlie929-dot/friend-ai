@@ -536,7 +536,8 @@ def test_groupchat():
     config.BASE_DIR = tmp
     config.DB_PATH = tmp / "friend.db"
     real_chat = _gc.llm.chat
-    saved_timing = _set_timing(_FAST_TIMING)
+    saved_timing = _set_timing({**_FAST_TIMING,
+                                "GROUP_RESPOND_MIN": 99, "GROUP_RESPOND_MAX": 99})
     try:
         # 当前朋友小葵 + 归档老朋友稳稳
         _db.init()
@@ -573,6 +574,7 @@ def test_groupchat():
         _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB = 1.0, 0.0
         ch = FakeChannel()
         _gc.on_user_text("大家好呀", ch)
+        _gc.wait_responders()
         _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB = real_cross, real_stop
 
         ai_msgs = [x for x in ch.sent if x[0]]
@@ -866,6 +868,7 @@ def test_group_persist_and_friend_name():
         _gc.start(parts)
         _gc.llm.chat = lambda messages, temperature=0.7: "嗯嗯我在听"
         _gc.on_user_text("我吃完了", Ch())
+        _gc.wait_responders()
         persist = tmp / "group_session.json"
         assert persist.exists(), "群聊 transcript 未落盘"
 
@@ -883,6 +886,7 @@ def test_group_persist_and_friend_name():
         _gc.start(parts)
         _gc.llm.chat = lambda messages, temperature=0.7: "好嘞"
         _gc.on_user_text("群里再说点啥", Ch())
+        _gc.wait_responders()
         assert persist.exists()
         _gc._session.active = False  # 停掉闲聊线程再模拟重启
         _gc._session = None  # 模拟进程重启（内存没了，落盘还在）
@@ -1054,16 +1058,17 @@ def test_group_timing():
 
     class Ch:
         def __init__(self):
-            self.events = []  # ("typing", sender) / ("send", sender, text)
+            self.events = []  # (t, kind, sender, text)
         def send(self, text, sender=""):
-            self.events.append(("send", sender, text))
+            self.events.append((_t.time(), "send", sender, text))
         def typing(self, sender=""):
-            self.events.append(("typing", sender))
+            self.events.append((_t.time(), "typing", sender))
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     tmp = Path(tempfile.mkdtemp())
     config.BASE_DIR = tmp
-    saved_timing = _set_timing(_FAST_TIMING)
+    saved_timing = _set_timing({**_FAST_TIMING,
+                                "GROUP_RESPOND_MIN": 99, "GROUP_RESPOND_MAX": 99})
     # 阅读时长拉开一点，验证"读完才回"（首位回应者：read + 0.3s 起步）
     config.READING_SECONDS_PER_CHAR = 0.05
     real_chat = _gc.llm.chat
@@ -1074,15 +1079,18 @@ def test_group_timing():
         _gc.start(parts)
         t0 = _t.time()
         _gc.on_user_text("大家好呀", ch)
-        elapsed = _t.time() - t0
-        # 阅读模拟：5 个字 * 0.05s + 最少 0.3s 反应 ≈ 0.55s 起步
-        assert elapsed >= 0.5, f"阅读等待没生效，秒回了：{elapsed:.2f}s"
+        _gc.wait_responders()
+        sends = [e for e in ch.events if e[1] == "send"]
+        assert sends, "没人回应"
+        # 阅读模拟：首位回应者 5 字 * 0.05s + 最少 0.3s 反应 ≈ 0.55s 起步
+        assert sends[0][0] - t0 >= 0.5, \
+            f"阅读等待没生效，秒回了：{sends[0][0] - t0:.2f}s"
         # 每位发言人都先 typing 再发正文，且 typing 带发言人自己的名字
         for name in ("小葵", "稳稳"):
             ti = next((i for i, e in enumerate(ch.events)
-                       if e == ("typing", name)), None)
+                       if e[1] == "typing" and e[2] == name), None)
             si = next((i for i, e in enumerate(ch.events)
-                       if e[0] == "send" and e[1] == name), None)
+                       if e[1] == "send" and e[2] == name), None)
             assert ti is not None and si is not None and ti < si, \
                 f"{name} 的 typing/正文时序不对：{ch.events}"
         print("ok 群聊时间感（阅读等待 + 发言人 typing 先于正文）")
@@ -1122,6 +1130,8 @@ def test_group_idle_chatter():
         "GROUP_IDLE_GAP_MAX_SECONDS": 0.08,
         "GROUP_IDLE_MAX_TURNS": 3,
         "TYPING_ENABLED": False,                  # 闲聊速度优先
+        "GROUP_RESPOND_MIN": 99,                  # 本次要验证"全员接话"
+        "GROUP_RESPOND_MAX": 99,
     })
     real_chat = _gc.llm.chat
     try:
@@ -1161,6 +1171,7 @@ def test_group_idle_chatter():
         ch.sent.clear()
         _gc.llm.chat = lambda messages, temperature=0.7: "回应小徐"
         _gc.on_user_text("我回来了", ch)
+        _gc.wait_responders()
         idx_user = next(i for i, (sp, _) in enumerate(s.transcript) if sp == "小徐"
                         and _ == "我回来了")
         after = [sp for sp, _ in s.transcript[idx_user + 1:]]
@@ -1340,8 +1351,9 @@ def test_group_handoff_free_chat():
         _t.sleep(0.6)
         assert ch.sent == [], f"用户没说话不该闲聊：{ch.sent}"
 
-        # 用户把焦点交给朋友 → 回应流程同步完成后，很快出现自主闲聊
+        # 用户把焦点交给朋友 → 回应流程完成后，很快出现自主闲聊
         _gc.on_user_text("哈喽朋友们，你们认识一下新朋友", ch)
+        _gc.wait_responders()
         after_respond = len(ch.sent)
         deadline = _t.time() + 3
         while _t.time() < deadline and len(ch.sent) <= after_respond:
@@ -1352,6 +1364,7 @@ def test_group_handoff_free_chat():
         # 非交接消息则不受影响：仍走正常长空闲（这里只验证不立即触发）
         ch.sent.clear()
         _gc.on_user_text("在吗", ch)
+        _gc.wait_responders()
         after2 = len(ch.sent)
         _t.sleep(0.5)
         assert len(ch.sent) == after2, f"普通消息不该立即触发闲聊：{ch.sent}"
@@ -1420,6 +1433,7 @@ def test_group_llm_fallback():
         _gc.start(parts)
         _gc.attach_channel(ch)
         _gc.on_user_text("在吗", ch)  # 不应抛异常
+        _gc.wait_responders()
         assert ch.sent and all("脑子卡住了" in t for _, t in ch.sent), \
             f"群聊 LLM 兜底不对：{ch.sent}"
         _gc.llm.chat = lambda messages, temperature=0.7: "[]"
@@ -1458,6 +1472,8 @@ def test_group_sleeping_member():
         "READING_SECONDS_PER_CHAR": 0.0,
         "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
         "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
+        "GROUP_RESPOND_MIN": 99,   # 全员，验证睡觉成员处理
+        "GROUP_RESPOND_MAX": 99,
     })
     real_chat = _gc.llm.chat
     try:
@@ -1468,6 +1484,7 @@ def test_group_sleeping_member():
         _gc.start(parts)
         _gc.attach_channel(ch)
         _gc.on_user_text("在吗", ch)
+        _gc.wait_responders()
         by_speaker = {}
         for sender, text in ch.sent:
             by_speaker.setdefault(sender, []).append(text)
@@ -1478,6 +1495,145 @@ def test_group_sleeping_member():
         _gc.llm.chat = lambda messages, temperature=0.7: "[]"
         _gc.end()
         print("ok 群聊睡觉成员（回应流程回迷糊语，醒着正常说话）")
+    finally:
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_group_selective_respond():
+    """选择性回应：每次用户发言随机 1~GROUP_RESPOND_MAX 位朋友回应，不全员刷屏；点名谁谁必回。"""
+    import tempfile
+    import db as _db
+    import groupchat as _gc
+
+    class Ch:
+        def __init__(self):
+            self.sent = []
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = _set_timing({
+        "TYPING_ENABLED": False,
+        "READING_SECONDS_PER_CHAR": 0.0,
+        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
+        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.0,
+        "GROUP_RESPOND_MIN": 1,
+        "GROUP_RESPOND_MAX": 1,
+    })
+    real_chat = _gc.llm.chat
+    try:
+        # 3 位朋友：小葵 + 稳稳 + 阿燃
+        parts = _make_two_friend_dbs(tmp)
+        config.DB_PATH = tmp / "friend-dd333333.db"
+        _db.init()
+        _db.set_kv("persona_json", '{"name": "阿燃", "label": "阳光话痨", '
+                                   '"text": "乐天", "wake_hour": 8, "sleep_hour": 23, '
+                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
+        config.DB_PATH = tmp / "friend.db"
+        parts.append(_gc.Participant(tmp / "friend-dd333333.db", "阿燃"))
+
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: "我在"
+        _gc.start(parts)
+        _gc.attach_channel(ch)
+        _gc.CROSS_TALK_PROB = 0.0  # 关串话，只验证第一轮的选择性
+
+        # 1) GROUP_RESPOND_MAX=1：每次只 1 位回应（不再全员刷屏）
+        ch.sent.clear()
+        _gc.on_user_text("在吗", ch)
+        _gc.wait_responders()
+        speakers = {sp for sp, _ in ch.sent if sp}
+        assert len(speakers) == 1, f"应只 1 位回应：{ch.sent}"
+
+        # 2) 点名谁谁必回：用户点名稳稳 → 稳稳必在回应者里
+        ch.sent.clear()
+        _gc.on_user_text("稳稳你来说说", ch)
+        _gc.wait_responders()
+        speakers = {sp for sp, _ in ch.sent if sp}
+        assert "稳稳" in speakers, f"点名的稳稳没回应：{ch.sent}"
+
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
+        _gc.end()
+        print("ok 群聊选择性回应（不全员刷屏 + 点名必回）")
+    finally:
+        _gc.CROSS_TALK_PROB = 0.6
+        _gc.llm.chat = real_chat
+        if _gc._session is not None:
+            _gc._session.active = False
+        _gc._session = None
+        _set_timing(saved)
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_group_interject():
+    """插话：回应进行中用户消息不阻塞（异步回应）；AI 发完手头这条才看新消息。"""
+    import tempfile
+    import time as _t
+    import db as _db
+    import groupchat as _gc
+
+    class Ch:
+        def __init__(self):
+            self.sent = []   # (sender, text)
+        def send(self, text, sender=""):
+            self.sent.append((sender, text))
+        def typing(self, sender=""):
+            self.sent.append((sender, "…正在输入"))
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    saved = _set_timing({
+        "READING_SECONDS_PER_CHAR": 0.0,
+        "TYPING_ENABLED": True,
+        "TYPING_SECONDS_PER_CHAR": 0.2,
+        "TYPING_MIN_SECONDS": 0.2,
+        "TYPING_MAX_SECONDS": 0.2,
+        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
+        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.0,
+        "GROUP_RESPOND_MIN": 99,
+        "GROUP_RESPOND_MAX": 99,
+    })
+    real_chat = _gc.llm.chat
+    try:
+        parts = _make_two_friend_dbs(tmp)  # 小葵 + 稳稳
+        ch = Ch()
+        _gc.llm.chat = lambda messages, temperature=0.7: "我在听"
+        _gc.start(parts)
+        _gc.attach_channel(ch)
+
+        # 用户发第一条消息，回应在后台进行
+        _gc.on_user_text("大家好", ch)
+        _t.sleep(0.03)   # 让回应流程启动
+
+        # 回应进行中插话：on_user_text 应立即返回（不被回应流程阻塞）
+        t0 = _t.time()
+        _gc.on_user_text("我插一句", ch)
+        blocked = _t.time() - t0
+        assert blocked < 0.15, f"插话被回应流程阻塞了：{blocked:.2f}s"
+
+        _gc.wait_responders()
+        s = _gc.current()
+        user_texts = [tx for sp, tx in s.transcript if sp == "小徐"]
+        assert "大家好" in user_texts and "我插一句" in user_texts, \
+            f"两条用户消息都应入 transcript：{user_texts}"
+        # 有朋友回应了（手头这条最终发出，没卡死）
+        assert any(sp != "小徐" for sp, _ in s.transcript), "没人回应"
+
+        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
+        _gc.end()
+        print("ok 群聊插话（用户消息不阻塞 + 发完手头再看）")
     finally:
         _gc.llm.chat = real_chat
         if _gc._session is not None:
@@ -1598,6 +1754,8 @@ if __name__ == "__main__":
     test_group_handoff_free_chat()
     test_group_llm_fallback()
     test_group_sleeping_member()
+    test_group_selective_respond()
+    test_group_interject()
     test_info_dispatch()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()

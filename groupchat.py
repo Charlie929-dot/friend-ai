@@ -21,6 +21,7 @@ import json
 import random
 import threading
 import time as _time
+from collections import deque
 from datetime import datetime
 
 import config
@@ -83,6 +84,12 @@ class GroupSession:
         self.idle_after = _idle_after_seconds()  # 本轮触发闲聊需要的空闲时长
         self.summary = ""                      # 滚出窗口内容的累计摘要（长会话防遗忘）
         self.summarized_upto = 0               # 已摘要到的 transcript 下标
+        # --- 异步回应：用户消息不阻塞发送，回应在后台线程串行消化 ---
+        self.user_queue = deque()              # 待处理的用户消息 (text, handoff)
+        self._cond = threading.Condition()
+        self.respond_done = threading.Event()  # 最近一轮回应是否完成（测试/等待用）
+        self.respond_done.set()
+        threading.Thread(target=_respond_loop, args=(self,), daemon=True).start()
 
 
 def is_active() -> bool:
@@ -125,28 +132,80 @@ def attach_channel(channel) -> None:
 
 
 def on_user_text(text: str, channel) -> None:
-    """群里收到用户消息：全员依次回应 → 提及接力 → 概率串话，到上限就安静。
+    """群里收到用户消息：立即入队返回（不阻塞发送），后台串行回应。
 
-    时间感和私聊同步：先"读完"用户这句话，回应前各自"正在输入"。
-    若用户把焦点交给朋友们（"你们认识一下"），回应完很快开始自由闲聊，不等长空闲。"""
+    - 用户消息直接发：不必等 AI 们说完才能发下一条（CLI 不再被卡住）。
+    - AI 们不用管新消息：正在发的这条发完，再看新消息（不打断打字）。
+    - 选择性回应：每次随机 1~GROUP_RESPOND_MAX 位朋友回应，不全员刷屏；
+      话里点名了谁，谁必回。
+    若用户把焦点交给朋友们（"你们认识一下"），回应完很快开始自由闲聊。"""
     s = _session
     if not s:
         return
     s.channel = channel
     s.last_user_ts = _time.time()
-    s.user_event.set()   # 闲聊线程：用户回来了，停下
-    s.interrupt.set()    # 若有在途回应流程：别说了，听用户的新消息
     handoff = _is_handoff(text)
-    with s.lock:         # 与在途流程互斥（IM 通道下消息可能并发到达）
-        s.interrupt.clear()  # 我是最新一轮，之前的打断信号归我消化
-        s.transcript.append(("小徐", text))
-        _respond_flow(s, channel, text)
-        _persist(s)  # 每轮落盘：/refresh 或重启都不丢群聊内容
-        if handoff:
-            # 焦点交给朋友们了：把空闲阈值压短，回应完立刻开始自由闲聊
-            s.last_idle_ts = 0.0
-            s.idle_after = config.GROUP_HANDOFF_IDLE_SECONDS
-    s.user_event.clear()  # 回应完毕，闲聊线程可以继续等空闲了
+    s.user_event.set()   # 用户回来了：闲聊停下
+    s.interrupt.set()    # 在途回应：发完手头这条就停，看这条新消息
+    s.transcript.append(("小徐", text))  # 原子 append，立即
+    with s._cond:
+        s.user_queue.append((text, handoff))
+        s._cond.notify_all()
+
+
+def _respond_loop(self) -> None:
+    """后台回应线程：串行消费用户消息队列，一条消息跑一轮回应。"""
+    while self.active:
+        with self._cond:
+            while self.active and not self.user_queue:
+                self._cond.wait(timeout=1.0)
+            if not self.active:
+                return
+            text, handoff = self.user_queue.popleft()
+        self.respond_done.clear()
+        try:
+            with self.lock:   # 回应流程 vs 自主闲聊 互斥
+                self.interrupt.clear()  # 我是最新一轮，之前的打断归我消化
+                _respond_flow(self, self.channel, text)
+                _persist(self)  # 每轮落盘：/refresh 或重启都不丢群聊内容
+                if handoff:
+                    # 焦点交给朋友们了：把空闲阈值压短，回应完立刻开始自由闲聊
+                    self.last_idle_ts = 0.0
+                    self.idle_after = config.GROUP_HANDOFF_IDLE_SECONDS
+        except Exception as e:
+            print(f"[group] 回应出错：{e}")
+        finally:
+            self.respond_done.set()
+            with self._cond:
+                if not self.user_queue:
+                    self.user_event.clear()  # 队列清空，闲聊线程可继续等空闲
+
+
+def wait_responders(timeout: float = 5.0) -> None:
+    """等后台回应线程把当前用户消息队列处理完（测试 / 同步场景用）。"""
+    s = current()
+    if not s:
+        return
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        with s._cond:
+            if not s.user_queue and s.respond_done.is_set():
+                return
+        _time.sleep(0.01)
+
+
+def _pick_responders(s: GroupSession, user_text: str) -> list[Participant]:
+    """选择性回应：每次用户发言随机抽 1~GROUP_RESPOND_MAX 位朋友回应，
+    不再全员各说一句（防刷屏）。话里点名了谁，谁必回。"""
+    lo = min(config.GROUP_RESPOND_MIN, len(s.participants))
+    hi = min(config.GROUP_RESPOND_MAX, len(s.participants))
+    lo = min(lo, hi)
+    k = random.randint(lo, hi)
+    picked = random.sample(s.participants, k)
+    for p in s.participants:
+        if p.name and p.name in user_text and p not in picked:
+            picked.append(p)   # 被点名的必回
+    return list(picked)
 
 
 def _respond_flow(s: GroupSession, channel, user_text: str) -> None:
@@ -162,8 +221,8 @@ def _respond_flow(s: GroupSession, channel, user_text: str) -> None:
         s.transcript.append((p.name, note))
         channel.send(note, sender=p.name)
 
-    # 第一轮：每位朋友都回应；话里点了名的插队接话（每人限一次）
-    queue = list(s.participants)
+    # 第一轮：选择性回应（随机抽 1~N 位，不全员刷屏）；话里点名了谁谁必回
+    queue = _pick_responders(s, user_text)
     while queue and ai_turns < MAX_AI_TURNS:
         p = queue.pop(0)
         if p.name in spoken:
@@ -175,7 +234,7 @@ def _respond_flow(s: GroupSession, channel, user_text: str) -> None:
             wait = random.uniform(config.GROUP_SPEAKER_GAP_MIN_SECONDS,
                                   config.GROUP_SPEAKER_GAP_MAX_SECONDS)
         if s.interrupt.wait(wait):
-            break  # 等待期间用户又说话了：停，听你说（新消息会开新一轮）
+            break  # 等待期间用户又说话了：停，发完手头的就不再往下（新消息会开新一轮）
         reply = _speak(p, s, channel)
         if not reply:
             break  # 发言被插话作废
@@ -251,6 +310,8 @@ def end() -> str:
             return "现在没有在群的。"
         s.active = False
         s.user_event.set()  # 叫醒闲聊线程退出
+        with s._cond:       # 叫醒回应线程退出
+            s._cond.notify_all()
         real_db = config.DB_PATH
         names = "、".join(p.name for p in s.participants)
         # 先把记录写回所有库，再删落盘文件，最后提取记忆——顺序保证崩溃也不丢内容
@@ -313,17 +374,15 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
         finally:
             config.DB_PATH = real_db
 
-    # "正在输入"：按字数假装敲键盘，到点再发出正文（可被用户插话打断）
+    # "正在输入"：按字数假装敲键盘，到点再发出正文。
+    # 用户插话不再作废这条——把"手头的消息"发完，回应流程在发言间隙再看新消息。
     if config.TYPING_ENABLED and reply:
         duration = min(max(len(reply) * config.TYPING_SECONDS_PER_CHAR,
                            config.TYPING_MIN_SECONDS), config.TYPING_MAX_SECONDS)
         typing_fn = getattr(channel, "typing", None)  # 通道可选能力
         if typing_fn:
             typing_fn(sender=p.name)
-        cancelled = (s.user_event.wait(duration) if idle
-                     else s.interrupt.wait(duration))
-        if cancelled:
-            return ""  # 用户说话了：这句不说了，先听你说
+        _time.sleep(duration)
     s.transcript.append((p.name, reply))
     _send_segments(channel, p.name, reply)
     return reply
