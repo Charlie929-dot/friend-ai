@@ -357,7 +357,7 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
             else:
                 # 此时 db 已切到这位朋友：user_name() 返回 TA 对用户的称呼（各朋友可不同）
                 uname = persona.user_name()
-                members = "、".join([*(x.name for x in s.participants), f"{uname}（用户）"])
+                members = "、".join([*(x.name for x in s.participants), uname])
                 # 统一时钟 + 统一生活日：群里所有朋友共用同一个 now、同一个
                 # 起床参照（config.WAKE_HOUR），修"四个人四个时间"
                 sys_prompt = (persona.build_system_prompt(
