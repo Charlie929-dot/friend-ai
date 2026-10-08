@@ -26,8 +26,8 @@ PERSONA = COMMON_RULES
 def friend_name(default: str = "老朋友") -> str:
     """当前朋友的名字：人格卡名 > 别名（初遇朋友这类 V1 老朋友的）> 默认。
 
-    别名必须回退——否则只有 alias 的老朋友（如"初遇朋友"）在私聊 prompt
-    里拿不到名字，群聊记忆里的"初遇朋友"就对不上"我"，导致"群聊失忆"。"""
+    别名必须回退——否则只有 alias 的老朋友（如"初遇朋友"）在 prompt
+    里拿不到自己的名字。"""
     import persona_pool
     card = persona_pool.load()
     if card:
@@ -41,8 +41,8 @@ def user_name() -> str:
     """当前朋友对用户的称呼（不是全局写死的一个名字——不同朋友有各自的个性称呼）。
 
     优先级：事实便签"叫我X"（用户亲口，最高）> profile 清单"称呼"字段（AI 提取记录）
-    > config.USER_NAME（兜底默认）。读的是"当前库"（当前朋友）——群聊里发言时
-    db 已切到那位朋友，所以自动返回 TA 对用户的称呼。"""
+    > config.USER_NAME（兜底默认）。读的是"当前库"（当前朋友），所以自动返回
+    这位朋友对用户的称呼。"""
     import db
     for f in db.get_facts():
         if f.startswith("叫我"):
@@ -115,26 +115,22 @@ def behavior_params() -> dict:
             "bubble_mult": 1.0}
 
 
-def _life_day(now: datetime, wake_hour: int | None = None) -> tuple[datetime, bool]:
+def _life_day(now: datetime) -> tuple[datetime, bool]:
     """生活日：过午夜但还没到起床时间 = 还在"昨天"的深夜。
     只有睡一觉醒来（到起床点）才算新的一天。返回 (生活日, 是否熬夜时段)。
-    wake_hour 不给时跟随当前朋友的人格作息；群聊里传入统一值，让多个朋友对
-    "今天/昨天"的认知一致（否则凌晨到上午，不同作息的朋友各说各的日期）。"""
-    wh = wake_hour if wake_hour is not None else behavior_params()["wake_hour"]
+    起床点跟随当前朋友的人格作息。"""
+    wh = behavior_params()["wake_hour"]
     if now.hour < wh:
         return now - timedelta(days=1), True
     return now, False
 
 
-def build_system_prompt(state: str, now: datetime | None = None,
-                        life_wake_hour: int | None = None) -> str:
-    """组装 system prompt。now 不传则取当前时间（私聊行为不变）；群聊里传入
-    统一 now + 统一 life_wake_hour，保证同一时刻所有朋友的钟表时间一致、
-    生活日一致——修"群聊四个人四个时间"。"""
+def build_system_prompt(state: str) -> str:
+    """组装 system prompt，注入当前日期/时间/时段 + 生活日换算。"""
     import db  # 延迟导入避免循环依赖
     import persona_pool
-    now = now or datetime.now()
-    day, late_night = _life_day(now, life_wake_hour)
+    now = datetime.now()
+    day, late_night = _life_day(now)
     weekday = "一二三四五六日"[day.weekday()]
     time_info = (f"现在是 {day:%Y年%m月%d日} 星期{weekday} "
                  f"{now:%H:%M}，{_time_period(now.hour)}。")

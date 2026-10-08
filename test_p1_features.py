@@ -18,13 +18,12 @@ import persona
 
 TS_RE = re.compile(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
 
-# 群聊时间模拟（阅读/打字/接话间隔）的测试用快档：压到毫秒级，别把测试拖慢
+# 时间模拟（阅读/打字/发送间隔）的测试用快档：压到毫秒级，别把测试拖慢
 _FAST_TIMING = {
     "READING_SECONDS_PER_CHAR": 0.0, "READING_MAX_SECONDS": 5.0,
     "TYPING_SECONDS_PER_CHAR": 0.0, "TYPING_MIN_SECONDS": 0.0,
     "TYPING_MAX_SECONDS": 0.01,
     "SEND_SECONDS_PER_CHAR": 0.0, "SEND_MIN_SECONDS": 0.0, "SEND_MAX_SECONDS": 0.01,
-    "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0, "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
 }
 
 
@@ -373,9 +372,7 @@ def test_memory_append_timeline():
         # 身份清洗（2026-10-07 用户拍板）：prompt 全项目不出现 AI 身份——TA 就是抽到的角色本人
         assert "AI" not in _mem.EXTRACT_PROMPT
         import persona as _persona
-        import groupchat as _gc2
         assert "AI" not in _persona.COMMON_RULES
-        assert "AI朋友" not in _gc2.GROUP_RULES
 
         # _validate：推测/元信息/承诺安全网（丢弃）+ 自称改写（不丢弃）
         assert _mem._validate("可能明天要考试", False) is None                       # 推测
@@ -517,101 +514,6 @@ def test_memory_v2():
         _db.init()
 
 
-def test_groupchat():
-    """朋友联动群聊：拉群/名字显示/轮次上限防循环/散群写回+各自提取/群聊暂停冒泡。"""
-    import tempfile
-    import commands as _cmd
-    import db as _db
-    import groupchat as _gc
-    import guard as _guard
-
-    class FakeChannel:
-        def __init__(self):
-            self.sent = []  # (sender, text)
-
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    real_chat = _gc.llm.chat
-    saved_timing = _set_timing({**_FAST_TIMING,
-                                "GROUP_RESPOND_MIN": 99, "GROUP_RESPOND_MAX": 99})
-    try:
-        # 当前朋友小葵 + 归档老朋友稳稳
-        _db.init()
-        _db.set_kv("persona_json", '{"name": "小葵", "label": "温柔治愈", '
-                                   '"text": "温柔", "wake_hour": 8, "sleep_hour": 23, '
-                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
-        config.DB_PATH = tmp / "friend-abc12345.db"
-        _db.init()
-        _db.set_kv("persona_json", '{"name": "稳稳", "label": "毒舌卷王", '
-                                   '"text": "毒舌", "wake_hour": 7, "sleep_hour": 24, '
-                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-05"}')
-        _db.set_kv("alias", "稳稳")
-        _db.set_kv("archived_at", "2026-10-05T23:00:00")
-        config.DB_PATH = tmp / "friend.db"
-
-        # 拉群：当前朋友 + 归档 [1]
-        out = _cmd.handle("/group 1")
-        assert "小葵" in out and "稳稳" in out, f"拉群失败：{out}"
-        assert _gc.is_active()
-        # 群聊期间主动消息暂停
-        ok, reason = _guard.can_send_proactive()
-        assert not ok and reason == "群聊中", f"群聊中冒泡未拦截：{reason}"
-
-        # 群聊对话：mock LLM——小葵的话里点名稳稳（提及接力）
-        def fake_chat(messages, temperature=0.7):
-            sys_msg = messages[0]["content"]
-            if "你是小葵" in sys_msg:
-                return "小徐你来啦\n稳稳你也说两句呗"
-            return "哟，都在呢"
-
-        _gc.llm.chat = fake_chat
-        # 强制串话不停，验证 MAX_AI_TURNS 硬顶
-        real_cross, real_stop = _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB
-        _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB = 1.0, 0.0
-        ch = FakeChannel()
-        _gc.on_user_text("大家好呀", ch)
-        _gc.wait_responders()
-        _gc.CROSS_TALK_PROB, _gc.STOP_TALK_PROB = real_cross, real_stop
-
-        ai_msgs = [x for x in ch.sent if x[0]]
-        assert all(s in ("小葵", "稳稳") for s, _ in ai_msgs), f"发言人名字不对：{ai_msgs[:3]}"
-        s = _gc.current()
-        # transcript 一条 = 一次发言（send 会按换行拆段，不能拿消息数当轮次）
-        ai_turns = sum(1 for sp, _ in s.transcript if sp != "小徐")
-        assert ai_turns == _gc.MAX_AI_TURNS, f"轮次硬顶失效：{ai_turns}"
-        assert s.transcript[0] == ("小徐", "大家好呀")
-        # 小葵第一段没点名，第二段点名稳稳——都在 transcript 里
-        assert any(sp == "小葵" and "稳稳" in tx for sp, tx in s.transcript)
-
-        # 散群：记录写回两位各自的库 + 各自提取记忆
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 提取阶段不新记
-        out = _cmd.handle("/endgroup")
-        assert "散啦" in out
-        assert not _gc.is_active()
-        for f, name in ((tmp / "friend.db", "小葵"), (tmp / "friend-abc12345.db", "稳稳")):
-            config.DB_PATH = f
-            _db.init()
-            with __import__("sqlite3").connect(str(f)) as c:
-                n = c.execute("SELECT COUNT(*) FROM messages WHERE kind='group'").fetchone()[0]
-            assert n == len(s.transcript), f"{name} 库里群聊记录不全：{n}"
-        config.DB_PATH = tmp / "friend.db"
-        # 散群后冒泡恢复
-        ok, _ = _guard.can_send_proactive()
-        assert ok, "散群后冒泡未恢复"
-        print("ok 群聊（拉群/名字/轮次上限/写回各自库/暂停恢复冒泡）")
-    finally:
-        _set_timing(saved_timing)
-        _gc.llm.chat = real_chat
-        _gc._session = None
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
 def test_typing_indicator():
     """"正在输入"：回复按字数计算输入时长，先 typing() 再发正文。"""
     import tempfile
@@ -648,6 +550,7 @@ def test_typing_indicator():
         eng = Engine(ch)
         eng._judge_session_end = lambda *a, **k: None
         real_chat = _mem.llm.chat
+        real_extract = _mem.extract_async
         _mem.llm.chat = lambda *a, **k: "好呀好呀\n就这么说定了"
         _mem.extract_async = lambda: None
         try:
@@ -660,6 +563,7 @@ def test_typing_indicator():
                 _t.sleep(0.02)
         finally:
             _mem.llm.chat = real_chat
+            _mem.extract_async = real_extract
         kinds = [e[0] for e in ch.events]
         assert "typing" in kinds, f"没出现正在输入：{ch.events}"
         assert kinds.index("typing") < kinds.index("send"), \
@@ -748,6 +652,7 @@ def test_interrupt_detection():
                 self.events.append(("typing",))
 
         real_chat = _mem.llm.chat
+        real_extract = _mem.extract_async
         _mem.extract_async = lambda: None
 
         def wait_for(pred, timeout=4):
@@ -816,103 +721,13 @@ def test_interrupt_detection():
         eng.stop()
         eng2.stop()
         _mem.llm.chat = real_chat
+        _mem.extract_async = real_extract
         (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
          config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
          config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR,
          config.SEND_MIN_SECONDS, config.SEND_MAX_SECONDS,
          config.SEND_SECONDS_PER_CHAR) = saved
         config.BASE_DIR, config.DB_PATH = real_base, real_db
-
-
-def test_group_persist_and_friend_name():
-    """群聊持久化（/refresh 自动散场 + 重启恢复）+ 老朋友名字回退到别名。"""
-    import tempfile
-    import db as _db
-    import groupchat as _gc
-    import commands as _cmd
-    from channels.cli import _friend_name
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    real_chat = _gc.llm.chat
-    saved_timing = _set_timing(_FAST_TIMING)
-
-    class Ch:
-        def __init__(self):
-            self.sent = []
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    try:
-        # 两个朋友库：小葵（当前，有人格卡）、初遇朋友（归档，无卡只有别名）
-        _db.init()
-        _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
-                                   '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
-                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
-        config.DB_PATH = tmp / "friend-cc111111.db"
-        _db.init()
-        _db.set_kv("alias", "初遇朋友")
-        _db.set_kv("created_at", "2026-10-05T23:00:00")
-        config.DB_PATH = tmp / "friend.db"
-
-        # 1) 名字回退：无卡有别名 → 别名；无卡无别名 → 老朋友
-        config.DB_PATH = tmp / "friend-cc111111.db"
-        assert _friend_name() == "初遇朋友", f"别名回退失败：{_friend_name()}"
-        config.DB_PATH = tmp / "friend-dd222222.db"
-        _db.init()
-        assert _friend_name() == "老朋友", f"无名回退失败：{_friend_name()}"
-        config.DB_PATH = tmp / "friend.db"
-        assert _friend_name() == "小葵", f"人格卡名字失败：{_friend_name()}"
-
-        # 2) 拉群说话后，transcript 落盘存在
-        parts = [_gc.Participant(tmp / "friend.db", "小葵"),
-                 _gc.Participant(tmp / "friend-cc111111.db", "初遇朋友")]
-        _gc.start(parts)
-        _gc.llm.chat = lambda messages, temperature=0.7: "嗯嗯我在听"
-        _gc.on_user_text("我吃完了", Ch())
-        _gc.wait_responders()
-        persist = tmp / "group_session.json"
-        assert persist.exists(), "群聊 transcript 未落盘"
-
-        # 3) /refresh：先自动散场沉淀，再重载——群聊内容不丢
-        out = _cmd.handle("/refresh")
-        config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"  # reload 会重置，拉回来
-        _set_timing(_FAST_TIMING)  # /refresh reload 了 config，计时参数被重置为默认，重新拉快
-        assert "散场" in out, f"refresh 未提示散场：{out}"
-        assert not _gc.is_active(), "refresh 后群还应处于散场状态"
-        assert not persist.exists(), "散场后落盘文件应删除"
-        with __import__("sqlite3").connect(str(tmp / "friend-cc111111.db")) as c:
-            n = c.execute("SELECT COUNT(*) FROM messages WHERE kind='group'").fetchone()[0]
-        assert n > 0, "refresh 散场后群聊记录没写回初遇朋友的库"
-
-        # 4) 重启恢复：模拟进程带着未散场的群退出——recover_pending 补写回
-        _gc.start(parts)
-        _gc.llm.chat = lambda messages, temperature=0.7: "好嘞"
-        _gc.on_user_text("群里再说点啥", Ch())
-        _gc.wait_responders()
-        assert persist.exists()
-        _gc._session.active = False  # 停掉闲聊线程再模拟重启
-        _gc._session = None  # 模拟进程重启（内存没了，落盘还在）
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 提取不新记
-        note = _gc.recover_pending()
-        assert "群聊恢复" in note, f"恢复提示不对：{note}"
-        assert not persist.exists(), "恢复后落盘文件应删除"
-        with __import__("sqlite3").connect(str(tmp / "friend.db")) as c:
-            rows = [r[0] for r in c.execute(
-                "SELECT content FROM messages WHERE kind='group' AND content LIKE '%群里再说点啥%'")]
-        assert rows, "恢复后群聊记录没补写回小葵的库"
-        print("ok 群聊持久化（落盘/refresh散场/重启恢复）+ 老朋友名字回退")
-    finally:
-        _set_timing(saved_timing)
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        (tmp / "group_session.json").unlink(missing_ok=True)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
 
 
 def test_db_path_lock():
@@ -950,10 +765,10 @@ def test_db_path_lock():
 
         _mem.llm.chat = slow_chat
         _mem.extract_async()          # 后台提取：持锁，卡在 gate
-        _t.sleep(0.3)                 # 确保提取线程先拿到锁
+        _t.sleep(0.8)                 # 确保提取线程先拿到锁
         t = threading.Thread(target=do_switch)
         t.start()
-        _t.sleep(0.3)
+        _t.sleep(0.8)
         assert not switched.is_set(), "提取持锁期间切库线程应被阻塞"
         gate.set()
         t.join(5)
@@ -1036,208 +851,6 @@ def test_bubble_fixed_corpus():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
-def _make_two_friend_dbs(tmp):
-    """测试工具：当前朋友小葵 + 归档老朋友稳稳两份库。返回两个 Participant。"""
-    import db as _db
-    import groupchat as _gc
-    config.DB_PATH = tmp / "friend.db"
-    _db.init()
-    _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
-                               '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
-                               '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
-    config.DB_PATH = tmp / "friend-abc12345.db"
-    _db.init()
-    _db.set_kv("persona_json", '{"name": "稳稳", "label": "老干部", '
-                               '"text": "稳", "wake_hour": 7, "sleep_hour": 22, '
-                               '"bubble_mult": 1.0, "drawn_at": "2026-10-05"}')
-    config.DB_PATH = tmp / "friend.db"
-    return [_gc.Participant(tmp / "friend.db", "小葵"),
-            _gc.Participant(tmp / "friend-abc12345.db", "稳稳")]
-
-
-def test_group_timing():
-    """群聊时间感与私聊同步：阅读等待生效；发言人"正在输入"在其正文之前。"""
-    import tempfile
-    import time as _t
-    import db as _db
-    import groupchat as _gc
-
-    class Ch:
-        def __init__(self):
-            self.events = []  # (t, kind, sender, text)
-        def send(self, text, sender=""):
-            self.events.append((_t.time(), "send", sender, text))
-        def typing(self, sender=""):
-            self.events.append((_t.time(), "typing", sender))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    saved_timing = _set_timing({**_FAST_TIMING,
-                                "GROUP_RESPOND_MIN": 99, "GROUP_RESPOND_MAX": 99})
-    # 阅读时长拉开一点，验证"读完才回"（首位回应者：read + 0.3s 起步）
-    config.READING_SECONDS_PER_CHAR = 0.05
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: "嗯嗯"
-        _gc.start(parts)
-        t0 = _t.time()
-        _gc.on_user_text("大家好呀", ch)
-        _gc.wait_responders()
-        sends = [e for e in ch.events if e[1] == "send"]
-        assert sends, "没人回应"
-        # 阅读模拟：首位回应者 5 字 * 0.05s + 最少 0.3s 反应 ≈ 0.55s 起步
-        assert sends[0][0] - t0 >= 0.5, \
-            f"阅读等待没生效，秒回了：{sends[0][0] - t0:.2f}s"
-        # 每位发言人都先 typing 再发正文，且 typing 带发言人自己的名字
-        for name in ("小葵", "稳稳"):
-            ti = next((i for i, e in enumerate(ch.events)
-                       if e[1] == "typing" and e[2] == name), None)
-            si = next((i for i, e in enumerate(ch.events)
-                       if e[1] == "send" and e[2] == name), None)
-            assert ti is not None and si is not None and ti < si, \
-                f"{name} 的 typing/正文时序不对：{ch.events}"
-        print("ok 群聊时间感（阅读等待 + 发言人 typing 先于正文）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved_timing)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_group_idle_chatter():
-    """群聊自主闲聊：用户沉默后 AI 们自己开聊（间隔拉长、轮数有上限）；
-    用户一开口立刻打断、话题回归用户；睡觉的成员不参与闲聊。"""
-    import tempfile
-    import time as _t
-    import db as _db
-    import groupchat as _gc
-    import commands as _cmd
-
-    class Ch:
-        def __init__(self):
-            self.sent = []  # (sender, text)
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    saved_timing = _set_timing(_FAST_TIMING)
-    saved_idle = _set_timing({
-        "GROUP_IDLE_AFTER_MIN_MINUTES": 0.003,   # ≈0.2s 空闲就开聊
-        "GROUP_IDLE_AFTER_MAX_MINUTES": 0.003,
-        "GROUP_IDLE_GAP_MIN_SECONDS": 0.05,
-        "GROUP_IDLE_GAP_MAX_SECONDS": 0.08,
-        "GROUP_IDLE_MAX_TURNS": 3,
-        "TYPING_ENABLED": False,                  # 闲聊速度优先
-        "GROUP_RESPOND_MIN": 99,                  # 本次要验证"全员接话"
-        "GROUP_RESPOND_MAX": 99,
-    })
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: "随便聊聊"
-        _gc.start(parts)
-        _gc.attach_channel(ch)
-
-        def wait_for(pred, timeout=8):
-            deadline = _t.time() + timeout
-            while _t.time() < deadline:
-                if pred():
-                    return True
-                _t.sleep(0.03)
-            return False
-
-        # 1) 用户没说话，AI 们自己聊起来了
-        assert wait_for(lambda: len(ch.sent) >= 2), \
-            f"自主闲聊没触发：{ch.sent}"
-        assert all(s in ("小葵", "稳稳") for s, _ in ch.sent), \
-            f"闲聊发言人不对：{ch.sent[:3]}"
-        s = _gc.current()
-        assert s is not None
-        # 自主闲聊提示词确实注入了（冷场指引）
-        seen_prompts = []
-
-        def spy_chat(messages, temperature=0.7):
-            seen_prompts.append(messages[0]["content"])
-            return "随便聊聊"
-
-        _gc.llm.chat = spy_chat
-        assert wait_for(lambda: any("冷下来了" in p for p in seen_prompts)), \
-            "闲聊没注入冷场指引"
-
-        # 2) 用户一开口：闲聊被打断，话题回归用户（全员回应用户的新消息）
-        ch.sent.clear()
-        _gc.llm.chat = lambda messages, temperature=0.7: "回应小徐"
-        _gc.on_user_text("我回来了", ch)
-        _gc.wait_responders()
-        idx_user = next(i for i, (sp, _) in enumerate(s.transcript) if sp == "小徐"
-                        and _ == "我回来了")
-        after = [sp for sp, _ in s.transcript[idx_user + 1:]]
-        assert "小葵" in after and "稳稳" in after, \
-            f"用户回来后没人接话：{s.transcript}"
-        assert all(tx == "回应小徐" for sp, tx in s.transcript[idx_user + 1:]
-                   if sp != "小徐"), "话题没回到用户"
-
-        # 3) 稳稳睡觉了：新一轮闲聊只有小葵发言
-        _cmd._write_kv_file(tmp / "friend-abc12345.db", "state", "SLEEPING")
-        ch.sent.clear()
-        with _db.PATH_LOCK:
-            s.last_user_ts = 0.0
-            s.last_idle_ts = 0.0
-            s.idle_after = 0.15  # 立刻再触发一轮
-        assert wait_for(lambda: len(ch.sent) >= 2), \
-            f"睡觉判定后闲聊没继续：{ch.sent}"
-        speakers = {sp for sp, _ in ch.sent}
-        assert speakers == {"小葵"}, f"睡觉的稳稳不该发言：{ch.sent}"
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 散群提取不新记
-        _gc.end()
-        print("ok 群聊自主闲聊（冷场开聊/用户打断回归/睡觉成员跳过）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved_timing)
-        _set_timing(saved_idle)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_groupidle_command():
-    """/groupidle：查看/开/关自主闲聊，kv 运行时覆盖优先于 config。"""
-    import tempfile
-    import db as _db
-    import commands as _cmd
-    import groupchat as _gc
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    try:
-        _db.init()
-        assert _gc.idle_enabled() is True  # config 默认开
-        assert "开" in _cmd.handle("/groupidle")
-        assert "已关闭" in _cmd.handle("/groupidle off")
-        assert _gc.idle_enabled() is False
-        assert "关" in _cmd.handle("/groupidle")
-        assert "已开启" in _cmd.handle("/groupidle on")
-        assert _gc.idle_enabled() is True
-        assert "用法" in _cmd.handle("/groupidle xyz")
-        print("ok /groupidle 开关（查看/开/关/运行时覆盖）")
-    finally:
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
 def test_diary_daily_review():
     """P2 日记系统：每日回顾复盘 + 写日记 + 补记/修正记忆 + 幂等 + 命令。"""
     import tempfile
@@ -1250,9 +863,24 @@ def test_diary_daily_review():
     config.DB_PATH = tmp / "friend.db"
     try:
         _db.init()
-        _db.add_message("user", "今天好累啊")
-        _db.add_message("assistant", "辛苦啦，早点休息")
+        # 让 add_message 的时间戳落在"生活日"上：否则跨午夜（00:00~WAKE_HOUR）时
+        # add_message 按墙钟写进"明天"，而 daily_review 按生活日读昨天 → 读到空，
+        # 测试在深夜会误挂（"今天还没怎么聊"）。
+        from datetime import datetime as _dt
         day = _diary._life_day_str()
+
+        class _Clock:
+            @classmethod
+            def now(cls):
+                return _dt.fromisoformat(day + "T12:00:00")
+
+        real_dt = _db.datetime
+        _db.datetime = _Clock
+        try:
+            _db.add_message("user", "今天好累啊")
+            _db.add_message("assistant", "辛苦啦，早点休息")
+        finally:
+            _db.datetime = real_dt
         _db.add_memory("小徐在准备考研", "事件")
 
         real_chat = _diary.llm.chat
@@ -1304,12 +932,26 @@ def test_diary_purge_reviewed_messages():
     config.PURGE_REVIEWED_MESSAGES = True
     try:
         _db.init()
-        _db.add_message("user", "今天聊点什么")
-        _db.add_message("assistant", "随便聊呀")
-        assert len(_db.today_messages()) == 2
+        # 同 test_diary_daily_review：让消息时间戳落在"生活日"，跨午夜不误挂
+        from datetime import datetime as _dt
+        day = _diary._life_day_str()
+
+        class _Clock:
+            @classmethod
+            def now(cls):
+                return _dt.fromisoformat(day + "T12:00:00")
+
+        real_dt = _db.datetime
+        _db.datetime = _Clock
+        try:
+            _db.add_message("user", "今天聊点什么")
+            _db.add_message("assistant", "随便聊呀")
+        finally:
+            _db.datetime = real_dt
+        assert len(_db.today_messages(day)) == 2
         _diary.llm.chat = lambda *a, **k: '{"diary": "聊了聊", "memory_add": [], "memory_delete": []}'
         _diary.daily_review(force=True)
-        assert len(_db.today_messages()) == 0, "回顾线没删干净"
+        assert len(_db.today_messages(day)) == 0, "回顾线没删干净"
         assert _db.get_diary(_diary._life_day_str()) is not None, "日记应保留"
         print("ok 回顾线彻底删除（PURGE_REVIEWED_MESSAGES=on）")
     finally:
@@ -1318,83 +960,11 @@ def test_diary_purge_reviewed_messages():
         _db.init()
 
 
-def test_group_handoff_free_chat():
-    """拉群后用户把焦点交给朋友们（"你们认识一下"），应很快开自由闲聊，不等长空闲。"""
-    import tempfile
-    import time as _t
-    import db as _db
-    import groupchat as _gc
-
-    class Ch:
-        def __init__(self):
-            self.sent = []  # (sender, text)
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    # 正常空闲阈值拉到 60 分钟（测试期间绝不触发），焦点交接阈值压到 0.2s
-    saved = _set_timing({
-        "GROUP_IDLE_AFTER_MIN_MINUTES": 60.0,
-        "GROUP_IDLE_AFTER_MAX_MINUTES": 60.0,
-        "GROUP_IDLE_GAP_MIN_SECONDS": 0.05,
-        "GROUP_IDLE_GAP_MAX_SECONDS": 0.08,
-        "GROUP_IDLE_MAX_TURNS": 3,
-        "GROUP_HANDOFF_IDLE_SECONDS": 0.2,
-        "TYPING_ENABLED": False,
-    })
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: "随便聊聊"
-        _gc.start(parts)
-        _gc.attach_channel(ch)
-
-        # 用户还没说话：60 分钟阈值下不该有闲聊
-        _t.sleep(0.6)
-        assert ch.sent == [], f"用户没说话不该闲聊：{ch.sent}"
-
-        # 用户把焦点交给朋友 → 回应流程完成后，很快出现自主闲聊
-        _gc.on_user_text("哈喽朋友们，你们认识一下新朋友", ch)
-        _gc.wait_responders()
-        after_respond = len(ch.sent)
-        deadline = _t.time() + 3
-        while _t.time() < deadline and len(ch.sent) <= after_respond:
-            _t.sleep(0.03)
-        assert len(ch.sent) > after_respond, \
-            f"焦点交接后没开自由闲聊：{ch.sent}"
-        # 等这轮闲聊彻底跑完（最多 GROUP_IDLE_MAX_TURNS=3 轮），别让它混进后面的"在吗"
-        _t.sleep(0.6)
-
-        # 非交接消息则不受影响：仍走正常长空闲（这里只验证不立即触发）
-        ch.sent.clear()
-        _gc.on_user_text("在吗", ch)
-        _gc.wait_responders()
-        after2 = len(ch.sent)
-        _t.sleep(0.5)
-        assert len(ch.sent) == after2, f"普通消息不该立即触发闲聊：{ch.sent}"
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"  # 散群提取不新记
-        _gc.end()
-        print("ok 群聊焦点交接（你们认识一下→立刻自由闲聊；普通消息不受影响）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
 def test_corpus_consolidation():
     """语料统一收进 corpus.py：固定回复 + 匹配关键词/正则都在，业务模块不再各自硬编码。"""
     import corpus
     import game as _game
     import core as _core
-    import groupchat as _gc
     import guard as _guard
     import memory as _mem
 
@@ -1407,14 +977,12 @@ def test_corpus_consolidation():
     assert corpus.INTRO_FALLBACK.format("阿燃") == "你好啊，我叫阿燃，我们认识一下吧！"
 
     # 匹配关键词/正则（信号词 + 意图词 + 提取红线）都在 corpus，且业务模块不再各自硬编码
-    assert "你们认识" in corpus.HANDOFF_SIGNALS
     assert "在忙" in corpus.BUSY_SIGNALS
     assert "是谁" in corpus.IDENTITY_QUERY
     assert "可能" in corpus.SPECULATION
     assert "我不记得" in corpus.SELF_AMNESIA
     assert not hasattr(_core, "ENDING_SIGNALS"), "core 还留着 ENDING_SIGNALS"
     assert not hasattr(_game, "STOP_WORDS"), "game 还留着 STOP_WORDS"
-    assert not hasattr(_gc, "HANDOFF_SIGNALS"), "groupchat 还留着 HANDOFF_SIGNALS"
     assert not hasattr(_guard, "BUSY_SIGNALS"), "guard 还留着 BUSY_SIGNALS"
     # memory 的红线/意图正则编译自 corpus 词表（源词表不在 memory 硬编码）
     assert _mem._SPECULATION.pattern == corpus.SPECULATION
@@ -1428,479 +996,9 @@ def test_corpus_consolidation():
     # 识别仍工作（走 corpus）
     assert _game.detect_stop("不玩了") is True
     assert _game.detect_stop("今天天气不错") is False
-    assert _gc._is_handoff("你们认识一下新朋友") is True
     assert any(s in "我在忙" for s in corpus.BUSY_SIGNALS)
     assert _mem.wants_memory_search("你还记得小葵吗") is True
     print("ok 语料统一收进 corpus（固定回复 + 匹配关键词/正则，业务模块不再硬编码）")
-
-
-def test_group_llm_fallback():
-    """群聊与私聊同步：LLM 报错时那位朋友说兜底语，不卡死整轮群聊。"""
-    import tempfile
-    import db as _db
-    import groupchat as _gc
-
-    class Ch:
-        def __init__(self):
-            self.sent = []
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    saved = _set_timing({
-        "TYPING_ENABLED": False,
-        "READING_SECONDS_PER_CHAR": 0.0,
-        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
-        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
-    })
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: (_ for _ in ()).throw(
-            _gc.llm.LLMUnavailable("boom"))
-        _gc.start(parts)
-        _gc.attach_channel(ch)
-        _gc.on_user_text("在吗", ch)  # 不应抛异常
-        _gc.wait_responders()
-        assert ch.sent and all("脑子卡住了" in t for _, t in ch.sent), \
-            f"群聊 LLM 兜底不对：{ch.sent}"
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
-        _gc.end()
-        print("ok 群聊 LLM 兜底（报错说'脑子卡住了'，不卡死整轮）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_group_sleeping_member():
-    """群聊睡觉成员处理：回应流程里，睡觉的朋友回迷糊语（和私聊一致），醒着的正常发言。"""
-    import corpus
-    import tempfile
-    import db as _db
-    import groupchat as _gc
-    import commands as _cmd
-
-    class Ch:
-        def __init__(self):
-            self.sent = []
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    saved = _set_timing({
-        "TYPING_ENABLED": False,
-        "READING_SECONDS_PER_CHAR": 0.0,
-        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
-        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.01,
-        "GROUP_RESPOND_MIN": 99,   # 全员，验证睡觉成员处理
-        "GROUP_RESPOND_MAX": 99,
-    })
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)  # 小葵(friend.db) + 稳稳(friend-abc12345.db)
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: "我醒着正常说话"
-        _cmd._write_kv_file(tmp / "friend-abc12345.db", "state", "SLEEPING")  # 稳稳睡觉
-        _gc.start(parts)
-        _gc.attach_channel(ch)
-        _gc.on_user_text("在吗", ch)
-        _gc.wait_responders()
-        by_speaker = {}
-        for sender, text in ch.sent:
-            by_speaker.setdefault(sender, []).append(text)
-        assert any(t in corpus.SLEEPY_REPLIES for t in by_speaker.get("稳稳", [])), \
-            f"睡觉的稳稳没回迷糊语：{ch.sent}"
-        assert any("我醒着正常说话" in t for t in by_speaker.get("小葵", [])), \
-            f"醒着的小葵没正常说话：{ch.sent}"
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
-        _gc.end()
-        print("ok 群聊睡觉成员（回应流程回迷糊语，醒着正常说话）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_group_end_migrates_old_archive():
-    """散群写回/提取时，旧归档库（缺 source 列）自动补列，add_memory(source=group) 不报错。"""
-    import sqlite3
-    import tempfile
-    import db as _db
-    import groupchat as _gc
-
-    class Ch:
-        def __init__(self):
-            self.sent = []
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    saved = _set_timing({**_FAST_TIMING,
-                         "GROUP_RESPOND_MIN": 99, "GROUP_RESPOND_MAX": 99})
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)  # 小葵(friend.db) + 稳稳(friend-abc12345.db)
-        # 把稳稳的归档库改成"旧库"：删掉 source 列模拟老版本
-        with sqlite3.connect(str(tmp / "friend-abc12345.db")) as c:
-            c.execute("ALTER TABLE memories DROP COLUMN source")
-        # mock：回应时当普通文本，散群提取时解析出一条群聊记忆（触发 source=group 写入）
-        _gc.llm.chat = lambda messages, temperature=0.7: \
-            '[{"content": "群聊里认识了新朋友", "category": "人际"}]'
-        _gc.start(parts)
-        _gc.attach_channel(Ch())
-        _gc.on_user_text("大家好", Ch())
-        _gc.wait_responders()
-        out = _gc.end()  # 散群：写回 + 提取——旧库应自动迁移，不报 no column named source
-        assert "散啦" in out, f"散群失败：{out}"
-        with sqlite3.connect(str(tmp / "friend-abc12345.db")) as c:
-            cols = [r[1] for r in c.execute("PRAGMA table_info(memories)")]
-            mems = c.execute("SELECT content, source FROM memories").fetchall()
-        assert "source" in cols, "散群后旧库未补 source 列"
-        assert any("群聊里认识了新朋友" in m[0] and m[1] == "group" for m in mems), \
-            f"群聊记忆没写进旧库：{mems}"
-        print("ok 群聊散群自动迁移旧库（补 source 列 + 群聊记忆落库）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_group_selective_respond():
-    """选择性回应：每次用户发言随机 1~GROUP_RESPOND_MAX 位朋友回应，不全员刷屏；点名谁谁必回。"""
-    import tempfile
-    import db as _db
-    import groupchat as _gc
-
-    class Ch:
-        def __init__(self):
-            self.sent = []
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    saved = _set_timing({
-        "TYPING_ENABLED": False,
-        "READING_SECONDS_PER_CHAR": 0.0,
-        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
-        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.0,
-        "GROUP_RESPOND_MIN": 1,
-        "GROUP_RESPOND_MAX": 1,
-    })
-    real_chat = _gc.llm.chat
-    try:
-        # 3 位朋友：小葵 + 稳稳 + 阿燃
-        parts = _make_two_friend_dbs(tmp)
-        config.DB_PATH = tmp / "friend-dd333333.db"
-        _db.init()
-        _db.set_kv("persona_json", '{"name": "阿燃", "label": "阳光话痨", '
-                                   '"text": "乐天", "wake_hour": 8, "sleep_hour": 23, '
-                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
-        config.DB_PATH = tmp / "friend.db"
-        parts.append(_gc.Participant(tmp / "friend-dd333333.db", "阿燃"))
-
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: "我在"
-        _gc.start(parts)
-        _gc.attach_channel(ch)
-        _gc.CROSS_TALK_PROB = 0.0  # 关串话，只验证第一轮的选择性
-
-        # 1) GROUP_RESPOND_MAX=1：每次只 1 位回应（不再全员刷屏）
-        ch.sent.clear()
-        _gc.on_user_text("在吗", ch)
-        _gc.wait_responders()
-        speakers = {sp for sp, _ in ch.sent if sp}
-        assert len(speakers) == 1, f"应只 1 位回应：{ch.sent}"
-
-        # 2) 点名谁谁必回：用户点名稳稳 → 稳稳必在回应者里
-        ch.sent.clear()
-        _gc.on_user_text("稳稳你来说说", ch)
-        _gc.wait_responders()
-        speakers = {sp for sp, _ in ch.sent if sp}
-        assert "稳稳" in speakers, f"点名的稳稳没回应：{ch.sent}"
-
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
-        _gc.end()
-        print("ok 群聊选择性回应（不全员刷屏 + 点名必回）")
-    finally:
-        _gc.CROSS_TALK_PROB = 0.6
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_group_interject():
-    """插话：回应进行中用户消息不阻塞（异步回应）；AI 发完手头这条才看新消息。"""
-    import tempfile
-    import time as _t
-    import db as _db
-    import groupchat as _gc
-
-    class Ch:
-        def __init__(self):
-            self.sent = []   # (sender, text)
-        def send(self, text, sender=""):
-            self.sent.append((sender, text))
-        def typing(self, sender=""):
-            self.sent.append((sender, "…正在输入"))
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    saved = _set_timing({
-        "READING_SECONDS_PER_CHAR": 0.0,
-        "TYPING_ENABLED": True,
-        "TYPING_SECONDS_PER_CHAR": 0.2,
-        "TYPING_MIN_SECONDS": 0.2,
-        "TYPING_MAX_SECONDS": 0.2,
-        "GROUP_SPEAKER_GAP_MIN_SECONDS": 0.0,
-        "GROUP_SPEAKER_GAP_MAX_SECONDS": 0.0,
-        "GROUP_RESPOND_MIN": 99,
-        "GROUP_RESPOND_MAX": 99,
-    })
-    real_chat = _gc.llm.chat
-    try:
-        parts = _make_two_friend_dbs(tmp)  # 小葵 + 稳稳
-        ch = Ch()
-        _gc.llm.chat = lambda messages, temperature=0.7: "我在听"
-        _gc.start(parts)
-        _gc.attach_channel(ch)
-
-        # 用户发第一条消息，回应在后台进行
-        _gc.on_user_text("大家好", ch)
-        _t.sleep(0.03)   # 让回应流程启动
-
-        # 回应进行中插话：on_user_text 应立即返回（不被回应流程阻塞）
-        t0 = _t.time()
-        _gc.on_user_text("我插一句", ch)
-        blocked = _t.time() - t0
-        assert blocked < 0.15, f"插话被回应流程阻塞了：{blocked:.2f}s"
-
-        _gc.wait_responders()
-        s = _gc.current()
-        user_texts = [tx for sp, tx in s.transcript if sp == "小徐"]
-        assert "大家好" in user_texts and "我插一句" in user_texts, \
-            f"两条用户消息都应入 transcript：{user_texts}"
-        # 有朋友回应了（手头这条最终发出，没卡死）
-        assert any(sp != "小徐" for sp, _ in s.transcript), "没人回应"
-
-        _gc.llm.chat = lambda messages, temperature=0.7: "[]"
-        _gc.end()
-        print("ok 群聊插话（用户消息不阻塞 + 发完手头再看）")
-    finally:
-        _gc.llm.chat = real_chat
-        if _gc._session is not None:
-            _gc._session.active = False
-        _gc._session = None
-        _set_timing(saved)
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_info_dispatch():
-    """信息调度层（P2）：source 迁移 + 群聊记忆优先 + 统一优先级 + 长会话摘要兜底。"""
-    import sqlite3
-    import tempfile
-    import db as _db
-    import memory as _mem
-    import context as _ctx
-    import groupchat as _gc
-    import llm as _llm
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    real_chat = _llm.chat
-    real_win = config.GROUP_CONTEXT_MESSAGES
-    try:
-        _db.init()
-        # 0) source 列迁移：模拟旧库（删 source 列）后 init 应自动补回
-        with sqlite3.connect(str(config.DB_PATH)) as c:
-            c.execute("ALTER TABLE memories DROP COLUMN source")
-        _db.init()
-        with sqlite3.connect(str(config.DB_PATH)) as c:
-            cols = [r[1] for r in c.execute("PRAGMA table_info(memories)")]
-        assert "source" in cols, "旧库迁移未补 source 列"
-
-        # 1) 记忆 source 标签：1:1 默认 private；_apply(source='group') 记 group
-        _db.add_memory("小徐爱吃辣", "偏好")
-        _mem._apply({"content": "群聊里认识了新朋友阿燃", "category": "人际"},
-                    source="group")
-        by_content = {m["content"]: m for m in _db.all_memories()}
-        assert by_content["小徐爱吃辣"]["source"] == "private"
-        assert by_content["群聊里认识了新朋友阿燃"]["source"] == "group"
-
-        # 2) 群聊记忆优先召回：超过全量阈值后，group_first 让 group 记忆排最前
-        for i in range(12):  # 填充超过全量返回阈值（10 条）
-            _db.add_memory(f"无关填充{i}号天气", "事件", theme="其他")
-        hits = _mem.recall("阿燃是谁", top_k=3, group_first=True)
-        assert hits and "阿燃" in hits[0]["content"], \
-            f"群聊记忆未优先召回：{[m['content'] for m in hits]}"
-
-        # 3) 统一优先级：便签 > profile 在 system（"以这里为准"），
-        #    记忆作为 system 注入、排在聊天上下文（user/assistant）之前
-        _db.add_fact("叫我小徐")
-        _db.add_message("user", "阿燃是谁来着")
-        _db.add_message("assistant", "我也有点记不清了")
-        msgs = _ctx.build_chat_messages("AWAKE", ["阿燃是谁来着"])
-        assert msgs[0]["role"] == "system", "首条应为 system（人设+便签+profile）"
-        assert "叫我小徐" in msgs[0]["content"], "事实便签未注入 system"
-        assert "以这里为准" in msgs[0]["content"], "便签优先级标注缺失"
-        roles = [m["role"] for m in msgs]
-        assert roles.count("system") >= 2, f"记忆应作为 system 注入：{roles}"
-        assert any("旧记忆" in m["content"] and "阿燃" in m["content"]
-                   for m in msgs if m["role"] == "system"), "记忆内容未注入"
-        last_system = max(i for i, r in enumerate(roles) if r == "system")
-        first_convo = min(i for i, r in enumerate(roles) if r in ("user", "assistant"))
-        assert last_system < first_convo, "记忆(system) 应排在聊天上下文之前"
-
-        # 4) 长会话摘要兜底：滚出窗口的更早内容压成摘要注入
-        config.GROUP_CONTEXT_MESSAGES = 5
-        s = _gc.GroupSession([_gc.Participant(tmp / "friend.db", "小葵"),
-                              _gc.Participant(tmp / "friend-b.db", "稳稳")])
-        s.transcript = [("小徐", f"第{i}句") for i in range(9)]
-        _llm.chat = lambda messages, temperature=0.7: "早前摘要：介绍了新朋友阿燃"
-        _gc._maybe_summarize(s)
-        assert s.summarized_upto == 4, f"应摘要 9-5=4 条：{s.summarized_upto}"
-        assert "阿燃" in s.summary, f"摘要未生成：{s.summary!r}"
-        _llm.chat = lambda *a, **k: "不应再被调用"  # 无新内容滚出时幂等
-        _gc._maybe_summarize(s)
-        assert s.summarized_upto == 4, "摘要不幂等"
-        # 摘要注入 + 窗口只留最近 5 条
-        msgs = _ctx.build_group_messages("sys", s.transcript, idle=False,
-                                         summary=s.summary)
-        joined = "\n".join(m["content"] for m in msgs)
-        assert "更早的群聊摘要" in joined and "阿燃" in joined, "摘要未注入"
-        assert "第8句" in msgs[-1]["content"], "窗口未保留最近内容"
-        assert "第0句" not in msgs[-1]["content"], "滚出窗口的内容仍在上下文里"
-        print("ok 信息调度层（source迁移/群聊记忆优先/统一优先级/长会话摘要兜底）")
-    finally:
-        _llm.chat = real_chat
-        config.GROUP_CONTEXT_MESSAGES = real_win
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_backfill_group():
-    """补提取群聊记忆：kind='group' 记录重新提取，格式化发言人并写 source='group'。"""
-    import json
-    import tempfile
-    import db as _db
-    import memory as _mem
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    real_chat = _mem.llm.chat
-    try:
-        _db.init()
-        _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
-                                   '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
-                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
-        _db.add_message("user", "【群聊·小徐】哈喽", kind="group")
-        _db.add_message("assistant", "【群聊·小葵】哈喽哈喽", kind="group")
-        _db.add_message("assistant", "【群聊·初遇朋友】你们好", kind="group")
-        calls = []
-
-        def fake_chat(messages, temperature=0.7):
-            calls.append(messages)
-            return json.dumps([{"content": "群聊里认识了新朋友阿燃", "category": "人际"}],
-                              ensure_ascii=False)
-
-        _mem.llm.chat = fake_chat
-        added = _mem.backfill_group(progress=lambda *a: None)
-        assert added == 1, f"补提取应记 1 条：{added}"
-        user_msg = calls[0][-1]["content"]
-        assert "用户：哈喽" in user_msg and "小葵：哈喽哈喽" in user_msg, \
-            f"群聊记录格式化不对：{user_msg}"
-        assert "【群聊·" not in user_msg, "发言人不该保留【群聊·前缀"
-        mems = _db.all_memories()
-        assert any(m["content"] == "群聊里认识了新朋友阿燃" and m["source"] == "group"
-                   for m in mems), f"群聊记忆没写 source=group：{mems}"
-        print("ok 补提取群聊记忆（kind=group 格式化 + source=group 落库）")
-    finally:
-        _mem.llm.chat = real_chat
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_group_memory_in_private_chat():
-    """私聊时群聊记忆统一召回（含最近群聊新鲜度加分）+「群聊」标注 + 来源提示。"""
-    import tempfile
-    import db as _db
-    import memory as _mem
-    import context as _ctx
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    try:
-        _db.init()
-        _db.set_kv("persona_json", '{"name": "小葵", "label": "阳光话痨", '
-                                   '"text": "话痨", "wake_hour": 8, "sleep_hour": 23, '
-                                   '"bubble_mult": 1.0, "drawn_at": "2026-10-06"}')
-        _db.add_memory("群聊里认识了新朋友阿燃", "人际", source="group")
-        _db.add_memory("小徐爱吃辣", "偏好", source="private")
-
-        # 1) 群聊记忆带「群聊」标注，私聊记忆不带
-        g = _ctx._memory_line({"content": "群聊里认识了新朋友阿燃", "source": "group",
-                               "time_label": "", "created_at": "2026-10-07T12:00:00"})
-        assert "群聊" in g, f"群聊记忆缺标注：{g}"
-        p = _ctx._memory_line({"content": "小徐爱吃辣", "source": "private",
-                               "time_label": "", "created_at": "2026-10-07T12:00:00"})
-        assert "群聊" not in p, f"私聊记忆不该有群聊标注：{p}"
-
-        # 2) 私聊统一召回群聊记忆，召回含群聊记忆时补来源提示（别搞混）
-        _db.add_message("user", "今天想你了")
-        msgs = _ctx.build_chat_messages("AWAKE", ["今天想你了"])
-        joined = "\n".join(m["content"] for m in msgs)
-        assert "群聊里认识了新朋友阿燃" in joined, "私聊未召回群聊记忆"
-        assert "别搞混" in joined, "私聊群聊记忆缺来源提示"
-
-        # 3) 记忆 >10 条时，私聊也能想起"最近群聊记忆"（新鲜度加分兜底）
-        for i in range(12):
-            _db.add_memory(f"无关填充{i}号天气", "事件", theme="其他")
-        hits = _mem.recall("今天想你了", top_k=5, group_first=False)
-        contents = [m["content"] for m in hits]
-        assert "群聊里认识了新朋友阿燃" in contents, \
-            f"私聊未召回最近群聊记忆：{contents}"
-        print("ok 私聊群聊记忆（统一召回 + 群聊标注 + 来源提示 + 最近群聊新鲜度加分）")
-    finally:
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
 
 
 def test_identity_recall():
@@ -1920,7 +1018,7 @@ def test_identity_recall():
         for i in range(12):
             _db.add_memory(f"小葵琐事{i}号：拿快递晾衣服", "事件", person="小葵")
 
-        hits = _mem.recall("你还记得小葵吗", top_k=3, group_first=False)
+        hits = _mem.recall("你还记得小葵吗", top_k=3)
         contents = [m["content"] for m in hits]
         assert any("拉进来互相认识" in c for c in contents), \
             f"身份记忆没进 top：{contents}"
@@ -2071,45 +1169,6 @@ def test_memory_tool_calling():
         _db.init()
 
 
-def test_memory_tool_source_filter():
-    """检索工具按来源过滤（source=group 只搜群聊记忆）+ 召回为空返回"记不清"大脑反馈。"""
-    import tempfile
-    import db as _db
-    import memory as _mem
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR = tmp
-    config.DB_PATH = tmp / "friend.db"
-    try:
-        _db.init()
-
-        # 1) 空库：召回为空返回"回忆不起来了"（拟人大脑反馈，不是"没查到"）
-        assert "回忆不起来" in _mem.run_memory_tool("search_memories", {"query": "随便搜"})
-
-        # 2) source 过滤命中：group 只搜群聊、private 只搜私聊
-        _db.add_memory("群聊里认识了新朋友阿燃", "人际", source="group")
-        _db.add_memory("小徐爱吃辣", "偏好", source="private")
-        g = _mem.recall("认识", source="group")
-        assert g and all(m.get("source", "private") == "group" for m in g), \
-            f"source=group 应只返回群聊记忆：{g}"
-        assert any("阿燃" in m["content"] for m in g)
-        p = _mem.recall("爱吃", source="private")
-        assert p and all(m.get("source", "private") == "private" for m in p)
-
-        # 3) 非法 source 值：不过滤、不报错
-        assert _mem.recall("认识", source="bogus") is not None
-
-        # 4) 工具 schema 含 source 参数（两个工具都有）
-        for t in _mem.MEMORY_TOOLS:
-            assert "source" in t["function"]["parameters"]["properties"]
-
-        print("ok 检索工具来源过滤（source=group 只搜群聊 + 召回空返回回忆不起来）")
-    finally:
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -2120,31 +1179,16 @@ if __name__ == "__main__":
     test_session_end_and_outbox()
     test_memory_append_timeline()
     test_memory_v2()
-    test_groupchat()
     test_typing_indicator()
     test_profile_autofill()
     test_interrupt_detection()
-    test_group_persist_and_friend_name()
     test_db_path_lock()
     test_corpus_pick()
     test_corpus_consolidation()
     test_bubble_fixed_corpus()
-    test_group_timing()
-    test_group_idle_chatter()
-    test_groupidle_command()
-    test_group_handoff_free_chat()
-    test_group_llm_fallback()
-    test_group_sleeping_member()
-    test_group_end_migrates_old_archive()
-    test_group_selective_respond()
-    test_group_interject()
-    test_info_dispatch()
-    test_backfill_group()
-    test_group_memory_in_private_chat()
     test_identity_recall()
     test_long_memory()
     test_memory_tool_calling()
-    test_memory_tool_source_filter()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")

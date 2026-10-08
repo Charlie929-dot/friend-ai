@@ -26,10 +26,6 @@ def make_channel(name: str):
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "cli"
     db.init()
-    import groupchat
-    recovered = groupchat.recover_pending()  # 上次群聊没散场就退了的话，补写回
-    if recovered:
-        print(recovered)
     if mode == "cli":
         # 启动先选聊天对象（在引擎/调度器创建前，选完作息按选中朋友排）
         cmd = commands.pick_friend_on_startup()
@@ -51,16 +47,8 @@ def main():
                 engine.on_persona_changed()  # 人格/朋友变了，重排作息与冒泡
             elif cmd0 == "/refresh":
                 engine.on_config_reloaded()  # 热重载后定时任务按新配置重排
-            elif cmd0 == "/group":
-                import groupchat
-                if groupchat.is_active():
-                    groupchat.attach_channel(channel)  # 自主闲聊得有地方发言
         else:
-            import groupchat
-            if groupchat.is_active():
-                groupchat.on_user_text(text, channel)  # 群聊模式：大家轮流说
-            else:
-                engine.on_user_message(text)
+            engine.on_user_message(text)
 
     import scheduler
     sch = scheduler.start(engine)

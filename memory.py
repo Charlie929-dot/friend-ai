@@ -223,11 +223,8 @@ _LEGACY_CATEGORY = {"fact": "画像", "preference": "偏好", "plan": "计划",
                     "event": "事件", "person": "人际"}
 
 
-def _apply(item: dict, assistant_tail: bool = False, source: str = "private") -> bool:
-    """落库一条提取结果。返回是否新记了一条。
-
-    source: 'private'（1:1 提取）/ 'group'（群聊提取）——信息调度层据此
-    在群聊场景下优先召回群聊来源的记忆。"""
+def _apply(item: dict, assistant_tail: bool = False) -> bool:
+    """落库一条提取结果。返回是否新记了一条。"""
     content = str(item["content"]).strip()
 
     # AI 提议删除：只标记待确认，不真删（用户 /delmem 确认、/keepmem 保留）
@@ -287,14 +284,14 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
 
     if is_long:
         long_id = db.add_long_memory(content, full, category, tags, time_label,
-                                     place, person, theme, source)
+                                     place, person, theme)
         db.add_memory(content, category, tags, time_label, place, person, theme,
-                      source, long_id=long_id)
+                      long_id=long_id)
         print(f"[memory] 记住长文：({category}|{theme or '—'}) {content[:30]}…"
               f"（全文 {len(full)} 字，B库#{long_id}）")
         return True
 
-    db.add_memory(content, category, tags, time_label, place, person, theme, source)
+    db.add_memory(content, category, tags, time_label, place, person, theme)
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
     return True
@@ -372,57 +369,6 @@ def backfill_history(batch: int = 16, progress=print) -> int:
     return added
 
 
-_GROUP_PREFIX = re.compile(r"^【群聊·([^】]+)】\s*")
-
-
-def backfill_group(batch: int = 12, progress=print) -> int:
-    """补提取群聊记忆：把 messages 里 kind='group' 的记录重新喂给提取器，
-    写 source='group' 的记忆。修复散群时提取失败（如旧库缺列）导致的遗漏。
-
-    群聊记录 content 格式 = 「【群聊·发言人】内容」，发言人可能是多个朋友；
-    提取时把「config.USER_NAME」映射成「用户」、其余保留朋友名，让提取器分清谁说了什么。
-    「我」= 当前朋友（_extract_prompt 注入的人格名）。断点续跑：memfill_group_offset。"""
-    offset = int(db.get_kv("memfill_group_offset", "0") or 0)
-    added = 0
-    while True:
-        rows = db.group_messages_page(offset, batch)
-        if not rows:
-            break
-        lines = []
-        for r in rows:
-            m = _GROUP_PREFIX.match(r["content"])
-            if m:
-                who = "用户" if m.group(1) == config.USER_NAME else m.group(1)
-                lines.append(f"{who}：{r['content'][m.end():]}")
-            else:
-                lines.append(r["content"])
-        convo = "\n".join(lines)
-        # 用这批消息最后一条的时间作参照，相对时间词才锚定到事发当天
-        try:
-            ref = datetime.fromisoformat(rows[-1]["ts"])
-        except (ValueError, KeyError):
-            ref = datetime.now()
-        week = "一二三四五六日"[ref.weekday()]
-        user_msg = (f"【现在时间】{ref:%Y-%m-%d} 周{week} {ref:%H:%M}\n\n"
-                    f"【群聊记录】\n{convo}")
-        known = [m["content"] for m in db.all_memories(limit=50)
-                 if m.get("status", "ok") == "ok"]
-        if known:
-            user_msg += ("\n\n【已知记忆（内容几乎一样的不要重复提取）】\n"
-                         + "\n".join(f"- {x}" for x in known[:50]))
-        raw = llm.chat([
-            {"role": "system", "content": _extract_prompt()},
-            {"role": "user", "content": user_msg},
-        ], temperature=0.2)
-        for it in _parse_json_array(raw):
-            if _apply(it, False, source="group"):
-                added += 1
-        offset = rows[-1]["id"]
-        db.set_kv("memfill_group_offset", str(offset))
-        progress(f"[memfill-group] 已处理到第 {offset} 条，新记 {added} 条…")
-    return added
-
-
 def _bigrams(s: str) -> set[str]:
     s = re.sub(r"\s", "", s)
     return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) > 1 else {s}
@@ -451,9 +397,6 @@ def _query_time_tokens(query: str) -> list[str]:
     tokens.extend(p for p in _PERIODS if p in query)
     return tokens
 
-
-# 私聊场景下，享受"新鲜度加分"的最近群聊记忆条数（原来兜底注入也是 5 条）
-_GROUP_RECENT_COUNT = 5
 
 # 身份/关系询问的意图词：词表在 corpus（语料，可扩充）
 _IDENTITY_QUERY = re.compile(corpus.IDENTITY_QUERY)
@@ -519,31 +462,17 @@ def expand_long_memory(mem: dict) -> str | None:
     return None
 
 
-def recall(query: str, top_k: int = 5, group_first: bool = False,
-           expand_long: bool = False, source: str | None = None) -> list[dict]:
+def recall(query: str, top_k: int = 5, expand_long: bool = False) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
     记忆总量还小（≤10）时直接全量返回——早期每条都珍贵。
     打分：bigram/关键词重叠 + 时间标签加成（query 的相对时间词换算成日期匹配）。
     命中后同组（category+theme 完全一致）的更新进展一起带出——
-    AI 看到的是时间线的最新状态，不是过时记忆。
-    group_first=True（群聊场景）：群聊来源的记忆（source='group'）一律加分优先——
-    同处一个群里的往事，比私聊里的事更贴合当下群聊语境。
-    group_first=False（私聊场景）：最近 _GROUP_RECENT_COUNT 条群聊记忆加分
-    （温和于群聊场景）——私聊也能自然想起群里最近聊过的事、不会"群聊失忆"；
-    更早的群聊记忆靠关键词命中召回。"""
+    AI 看到的是时间线的最新状态，不是过时记忆。"""
     mems = [m for m in db.all_memories(limit=200)
             if m.get("status", "ok") == "ok"]  # 待确认删除的不参与召回
-    # 来源过滤：AI 主动检索时按用户语境指定（"群聊"→只在群聊记忆里搜）。
-    # 一旦指定 group，群聊记忆全量参与，不再受私聊场景"最近 5 条"的新鲜度限制。
-    if source in ("group", "private"):
-        mems = [m for m in mems if m.get("source", "private") == source]
     if not mems:
         return []
     if len(mems) <= 10:
-        if group_first:
-            # 记忆少时也把群聊来源的排前面
-            mems.sort(key=lambda m: (0 if m.get("source", "private") == "group" else 1,
-                                     -m["id"]))
         for m in mems:
             db.touch_memory(m["id"])
         return _attach_long(mems[:top_k * 2], expand_long)
@@ -553,12 +482,6 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
     # 意图感知：问"是谁/认识/记得"→ 人际记忆优先；query 点到人名 → person 标签命中优先
     identity_q = bool(_IDENTITY_QUERY.search(query))
     q_names = _query_person_names(query)
-    # 私聊场景：最近几条群聊记忆给温和加分（新鲜度兜底，防"群聊失忆"）
-    recent_group_ids: set[int] = set()
-    if not group_first:
-        gids = sorted((m["id"] for m in mems
-                       if m.get("source", "private") == "group"), reverse=True)
-        recent_group_ids = set(gids[:_GROUP_RECENT_COUNT])
     scored = []
     for m in mems:
         # 五维标签全部参与匹配（人物/地点/主题往往是检索入口）
@@ -574,12 +497,6 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
         # 修"记得小葵吗"只召回"小葵拿快递"、召不回"介绍认识"的排序缺陷
         if identity_q and m["category"] == "人际":
             score += 3.0
-        # 群聊来源记忆加分：群聊场景全量优先 / 私聊场景最近几条温和优先
-        if m.get("source", "private") == "group":
-            if group_first:
-                score += config.GROUP_MEMORY_BONUS
-            elif m["id"] in recent_group_ids:
-                score += config.GROUP_RECENT_BONUS
         if score >= 1.0:
             scored.append((score, m))
     scored.sort(key=lambda x: (-x[0], -x[1]["id"]))
@@ -615,19 +532,16 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
 # "想起来了/回忆不起来了"的体感口吻，不出现"搜索/检索/数据库/工具"这类词。
 _TOOL_SEARCH_DESC = (
     "这是你的记忆，你可以随时回想。想不起某件事、需要回忆过去聊过的内容时，"
-    "就回想一下。别每句话都回想，真的需要才回想。"
-    "如果对方说的是群里/群聊里发生的事，用 source=group 专门回想群里的记忆。")
+    "就回想一下。别每句话都回想，真的需要才回想。")
 _TOOL_DETAIL_DESC = (
     "把模糊的印象想成完整的细节。当上面的回想结果里某条标了【还有长文】，"
-    "且你想把整件事想起来时，用它展开。"
-    "同样：对方说的是群里的事就传 source=group。")
+    "且你想把整件事想起来时，用它展开。")
 _TOOL_NO_QUERY = "（一下子不知道该从哪想起）"
 _TOOL_NO_HIT = "（回忆不起来了）"
 _TOOL_HIT_PREFIX = "想起来了："
 _TOOL_DETAIL_NO_HIT = "（细节回忆不起来了）"
 _TOOL_DETAIL_PREFIX = "想起来的具体内容："
 _TOOL_UNKNOWN = "（不知道这是什么能力）"
-_TOOL_GROUP_TAG = "（群聊）"
 _TOOL_LONG_MARK = "【还有长文，可以再回想一下】"
 _TOOL_FULL_PREFIX = "（想起来的完整内容）"
 
@@ -643,11 +557,6 @@ MEMORY_TOOLS = [
                     "query": {
                         "type": "string",
                         "description": "你想回想的事，用你自己的话说出来。可以多想几个相关的词一起回想：比如想'几点睡'，就一起想'睡觉时间 作息 熬夜 凌晨'。",
-                    },
-                    "source": {
-                        "type": "string",
-                        "enum": ["private", "group", "all"],
-                        "description": "这些事发生在哪：group=在群里发生的，private=单独聊的，all=都回想一下。对方提到'群里/群聊/那天在群里'就用 group。",
                     },
                 },
                 "required": ["query"],
@@ -666,11 +575,6 @@ MEMORY_TOOLS = [
                         "type": "string",
                         "description": "想展开细节的那件事（用你自己的话说，可多想几个相关词）。",
                     },
-                    "source": {
-                        "type": "string",
-                        "enum": ["private", "group", "all"],
-                        "description": "这些事发生在哪：group=在群里发生的，private=单独聊的，all=都回想一下。",
-                    },
                 },
                 "required": ["query"],
             },
@@ -684,9 +588,8 @@ def _render_tool_memories(mems: list[dict]) -> str:
     语义一致，但这里自包含，避免 memory↔context 循环依赖。"""
     lines = []
     for m in mems:
-        tag = _TOOL_GROUP_TAG if m.get("source") == "group" else ""
         anchor = f"（{m['time_label']}）" if m.get("time_label") else ""
-        line = f"- {tag}{anchor}{m['content']}"
+        line = f"- {anchor}{m['content']}"
         if m.get("long_id"):
             line += _TOOL_LONG_MARK
         lines.append(line)
@@ -698,18 +601,15 @@ def _render_tool_memories(mems: list[dict]) -> str:
 def run_memory_tool(name: str, args: dict) -> str:
     """执行记忆检索工具，返回渲染好的文本结果（供 AI 阅读后继续回复）。"""
     query = str(args.get("query", "")).strip()
-    source = str(args.get("source", "")).strip() or None
-    if source not in ("group", "private"):
-        source = None  # 只认 group/private，其余（含 all/空/乱填）一律不过滤
     if not query:
         return _TOOL_NO_QUERY
     if name == "search_memories":
-        hits = recall(query, top_k=5, group_first=False, source=source)
+        hits = recall(query, top_k=5)
         if not hits:
             return _TOOL_NO_HIT
         return _TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
     if name == "recall_detail":
-        hits = recall(query, top_k=3, group_first=False, expand_long=True, source=source)
+        hits = recall(query, top_k=3, expand_long=True)
         if not hits:
             return _TOOL_DETAIL_NO_HIT
         return _TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)

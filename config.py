@@ -88,28 +88,6 @@ BUBBLE_FIXED_PROB = float(os.environ.get("BUBBLE_FIXED_PROB", "0.35"))  # 冒泡
 DIARY_ENABLED = os.environ.get("DIARY_ENABLED", "on").lower() == "on"          # 每日回顾/写日记总开关
 PURGE_REVIEWED_MESSAGES = os.environ.get("PURGE_REVIEWED_MESSAGES", "off").lower() == "on"  # 回顾线彻底删除：复盘写日记后清掉当日原始对话（默认关，安全）
 
-# --- 群聊：成员间的时间感 ---
-GROUP_SPEAKER_GAP_MIN_SECONDS = float(os.environ.get("GROUP_SPEAKER_GAP_MIN_SECONDS", "0.8"))  # 上一位说完，下一位接话的间隔
-GROUP_SPEAKER_GAP_MAX_SECONDS = float(os.environ.get("GROUP_SPEAKER_GAP_MAX_SECONDS", "2.5"))
-
-# --- 群聊：自主闲聊（用户没说话、群里没有话题焦点时 AI 们自己聊） ---
-GROUP_IDLE_CHATTER = os.environ.get("GROUP_IDLE_CHATTER", "on").lower() == "on"   # 总开关（/groupidle 可运行时覆盖）
-GROUP_IDLE_AFTER_MIN_MINUTES = float(os.environ.get("GROUP_IDLE_AFTER_MIN_MINUTES", "3"))   # 用户沉默多久后开聊
-GROUP_IDLE_AFTER_MAX_MINUTES = float(os.environ.get("GROUP_IDLE_AFTER_MAX_MINUTES", "8"))
-GROUP_IDLE_GAP_MIN_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MIN_SECONDS", "20"))  # 闲聊时拉长的"阅读+回复"间隔
-GROUP_IDLE_GAP_MAX_SECONDS = float(os.environ.get("GROUP_IDLE_GAP_MAX_SECONDS", "60"))
-GROUP_IDLE_MAX_TURNS = int(os.environ.get("GROUP_IDLE_MAX_TURNS", "6"))   # 一次闲聊最多几轮（省 token）
-GROUP_HANDOFF_IDLE_SECONDS = float(os.environ.get("GROUP_HANDOFF_IDLE_SECONDS", "5"))  # 用户把焦点交给朋友们（"你们认识一下"）后，多快开始自由闲聊
-GROUP_CONTEXT_MESSAGES = int(os.environ.get("GROUP_CONTEXT_MESSAGES", "30"))         # 群聊回应流程注入的上下文条数（越大越记得住早前内容，越耗 token）
-GROUP_IDLE_CONTEXT_MESSAGES = int(os.environ.get("GROUP_IDLE_CONTEXT_MESSAGES", "20"))  # 自主闲聊的上下文条数（短一点省 token）
-GROUP_RESPOND_MIN = int(os.environ.get("GROUP_RESPOND_MIN", "1"))                     # 每次用户发言最少几位朋友回应
-GROUP_RESPOND_MAX = int(os.environ.get("GROUP_RESPOND_MAX", "2"))                     # 最多几位（不全员刷屏）
-
-# --- 信息调度层（P2：上下文组装与优先级） ---
-GROUP_MEMORY_BONUS = float(os.environ.get("GROUP_MEMORY_BONUS", "2.0"))               # 群聊场景下，群聊来源记忆（source=group）的召回加分
-GROUP_RECENT_BONUS = float(os.environ.get("GROUP_RECENT_BONUS", "1.2"))               # 私聊场景下，最近几条群聊记忆的温和加分（让私聊也能想起群里最近的事，弱于群聊场景的 2.0）
-GROUP_SUMMARY_ENABLED = os.environ.get("GROUP_SUMMARY_ENABLED", "on").lower() == "on"  # 长会话防遗忘：早前滚出窗口的群聊内容压成摘要兜底
-
 # --- 记忆主动检索（function calling / MCP 阶段） ---
 MEMORY_TOOLS_ENABLED = os.environ.get("MEMORY_TOOLS_ENABLED", "on").lower() == "on"   # AI 在对话里主动调检索工具的总开关（反复要求回忆时自己翻记忆库）
 MEMORY_TOOL_MAX_ROUNDS = int(os.environ.get("MEMORY_TOOL_MAX_ROUNDS", "3"))           # 一轮回复里工具调用循环的最大轮数（防无限循环/失控）

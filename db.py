@@ -7,7 +7,7 @@ from datetime import date, datetime
 import config
 
 # 库切换互斥锁：所有依赖"当前朋友库"一致性的多步流程（回复生成、记忆提取、
-# 主动消息、群聊发言）与切库操作（/friend、/new-friend、群聊/散群）互斥。
+# 主动消息）与切库操作（/friend、/new-friend）互斥。
 # 不修这个锁的话，后台线程（记忆提取/回复）会在用户切换朋友的瞬间
 # 把数据写进换人后的库（实测出现过记忆串库）。
 PATH_LOCK = threading.RLock()
@@ -42,8 +42,7 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at TEXT NOT NULL,  -- 存储时间（什么时候记下的，与事发时间是两个维度）
     recalled_at TEXT NOT NULL DEFAULT '',  -- 上次被召回时间
     recall_count INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'ok',  -- ok / pending_delete（AI 提议删除，待用户确认）
-    source TEXT NOT NULL DEFAULT 'private'  -- private（1:1 提取）/ group（群聊提取）
+    status TEXT NOT NULL DEFAULT 'ok'  -- ok / pending_delete（AI 提议删除，待用户确认）
 );
 CREATE TABLE IF NOT EXISTS diary (
     date TEXT PRIMARY KEY,              -- 生活日日期（YYYY-MM-DD，睡一觉才算新的一天）
@@ -65,8 +64,7 @@ CREATE TABLE IF NOT EXISTS long_memories (
     created_at TEXT NOT NULL,
     recalled_at TEXT NOT NULL DEFAULT '',
     recall_count INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'ok',    -- ok / pending_delete
-    source TEXT NOT NULL DEFAULT 'private'  -- private / group
+    status TEXT NOT NULL DEFAULT 'ok'    -- ok / pending_delete
 );
 """
 
@@ -88,9 +86,6 @@ def init():
         # 旧库迁移：删除待确认状态（记忆系统 v2）
         if "status" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'")
-        # 旧库迁移：记忆来源标签（信息调度层：群聊记忆 group / 1:1 记忆 private）
-        if "source" not in cols:
-            c.execute("ALTER TABLE memories ADD COLUMN source TEXT NOT NULL DEFAULT 'private'")
         # 旧库迁移：A/B 两级库——A 库记忆可挂一条 B 库长文（long_id 指向 long_memories.id，0=无）
         if "long_id" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN long_id INTEGER NOT NULL DEFAULT 0")
@@ -165,17 +160,6 @@ def messages_page(after_id: int, limit: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def group_messages_page(after_id: int, limit: int) -> list[dict]:
-    """按 id 顺序取群聊记录（补提取群聊记忆用），after_id 之后的一批。"""
-    with _conn() as c:
-        rows = c.execute(
-            "SELECT id, ts, role, content FROM messages "
-            "WHERE kind='group' AND id > ? ORDER BY id LIMIT ?",
-            (after_id, limit),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
 def last_user_message_ts() -> datetime | None:
     with _conn() as c:
         row = c.execute(
@@ -243,13 +227,13 @@ def reset_counter(key: str):
 # --- 记忆系统 v1：AI 自动从对话提取的长期记忆（五维标签） ---
 def add_memory(content: str, category: str = "画像", tags: str = "",
                time_label: str = "", place: str = "", person: str = "",
-               theme: str = "", source: str = "private", long_id: int = 0) -> int:
+               theme: str = "", long_id: int = 0) -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at, source, long_id)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at, long_id)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (content, category, tags, time_label, place, person, theme,
-             datetime.now().isoformat(timespec="seconds"), source, long_id),
+             datetime.now().isoformat(timespec="seconds"), long_id),
         )
         return cur.lastrowid
 
@@ -323,13 +307,13 @@ def memory_count() -> int:
 # AI 先看摘要，觉得相关才"跳转"展开全文，避免把长文全塞进上下文。
 def add_long_memory(summary: str, content: str, category: str = "事件", tags: str = "",
                     time_label: str = "", place: str = "", person: str = "",
-                    theme: str = "", source: str = "private") -> int:
+                    theme: str = "") -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, theme, created_at, source)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, theme, created_at)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (summary, content, category, tags, time_label, place, person, theme,
-             datetime.now().isoformat(timespec="seconds"), source),
+             datetime.now().isoformat(timespec="seconds")),
         )
         return cur.lastrowid
 

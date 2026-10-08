@@ -38,11 +38,6 @@ def can_send_proactive(now: datetime | None = None, scenario: str = "") -> tuple
     if game.current():
         return False, "游戏中"
 
-    # 0.6 群聊模式：拉群聊天期间暂停主动冒泡，散群自动恢复
-    import groupchat
-    if groupchat.is_active():
-        return False, "群聊中"
-
     if not guard_enabled():
         return True, "ok"
 
