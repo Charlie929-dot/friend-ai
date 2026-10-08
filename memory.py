@@ -615,7 +615,7 @@ _TOOL_SEARCH_DESC = (
     "就回想一下。别每句话都回想，真的需要才回想。"
     "如果用户说的是群里/群聊里发生的事，用 source=group 专门回想群里的记忆。")
 _TOOL_DETAIL_DESC = (
-    "把模糊的印象想成完整的细节。当上面的回想结果里某条标了【有长文】，"
+    "把模糊的印象想成完整的细节。当上面的回想结果里某条标了【还有长文】，"
     "且你想把整件事想起来时，用它展开。"
     "同样：用户说的是群里的事就传 source=group。")
 _TOOL_NO_QUERY = "（一下子不知道该从哪想起）"
@@ -625,7 +625,7 @@ _TOOL_DETAIL_NO_HIT = "（细节回忆不起来了）"
 _TOOL_DETAIL_PREFIX = "想起来的具体内容："
 _TOOL_UNKNOWN = "（不知道这是什么能力）"
 _TOOL_GROUP_TAG = "（群聊）"
-_TOOL_LONG_MARK = "【还记得更细，可以再回想一下】"
+_TOOL_LONG_MARK = "【还有长文，可以再回想一下】"
 _TOOL_FULL_PREFIX = "（想起来的完整内容）"
 
 MEMORY_TOOLS = [
