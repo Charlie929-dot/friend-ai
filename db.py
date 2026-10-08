@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS memories (
     tags TEXT NOT NULL DEFAULT '',    -- 自由补充标签，逗号分隔
     time_label TEXT NOT NULL DEFAULT '',  -- 事发时间标签（绝对日期，如"2026-10-06 下午"）
     place TEXT NOT NULL DEFAULT '',       -- 地点标签
-    person TEXT NOT NULL DEFAULT '',      -- 人物标签
+    person TEXT NOT NULL DEFAULT '',      -- 人物标签（锚点，稳定身份名，顿号分隔）
+    person_sub TEXT NOT NULL DEFAULT '',  -- 人物子标签（对 person 的关系/描述，自由文本）
     theme TEXT NOT NULL DEFAULT '',       -- 主题标签（互斥大类）
     subject TEXT NOT NULL DEFAULT '',     -- 视角：我/对方/某人/我们（空=历史遗留未知）
     created_at TEXT NOT NULL,  -- 存储时间（什么时候记下的，与事发时间是两个维度）
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS long_memories (
     time_label TEXT NOT NULL DEFAULT '',  -- 事发时间标签
     place TEXT NOT NULL DEFAULT '',
     person TEXT NOT NULL DEFAULT '',
+    person_sub TEXT NOT NULL DEFAULT '',  -- 人物子标签（对 person 的关系/描述）
     theme TEXT NOT NULL DEFAULT '',
     subject TEXT NOT NULL DEFAULT '',     -- 视角：我/对方/某人/我们
     created_at TEXT NOT NULL,
@@ -108,9 +110,14 @@ def init():
         # 旧库迁移：记忆视角 subject（多对象一视同仁：我/对方/某人/我们）
         if "subject" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
+        # 旧库迁移：人物子标签 person_sub（人物标签受控化：person=锚点，person_sub=描述）
+        if "person_sub" not in cols:
+            c.execute("ALTER TABLE memories ADD COLUMN person_sub TEXT NOT NULL DEFAULT ''")
         lcols = [r["name"] for r in c.execute("PRAGMA table_info(long_memories)")]
         if "subject" not in lcols:
             c.execute("ALTER TABLE long_memories ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
+        if "person_sub" not in lcols:
+            c.execute("ALTER TABLE long_memories ADD COLUMN person_sub TEXT NOT NULL DEFAULT ''")
         _migrate_profiles(c)
 
 
@@ -300,12 +307,12 @@ def reset_counter(key: str):
 def add_memory(content: str, category: str = "画像", tags: str = "",
                time_label: str = "", place: str = "", person: str = "",
                theme: str = "", source: str = "private", subject: str = "",
-               long_id: int = 0) -> int:
+               person_sub: str = "", long_id: int = 0) -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, subject, created_at, source, long_id)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (content, category, tags, time_label, place, person, theme, subject,
+            "INSERT INTO memories(content, category, tags, time_label, place, person, person_sub, theme, subject, created_at, source, long_id)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (content, category, tags, time_label, place, person, person_sub, theme, subject,
              datetime.now().isoformat(timespec="seconds"), source, long_id),
         )
         return cur.lastrowid
@@ -380,12 +387,13 @@ def memory_count() -> int:
 # AI 先看摘要，觉得相关才"跳转"展开全文，避免把长文全塞进上下文。
 def add_long_memory(summary: str, content: str, category: str = "事件", tags: str = "",
                     time_label: str = "", place: str = "", person: str = "",
-                    theme: str = "", source: str = "private", subject: str = "") -> int:
+                    theme: str = "", source: str = "private", subject: str = "",
+                    person_sub: str = "") -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, theme, subject, created_at, source)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (summary, content, category, tags, time_label, place, person, theme, subject,
+            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, person_sub, theme, subject, created_at, source)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (summary, content, category, tags, time_label, place, person, person_sub, theme, subject,
              datetime.now().isoformat(timespec="seconds"), source),
         )
         return cur.lastrowid
@@ -481,6 +489,15 @@ def set_profile_field(person: str, field: str, value: str, source: str = "manual
 def clear_profiles() -> None:
     with _conn() as c:
         c.execute("DELETE FROM profiles")
+
+
+def profile_persons() -> list[str]:
+    """profiles 表里出现过的所有对象（distinct person），作"已知人物"注册表。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT person FROM profiles ORDER BY person"
+        ).fetchall()
+    return [r["person"] for r in rows]
 
 
 # --- 日记 + 每日回顾（P2：记忆 v3 每日回顾 + 日记系统 + 今日对话回顾线） ---

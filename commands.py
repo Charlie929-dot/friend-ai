@@ -325,6 +325,15 @@ def handle(cmd_line: str) -> str:
         if not new_alias:
             return "别名不能为空或全是非法字符。"
         target = archives[int(parts2[0]) - 1]
+        # 追加不覆盖：改名时把旧名记进 alias_history，保证旧名仍能解析到这位朋友
+        # （"初遇朋友"→"初遇"后，旧名"初遇朋友"不丢，resolve_person 仍能归一）
+        old_alias = _read_kv_file(target).get("alias", "")
+        if old_alias and old_alias != new_alias:
+            hist = _read_kv_file(target).get("alias_history", "")
+            parts = [x for x in re.split(r"[、,，\s]+", hist) if x]
+            if old_alias not in parts:
+                parts.append(old_alias)
+            _write_kv_file(target, "alias_history", "、".join(parts))
         _write_kv_file(target, "alias", new_alias)  # 改库内别名，文件名不动
         return f"改好啦：{new_alias}"
 

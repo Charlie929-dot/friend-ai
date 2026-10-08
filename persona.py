@@ -4,6 +4,7 @@
 存 friend.db）。没抽过人格的老朋友用 DEFAULT_FLAVOR（即最初那位朋友的人设）。
 状态注入：作息状态写进 system prompt。时间注入：生活日（睡一觉才算新的一天）。
 """
+import re
 from datetime import datetime, timedelta
 
 import config
@@ -53,6 +54,89 @@ def user_name() -> str:
     if row and row.get("value"):
         return row["value"]
     return config.USER_NAME
+
+
+def _split_names(s: str) -> list[str]:
+    """把顿号/逗号/空白分隔的名字串拆成单个名字。"""
+    return [x.strip() for x in re.split(r"[、,，\s]+", (s or "").strip()) if x.strip()]
+
+
+def known_names() -> set[str]:
+    """本库已知的所有"表面名"（锚点 + 别名），供提取 prompt 注入 + query 识别。
+
+    数据源（data-driven，不写死）：
+    - 真人：config.USER_NAME + 事实便签"叫我X" + profiles"称呼"字段。
+    - 自己：friend_name() + kv.alias + kv.alias_history（改名历史）。
+    - 其他朋友：profiles 里每个 person 键 + 其"别名"字段。
+    兜底：persona_pool.POOL 全部候选名（"名字宇宙"，仅用于识别"这是个名字"；
+    无共享注册表前的临时方案，不是权威锚点）。
+    """
+    import db
+    import persona_pool
+    names: set[str] = set()
+    # 真人
+    names.add(config.USER_NAME)
+    for f in db.get_facts():
+        if f.startswith("叫我"):
+            v = f[2:].strip()
+            if v:
+                names.add(v)
+    row = db.profile_field(config.USER_NAME, "称呼")
+    if row and row.get("value"):
+        names.add(row["value"])
+    # 自己
+    names.add(friend_name())
+    alias = db.get_kv("alias")
+    if alias:
+        names.add(alias)
+    names.update(_split_names(db.get_kv("alias_history")))
+    # 其他朋友（profiles 的 person 键 + "别名"字段）
+    for person in db.profile_persons():
+        names.add(person)
+        row = db.profile_field(person, "别名")
+        if row and row.get("value"):
+            names.update(_split_names(row["value"]))
+    # 兜底：人格池候选名（名字宇宙）
+    for p in persona_pool.POOL:
+        names.update(p["names"])
+    return names
+
+
+def resolve_person(name: str) -> str:
+    """把表面名归一成稳定锚点（别名→锚点）。不认识的→原样返回（当"某人"处理）。
+
+    锚点 = 稳定身份名：真人=config.USER_NAME；自己=friend_name()；
+    其他朋友=profiles 里的 person 键。别名（叫我X/称呼/别名/alias_history）都映射回锚点。
+    """
+    import db
+    name = (name or "").strip()
+    if not name:
+        return name
+    if name == config.USER_NAME:
+        return config.USER_NAME
+    # 真人别名：叫我X / 称呼
+    for f in db.get_facts():
+        if f.startswith("叫我") and f[2:].strip() == name:
+            return config.USER_NAME
+    row = db.profile_field(config.USER_NAME, "称呼")
+    if row and row.get("value") == name:
+        return config.USER_NAME
+    # 自己 + 别名
+    self_name = friend_name()
+    if name == self_name:
+        return self_name
+    if name == db.get_kv("alias"):
+        return self_name
+    if name in _split_names(db.get_kv("alias_history")):
+        return self_name
+    # 其他朋友 + "别名"字段
+    for person in db.profile_persons():
+        if name == person:
+            return person
+        row = db.profile_field(person, "别名")
+        if row and row.get("value") and name in _split_names(row["value"]):
+            return person
+    return name  # 不认识：原样（某人）
 
 STATE_HINTS = {
     "AWAKE": "你现在醒着，状态正常。",

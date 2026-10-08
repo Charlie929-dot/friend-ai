@@ -783,6 +783,50 @@ def test_group_multi_profile():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
+def test_person_tag_controlled():
+    """人物标签受控化：person=锚点（别名归一）、person_sub 子标签分列、召回集合交集+子标签加分。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+    import persona as _persona
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # 别名映射：初遇（锚点）的别名 = 初遇朋友
+        _db.set_profile_field("初遇", "别名", "初遇朋友", source="manual")
+        # 1) resolve_person 别名归一（"初遇朋友"和"初遇"是同一人）
+        assert _persona.resolve_person("初遇朋友") == "初遇"
+        assert _persona.resolve_person("初遇") == "初遇"
+        assert _persona.resolve_person("陌生人") == "陌生人"  # 不认识原样
+        # 2) 提取归一：person 里的别名 → 锚点
+        assert _mem._normalize_person("初遇朋友、小徐") == "初遇、小徐"
+        # 3) _apply 落库：person（锚点）+ person_sub（子标签）
+        _mem._apply({"content": "初遇的爸爸住院了", "category": "人际",
+                     "person": "初遇朋友", "person_sub": "父亲"})
+        m = _db.find_memory_by_keyword("爸爸住院")
+        assert m is not None, "记忆没落库"
+        assert m["person"] == "初遇", f"person 未归一成锚点：{m['person']!r}"
+        assert m["person_sub"] == "父亲", f"person_sub 未落库：{m['person_sub']!r}"
+        # 4) 召回：query 用别名也能命中；子标签命中排更前（子标签=加分项）
+        _mem._apply({"content": "初遇最近在减肥", "category": "画像",
+                     "person": "初遇", "person_sub": "减肥"})
+        for i in range(12):
+            _db.add_memory(f"无关填充{i}号天气", "事件", theme="其他")
+        hits = _mem.recall("初遇朋友的父亲", top_k=3)
+        assert hits and "爸爸住院" in hits[0]["content"], \
+            f"子标签'父亲'应让住院那条排最前：{[h['content'] for h in hits]}"
+        hits2 = _mem.recall("初遇减肥", top_k=3)
+        assert hits2 and "减肥" in hits2[0]["content"], \
+            f"子标签'减肥'应排最前：{[h['content'] for h in hits2]}"
+        print("ok 人物标签受控化（别名归一/子标签分列/召回交集+子标签加分）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
 def test_interrupt_detection():
     """插话检测：打字阶段打断→整段回复作废；连发中途打断→停发+让步语。"""
     import tempfile
@@ -1318,9 +1362,24 @@ def test_diary_daily_review():
     config.DB_PATH = tmp / "friend.db"
     try:
         _db.init()
-        _db.add_message("user", "今天好累啊")
-        _db.add_message("assistant", "辛苦啦，早点休息")
+        # 让 add_message 的时间戳落在"生活日"上：否则跨午夜（00:00~WAKE_HOUR）时
+        # add_message 按墙钟写进"明天"，而 daily_review 按生活日读昨天 → 读到空，
+        # 测试在深夜会误挂（"今天还没怎么聊"）。
+        from datetime import datetime as _dt
         day = _diary._life_day_str()
+
+        class _Clock:
+            @classmethod
+            def now(cls):
+                return _dt.fromisoformat(day + "T12:00:00")
+
+        real_dt = _db.datetime
+        _db.datetime = _Clock
+        try:
+            _db.add_message("user", "今天好累啊")
+            _db.add_message("assistant", "辛苦啦，早点休息")
+        finally:
+            _db.datetime = real_dt
         _db.add_memory("小徐在准备考研", "事件")
 
         real_chat = _diary.llm.chat
@@ -1372,12 +1431,26 @@ def test_diary_purge_reviewed_messages():
     config.PURGE_REVIEWED_MESSAGES = True
     try:
         _db.init()
-        _db.add_message("user", "今天聊点什么")
-        _db.add_message("assistant", "随便聊呀")
-        assert len(_db.today_messages()) == 2
+        # 同 test_diary_daily_review：让消息时间戳落在"生活日"，跨午夜不误挂
+        from datetime import datetime as _dt
+        day = _diary._life_day_str()
+
+        class _Clock:
+            @classmethod
+            def now(cls):
+                return _dt.fromisoformat(day + "T12:00:00")
+
+        real_dt = _db.datetime
+        _db.datetime = _Clock
+        try:
+            _db.add_message("user", "今天聊点什么")
+            _db.add_message("assistant", "随便聊呀")
+        finally:
+            _db.datetime = real_dt
+        assert len(_db.today_messages(day)) == 2
         _diary.llm.chat = lambda *a, **k: '{"diary": "聊了聊", "memory_add": [], "memory_delete": []}'
         _diary.daily_review(force=True)
-        assert len(_db.today_messages()) == 0, "回顾线没删干净"
+        assert len(_db.today_messages(day)) == 0, "回顾线没删干净"
         assert _db.get_diary(_diary._life_day_str()) is not None, "日记应保留"
         print("ok 回顾线彻底删除（PURGE_REVIEWED_MESSAGES=on）")
     finally:
@@ -2194,6 +2267,7 @@ if __name__ == "__main__":
     test_profile_autofill()
     test_memory_subject()
     test_group_multi_profile()
+    test_person_tag_controlled()
     test_interrupt_detection()
     test_group_persist_and_friend_name()
     test_db_path_lock()

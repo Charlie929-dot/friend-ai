@@ -36,7 +36,8 @@ EXTRACT_PROMPT = """你在回想并写下自己的记忆——从最近的对话
           "'明天早上'→次日日期+早上，'下周三'→对应日期。"
           "定位不到具体日期的（最近/以后/改天/有空）一律留空字符串",
   "place": "地点（没有就空字符串）",
-  "person": "涉及的人名（你自己或别人，可多个，逗号分隔；没有就空字符串）",
+  "person": "涉及的人名——只从【已知人物】里选（尽量只写最主要的一个；多人顿号分隔；提到的陌生人不写、留空）",
+  "person_sub": "对 person 里每个人物的补充描述（关系/身份，如 父亲/室友/在减肥）。与 person 顿号位置对应，没有的留空",
   "subject": "视角——这条是关于谁的：我（我自己）/ 对方（正在聊的这个朋友）/ 某人（提到的第三方）/ 我们（我们之间的关系或共同经历）。四选一",
   "theme": "学业 | 技术 | 健康作息 | 饮食 | 娱乐 | 社交情感 | 出行 | 财务 | 其他"
 }
@@ -53,6 +54,8 @@ EXTRACT_PROMPT = """你在回想并写下自己的记忆——从最近的对话
 【类别说明】这些类别可以描述任何一个人——你自己、对方、或提到的别人。
 画像=某个人是谁（称呼/城市/身份）；偏好=喜欢/讨厌；计划=打算做的事；
 事件=已经发生的事；人际=某个人与别人的关系；情绪=状态与感受。
+
+【已知人物】你认识的人（person 只能从这里面选，没有的名字别硬凑）：{KNOWN_PEOPLE}
 
 【提议删除】如果发现某条已知记忆是错的——是"我"自己说的话、对方明确否定过、
 或与对话中的新事实直接矛盾——输出一项：{"content": "旧记忆中的关键词", "delete": true}。
@@ -98,9 +101,11 @@ def _extract_prompt(group: bool = False) -> str:
     except Exception:
         name = ""
     import persona  # 延迟导入避免循环依赖
+    known = "、".join(sorted(persona.known_names())) or "（暂时还没有）"
     prompt = (EXTRACT_PROMPT
               .replace("{WHO}", name or "这位朋友")
-              .replace("{USER}", persona.user_name()))
+              .replace("{USER}", persona.user_name())
+              .replace("{KNOWN_PEOPLE}", known))
     if group:
         prompt += _GROUP_EXTRACT_EXTRA.replace("{WHO}", name or "这位朋友")
     return prompt
@@ -281,7 +286,8 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
         theme = "其他" if theme else ""
     time_label = str(item.get("time", "")).strip()
     place = str(item.get("place", "")).strip()
-    person = str(item.get("person", "")).strip()
+    person = _normalize_person(str(item.get("person", "")))
+    person_sub = str(item.get("person_sub", "")).strip()
     tags = str(item.get("tags", "")).strip()
     subject = str(item.get("subject", "")).strip()
     if subject not in _SUBJECTS:
@@ -303,16 +309,18 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
 
     if is_long:
         long_id = db.add_long_memory(content, full, category, tags, time_label,
-                                     place, person, theme, source, subject)
+                                     place, person, theme, source, subject, person_sub)
         db.add_memory(content, category, tags, time_label, place, person, theme,
-                      source, subject, long_id=long_id)
+                      source, subject, person_sub, long_id=long_id)
         print(f"[memory] 记住长文：({category}|{theme or '—'}) {content[:30]}…"
               f"（全文 {len(full)} 字，B库#{long_id}）")
         return True
 
     db.add_memory(content, category, tags, time_label, place, person, theme,
-                  source, subject)
+                  source, subject, person_sub)
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
+    if person_sub:
+        dims += f"（{person_sub}）"
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
     return True
 
@@ -330,6 +338,23 @@ def _resolve_profile_person(name: str | None) -> str:
     if name in (config.USER_NAME, persona.user_name()):
         return config.USER_NAME
     return name
+
+
+def _split_person(s: str) -> list[str]:
+    """把 person/person_sub 串按顿号/逗号/空白拆成单个元素（去空）。"""
+    return [x for x in re.split(r"[、,，\s]+", (s or "").strip()) if x]
+
+
+def _normalize_person(person: str) -> str:
+    """person 锚点归一：拆开后逐个把别名归一到稳定锚点（persona.resolve_person），
+    去重后顿号重连。不认识的保留原样（当"某人"处理）。"""
+    import persona
+    seen: list[str] = []
+    for p in _split_person(person):
+        anchor = persona.resolve_person(p)
+        if anchor and anchor not in seen:
+            seen.append(anchor)
+    return "、".join(seen)
 
 
 def _apply_profile(line: str, person: str | None = None) -> None:
@@ -480,19 +505,27 @@ _IDENTITY_QUERY = re.compile(corpus.IDENTITY_QUERY)
 
 
 def _query_person_names(query: str) -> list[str]:
-    """识别 query 里出现的人物名（朋友名 + 用户称呼 + 别名），用于 person 标签命中加权。"""
+    """识别 query 里出现的人物，归一成稳定锚点（person 标签命中加权用）。
+
+    用 persona.known_names() 识别"哪些词是名字"，再 resolve_person 归一到锚点——
+    "初遇朋友"和"初遇"会归到同一个锚点，命中同一批记忆（别名不改命中断）。
+    """
     import persona
-    import persona_pool
-    names = {config.USER_NAME, persona.user_name()}
-    for p in persona_pool.POOL:
-        names.update(p["names"])
-    try:
-        alias = db.get_kv("alias")
-        if alias:
-            names.add(alias)
-    except Exception:
-        pass
-    return [n for n in names if n in query]
+    anchors: set[str] = set()
+    for surface in persona.known_names():
+        if surface and surface in query:
+            anchors.add(persona.resolve_person(surface))
+    return [a for a in anchors if a]
+
+
+def _person_sub_bonus(query: str, person_sub: str, anchors: list[str]) -> bool:
+    """query 是否带了子标签词命中该记忆的 person_sub（子标签=加分项，非门槛）。"""
+    if not person_sub:
+        return False
+    q = query
+    for a in anchors:
+        q = q.replace(a, "")
+    return any(s and s in q for s in _split_person(person_sub))
 
 
 # 追问细节的意图词：词表在 corpus（语料，可扩充）
@@ -587,9 +620,13 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
         score = len(q_bi & _bigrams(hay)) * 2 + len(q_kw & _keywords(hay)) * 0.5
         # 时间标签衔接："今天下午"换算成日期后命中记忆的绝对时间标签
         score += sum(3.0 for t in time_tokens if t in m.get("time_label", ""))
-        # 人名标签命中：query 里点到的名字，person 标签精确命中是强信号（标签 > 字面）
-        if q_names and any(n in m.get("person", "") for n in q_names):
+        # 人名标签命中：query 里点到的名字，person 锚点精确命中是强信号（标签 > 字面）
+        m_persons = set(_split_person(m.get("person", "")))
+        if q_names and (m_persons & set(q_names)):
             score += 2.0
+            # 子标签命中：主+子都命中 → 更高优先级（子标签是加分项，不是门槛）
+            if _person_sub_bonus(query, m.get("person_sub", ""), q_names):
+                score += 1.5
         # 身份/关系询问：人际类记忆（TA 与谁的关系）优先于琐事——
         # 修"记得小葵吗"只召回"小葵拿快递"、召不回"介绍认识"的排序缺陷
         if identity_q and m["category"] == "人际":
