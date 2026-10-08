@@ -40,7 +40,7 @@ def friend_name(default: str = "老朋友") -> str:
 def user_name() -> str:
     """当前朋友对用户的称呼（不是全局写死的一个名字——不同朋友有各自的个性称呼）。
 
-    优先级：事实便签"叫我X"（用户亲口，最高）> profile 清单"称呼"字段（AI 提取记录）
+    优先级：事实便签"叫我X"（用户亲口，最高）> profiles 里"称呼"字段（AI 提取记录）
     > config.USER_NAME（兜底默认）。读的是"当前库"（当前朋友）——群聊里发言时
     db 已切到那位朋友，所以自动返回 TA 对用户的称呼。"""
     import db
@@ -49,14 +49,9 @@ def user_name() -> str:
             val = f[2:].strip()
             if val:
                 return val
-    for line in _read_profile().splitlines():
-        line = line.strip()
-        if line.startswith("称呼"):
-            for sep in ("：", ":"):
-                if sep in line:
-                    val = line.split(sep, 1)[1].strip()
-                    if val:
-                        return val
+    row = db.profile_field(config.USER_NAME, "称呼")
+    if row and row.get("value"):
+        return row["value"]
     return config.USER_NAME
 
 STATE_HINTS = {
@@ -83,25 +78,17 @@ NEW_STAGE_HINT = (
 FAMILIAR_STAGE_HINT = "【关系阶段】你们已经是熟悉的朋友了，相处自然随意。"
 
 
-def _read_profile() -> str:
-    """读取当前朋友持有的用户信息清单。
+def _read_profile(person: str | None = None) -> str:
+    """读取某对象的信息清单（profiles 多对象表）。
 
-    清单按朋友隔离（存各自 friend.db 的 kv.profile_text）：新朋友开局零了解，
-    用户可选 /profile add 逐条填、/profile reuse 沿用全局清单、或跳过。
-    无 profile_locked 标记的老朋友（V1 时代）继续读全局 profile.md，行为不变。
+    person 不给时 = 当前私聊对象（真人 config.USER_NAME）。清单按朋友隔离
+    （存各自 friend.db 的 profiles 表）：新朋友开局零了解，用户可选
+    /profile add 逐条填、/profile reuse 沿用全局清单、或跳过。
+    老朋友的 kv.profile_text 在 db.init() 迁移时已进 profiles，行为不变。
     """
     import db
-    if db.get_kv("profile_locked") == "1":
-        return db.get_kv("profile_text")
-    # 遗产路径：老朋友读全局 profile.md
-    path = config.BASE_DIR / "profile.md"
-    if not path.exists():
-        return ""
-    lines = [l for l in path.read_text(encoding="utf-8").splitlines()
-             if l.strip() and not l.strip().startswith("#")]
-    # 只保留有内容的项（冒号后有值）
-    filled = [l for l in lines if "：" in l and l.split("：", 1)[1].strip()]
-    return "\n".join(filled)
+    person = person or config.USER_NAME
+    return db.profile_text(person)
 
 
 def behavior_params() -> dict:

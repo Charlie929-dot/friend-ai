@@ -1,5 +1,6 @@
 """SQLite 存储层：状态机、消息记录、防打扰计数。单用户场景，一切从简。"""
 import json
+import re
 import sqlite3
 import threading
 from datetime import date, datetime
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS memories (
     place TEXT NOT NULL DEFAULT '',       -- 地点标签
     person TEXT NOT NULL DEFAULT '',      -- 人物标签
     theme TEXT NOT NULL DEFAULT '',       -- 主题标签（互斥大类）
+    subject TEXT NOT NULL DEFAULT '',     -- 视角：我/对方/某人/我们（空=历史遗留未知）
     created_at TEXT NOT NULL,  -- 存储时间（什么时候记下的，与事发时间是两个维度）
     recalled_at TEXT NOT NULL DEFAULT '',  -- 上次被召回时间
     recall_count INTEGER NOT NULL DEFAULT 0,
@@ -62,11 +64,20 @@ CREATE TABLE IF NOT EXISTS long_memories (
     place TEXT NOT NULL DEFAULT '',
     person TEXT NOT NULL DEFAULT '',
     theme TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',     -- 视角：我/对方/某人/我们
     created_at TEXT NOT NULL,
     recalled_at TEXT NOT NULL DEFAULT '',
     recall_count INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'ok',    -- ok / pending_delete
     source TEXT NOT NULL DEFAULT 'private'  -- private / group
+);
+CREATE TABLE IF NOT EXISTS profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person TEXT NOT NULL,           -- 对象名字串（AI 对 TA 的称呼；真人=config.USER_NAME 作键）
+    field TEXT NOT NULL,            -- 字段名（称呼/生日/城市/学校专业/作息习惯/兴趣/在忙/雷区…）
+    value TEXT NOT NULL,            -- 字段值
+    source TEXT NOT NULL DEFAULT 'manual',  -- manual=亲口/手填，extracted=AI 提取
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -94,12 +105,57 @@ def init():
         # 旧库迁移：A/B 两级库——A 库记忆可挂一条 B 库长文（long_id 指向 long_memories.id，0=无）
         if "long_id" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN long_id INTEGER NOT NULL DEFAULT 0")
+        # 旧库迁移：记忆视角 subject（多对象一视同仁：我/对方/某人/我们）
+        if "subject" not in cols:
+            c.execute("ALTER TABLE memories ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
+        lcols = [r["name"] for r in c.execute("PRAGMA table_info(long_memories)")]
+        if "subject" not in lcols:
+            c.execute("ALTER TABLE long_memories ADD COLUMN subject TEXT NOT NULL DEFAULT ''")
+        _migrate_profiles(c)
+
+
+def _migrate_profiles(c) -> None:
+    """一次性把 kv.profile_text（单份用户清单）迁进 profiles 多对象表。
+
+    - person：真人对象键 = config.USER_NAME（真人作键，"称呼"是可选字段）——
+      与 persona 卡名（其他 AI 朋友）对称，都是"名字"。
+    - source：profile_auto_keys 里 AI 写过的字段标 extracted，其余 manual。
+    - 用 kv.profiles_migrated=1 标记，只迁一次；/new-friend 清库后自然重置。
+    """
+    def _kv(key: str) -> str:
+        row = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else ""
+
+    if _kv("profiles_migrated"):
+        return
+    raw = _kv("profile_text")
+    locked = _kv("profile_locked")
+    if locked != "1":
+        # V1 老朋友（无 profile_locked）沿用全局 profile.md 的行为
+        path = config.BASE_DIR / "profile.md"
+        if path.exists():
+            raw = "\n".join(l for l in path.read_text(encoding="utf-8").splitlines()
+                            if l.strip() and not l.strip().startswith("#"))
+    auto_keys = set(filter(None, _kv("profile_auto_keys").split(",")))
+    now = datetime.now().isoformat(timespec="seconds")
+    for line in raw.splitlines():
+        m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", line.strip())
+        if not m:
+            continue
+        key, value = m.group(1).strip(), m.group(2).strip()
+        if not value:
+            continue
+        source = "extracted" if key in auto_keys else "manual"
+        c.execute("INSERT INTO profiles(person, field, value, source, updated_at) "
+                  "VALUES(?, ?, ?, ?, ?)",
+                  (config.USER_NAME, key, value, source, now))
+    c.execute("INSERT INTO kv(key, value) VALUES('profiles_migrated', '1')")
 
 
 def clear_all():
     """清空所有数据（/new-friend 用），保留表结构。"""
     with _conn() as c:
-        for table in ("kv", "messages", "counters", "memories", "long_memories"):
+        for table in ("kv", "messages", "counters", "memories", "long_memories", "profiles"):
             c.execute(f"DELETE FROM {table}")
 
 
@@ -243,12 +299,13 @@ def reset_counter(key: str):
 # --- 记忆系统 v1：AI 自动从对话提取的长期记忆（五维标签） ---
 def add_memory(content: str, category: str = "画像", tags: str = "",
                time_label: str = "", place: str = "", person: str = "",
-               theme: str = "", source: str = "private", long_id: int = 0) -> int:
+               theme: str = "", source: str = "private", subject: str = "",
+               long_id: int = 0) -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, created_at, source, long_id)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (content, category, tags, time_label, place, person, theme,
+            "INSERT INTO memories(content, category, tags, time_label, place, person, theme, subject, created_at, source, long_id)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (content, category, tags, time_label, place, person, theme, subject,
              datetime.now().isoformat(timespec="seconds"), source, long_id),
         )
         return cur.lastrowid
@@ -323,12 +380,12 @@ def memory_count() -> int:
 # AI 先看摘要，觉得相关才"跳转"展开全文，避免把长文全塞进上下文。
 def add_long_memory(summary: str, content: str, category: str = "事件", tags: str = "",
                     time_label: str = "", place: str = "", person: str = "",
-                    theme: str = "", source: str = "private") -> int:
+                    theme: str = "", source: str = "private", subject: str = "") -> int:
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, theme, created_at, source)"
-            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (summary, content, category, tags, time_label, place, person, theme,
+            "INSERT INTO long_memories(summary, content, category, tags, time_label, place, person, theme, subject, created_at, source)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (summary, content, category, tags, time_label, place, person, theme, subject,
              datetime.now().isoformat(timespec="seconds"), source),
         )
         return cur.lastrowid
@@ -376,6 +433,54 @@ def set_long_memory_status(long_id: int, status: str):
 def long_memory_count() -> int:
     with _conn() as c:
         return c.execute("SELECT COUNT(*) AS n FROM long_memories").fetchone()["n"]
+
+
+# --- profiles 多对象表（多对象一视同仁：每个对象一份 profile） ---
+def profile_field(person: str, field: str) -> dict | None:
+    """某对象某个字段的最新一行（含 value/source）。"""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT id, field, value, source FROM profiles "
+            "WHERE person=? AND field=? ORDER BY id DESC LIMIT 1",
+            (person, field),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def profile_fields(person: str) -> list[dict]:
+    """某对象的全部字段行（按 id 顺序）。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, field, value, source FROM profiles WHERE person=? ORDER BY id",
+            (person,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def profile_text(person: str) -> str:
+    """把某对象的字段渲染成 "字段：值" 文本（旧格式，下游注入兼容）。"""
+    return "\n".join(f"{r['field']}：{r['value']}" for r in profile_fields(person))
+
+
+def set_profile_field(person: str, field: str, value: str, source: str = "manual") -> None:
+    """写入/更新一个字段。source: manual（用户手填）/ extracted（AI 提取）。"""
+    now = datetime.now().isoformat(timespec="seconds")
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE profiles SET value=?, source=?, updated_at=? WHERE person=? AND field=?",
+            (value, source, now, person, field),
+        )
+        if cur.rowcount == 0:
+            c.execute(
+                "INSERT INTO profiles(person, field, value, source, updated_at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (person, field, value, source, now),
+            )
+
+
+def clear_profiles() -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM profiles")
 
 
 # --- 日记 + 每日回顾（P2：记忆 v3 每日回顾 + 日记系统 + 今日对话回顾线） ---

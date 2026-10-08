@@ -36,7 +36,8 @@ EXTRACT_PROMPT = """你在回想并写下自己的记忆——从最近的对话
           "'明天早上'→次日日期+早上，'下周三'→对应日期。"
           "定位不到具体日期的（最近/以后/改天/有空）一律留空字符串",
   "place": "地点（没有就空字符串）",
-  "person": "这条记忆是关于谁的——你自己、对方、还是提到的别人（没有就空字符串）",
+  "person": "涉及的人名（你自己或别人，可多个，逗号分隔；没有就空字符串）",
+  "subject": "视角——这条是关于谁的：我（我自己）/ 对方（正在聊的这个朋友）/ 某人（提到的第三方）/ 我们（我们之间的关系或共同经历）。四选一",
   "theme": "学业 | 技术 | 健康作息 | 饮食 | 娱乐 | 社交情感 | 出行 | 财务 | 其他"
 }
 如果这条信息"一句两句说不完"——比如对方给你完整讲了一段经历/故事、一次深入的讨论、
@@ -218,6 +219,7 @@ def _parse_json_array(raw: str) -> list[dict]:
 
 _CATEGORIES = ("画像", "偏好", "计划", "事件", "人际", "情绪")
 _THEMES = ("学业", "技术", "健康作息", "饮食", "娱乐", "社交情感", "出行", "财务", "其他")
+_SUBJECTS = ("我", "对方", "某人", "我们")  # 记忆视角（多对象一视同仁）
 # 旧版英文类别 → 新类别（老朋友库里的历史记忆）
 _LEGACY_CATEGORY = {"fact": "画像", "preference": "偏好", "plan": "计划",
                     "event": "事件", "person": "人际"}
@@ -270,6 +272,9 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
     place = str(item.get("place", "")).strip()
     person = str(item.get("person", "")).strip()
     tags = str(item.get("tags", "")).strip()
+    subject = str(item.get("subject", "")).strip()
+    if subject not in _SUBJECTS:
+        subject = ""  # 非法/缺失一律落空（历史遗留未知，不猜）
 
     # 长文全文也过确定性红线 + 截断防失控（B 库单条上限 2000 字）
     if is_long:
@@ -287,27 +292,28 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
 
     if is_long:
         long_id = db.add_long_memory(content, full, category, tags, time_label,
-                                     place, person, theme, source)
+                                     place, person, theme, source, subject)
         db.add_memory(content, category, tags, time_label, place, person, theme,
-                      source, long_id=long_id)
+                      source, subject, long_id=long_id)
         print(f"[memory] 记住长文：({category}|{theme or '—'}) {content[:30]}…"
               f"（全文 {len(full)} 字，B库#{long_id}）")
         return True
 
-    db.add_memory(content, category, tags, time_label, place, person, theme, source)
+    db.add_memory(content, category, tags, time_label, place, person, theme,
+                  source, subject)
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
     return True
 
 
-def _apply_profile(line: str) -> None:
-    """把一条"字段：值"写进当前朋友的 profile 清单（kv.profile_text）。
+def _apply_profile(line: str, person: str | None = None) -> None:
+    """把一条"字段：值"写进某对象的 profile（profiles 多对象表）。
 
+    person 不给时 = 当前私聊对象（真人，config.USER_NAME 作键）。
     规则：
     - 必须有"字段：值"结构（否则只是普通记忆，不进清单）
-    - 字段已存在时：AI 自己写过的字段才更新值；用户手动加的（不在
-      profile_auto_keys 里）不覆盖——以用户为准
-    - 自动填写会置 profile_locked=1，让新朋友沿用这份清单而非遗产 profile.md
+    - 字段已存在时：AI 自己提取过的字段（source=extracted）才更新值；
+      用户手填的（source=manual）不覆盖——以用户为准
     """
     m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", line.strip())
     if not m:
@@ -315,23 +321,12 @@ def _apply_profile(line: str) -> None:
     key, value = m.group(1).strip(), m.group(2).strip()
     if not value or len(value) > 60:
         return
-    auto_keys = set(filter(None, db.get_kv("profile_auto_keys").split(",")))
-    lines = [l for l in db.get_kv("profile_text").splitlines() if l.strip()]
-    new_line = f"{key}：{value}"
-    for i, l in enumerate(lines):
-        if re.match(rf"^{re.escape(key)}\s*[：:]", l.strip()):
-            if key in auto_keys:        # AI 自己写过的字段：更新值
-                lines[i] = new_line
-            else:                       # 用户手动加的字段：以用户为准，不覆盖
-                return
-            break
-    else:
-        lines.append(new_line)          # 新字段：追加
-    db.set_kv("profile_text", "\n".join(lines))
-    db.set_kv("profile_locked", "1")
-    auto_keys.add(key)
-    db.set_kv("profile_auto_keys", ",".join(sorted(auto_keys)))
-    print(f"[memory] 清单更新：{new_line}")
+    person = person or config.USER_NAME
+    existing = db.profile_field(person, key)
+    if existing is not None and existing.get("source") == "manual":
+        return  # 用户手填的字段：以用户为准，不覆盖
+    db.set_profile_field(person, key, value, source="extracted")
+    print(f"[memory] 清单更新（{person}）：{key}：{value}")
 
 
 def backfill_history(batch: int = 16, progress=print) -> int:

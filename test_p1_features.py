@@ -687,30 +687,60 @@ def test_profile_autofill():
     config.DB_PATH = tmp / "friend.db"
     try:
         _db.init()
-        # 1) 提取结果带 profile 字段 → 写进清单并锁定
+        who = config.USER_NAME
+        # 1) 提取结果带 profile 字段 → 写进 profiles 表
         _mem._apply({"content": "小徐是夜猫子作息", "category": "画像",
                      "profile": "作息习惯：夜猫子，凌晨才睡"})
-        assert _db.get_kv("profile_locked") == "1", "自动填写应锁定清单"
-        assert "作息习惯：夜猫子，凌晨才睡" in _db.get_kv("profile_text"), \
-            f"清单没写进去：{_db.get_kv('profile_text')!r}"
+        r = _db.profile_field(who, "作息习惯")
+        assert r is not None and r["value"] == "夜猫子，凌晨才睡", \
+            f"清单没写进去：{_db.profile_text(who)!r}"
+        assert r["source"] == "extracted", "AI 提取的字段应标 extracted"
         # 2) 同一字段新值 → AI 写过的字段可更新
         _mem._apply({"content": "小徐最近开始早睡了", "category": "画像",
                      "profile": "作息习惯：最近在调整，十一点前就睡"})
-        assert "十一点前就睡" in _db.get_kv("profile_text") \
-            and "凌晨才睡" not in _db.get_kv("profile_text"), \
-            f"自动字段未更新：{_db.get_kv('profile_text')!r}"
+        v = _db.profile_field(who, "作息习惯")["value"]
+        assert "十一点前就睡" in v and "凌晨才睡" not in v, \
+            f"自动字段未更新：{_db.profile_text(who)!r}"
         # 3) 用户手动加的字段 → AI 不覆盖
-        _db.set_kv("profile_text", _db.get_kv("profile_text") + "\n称呼：小徐")
+        _db.set_profile_field(who, "称呼", "小徐", source="manual")
         _mem._apply({"content": "小徐让大家叫他徐哥", "category": "画像",
                      "profile": "称呼：徐哥"})
-        assert "称呼：小徐" in _db.get_kv("profile_text"), \
-            f"手动字段被覆盖：{_db.get_kv('profile_text')!r}"
+        assert _db.profile_field(who, "称呼")["value"] == "小徐", \
+            f"手动字段被覆盖：{_db.profile_text(who)!r}"
         # 4) 无"字段：值"结构的 profile 不写入
         _mem._apply_profile("没有结构的一整句话")
-        assert "没有结构" not in _db.get_kv("profile_text")
+        assert _db.profile_field(who, "没有结构") is None
         # 5) 记忆本身照常入库（profile 是附加动作）
         assert any(m["content"] == "小徐是夜猫子作息" for m in _db.all_memories())
         print("ok AI 自动维护 profile（写入/更新/不覆盖手动/结构校验）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
+def test_memory_subject():
+    """记忆视角 subject：合法四值入库、非法落空。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        _mem._apply({"content": "我喜欢熬夜看书", "category": "偏好", "subject": "我"})
+        _mem._apply({"content": "小徐喜欢喝奶茶", "category": "偏好", "subject": "对方"})
+        _mem._apply({"content": "小葵喜欢收集冷知识", "category": "偏好", "subject": "某人"})
+        _mem._apply({"content": "我和小徐一起看了场电影", "category": "事件", "subject": "我们"})
+        _mem._apply({"content": "非法视角测试", "category": "事件", "subject": "乱填的"})
+        mems = {m["content"]: m["subject"] for m in _db.all_memories()}
+        assert mems["我喜欢熬夜看书"] == "我"
+        assert mems["小徐喜欢喝奶茶"] == "对方"
+        assert mems["小葵喜欢收集冷知识"] == "某人"
+        assert mems["我和小徐一起看了场电影"] == "我们"
+        assert mems["非法视角测试"] == ""
+        print("ok 记忆视角 subject（四值入库/非法落空）")
     finally:
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
@@ -2123,6 +2153,7 @@ if __name__ == "__main__":
     test_groupchat()
     test_typing_indicator()
     test_profile_autofill()
+    test_memory_subject()
     test_interrupt_detection()
     test_group_persist_and_friend_name()
     test_db_path_lock()

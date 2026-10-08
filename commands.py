@@ -6,6 +6,7 @@
 归档时间记在库内 kv.archived_at + 根目录 archive.log，文件名不再带时间戳。
 """
 import json
+import re
 import shutil
 import sqlite3
 import uuid
@@ -265,10 +266,12 @@ def handle(cmd_line: str) -> str:
                 return "TA 现在对你一无所知。/profile add <一行> 告诉TA，或 /profile reuse 沿用旧清单。"
             return f"TA 知道的关于你的事（预填清单）：\n{current}"
         if action == "add" and value:
-            db.set_kv("profile_locked", "1")
-            old = db.get_kv("profile_text")
-            db.set_kv("profile_text", f"{old}\n{value}".strip())
-            return f"告诉TA啦：{value}"
+            m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", value)
+            if not m or not m.group(2).strip():
+                return "格式：/profile add 字段：值（如 /profile add 年级：大二）"
+            key, val = m.group(1).strip(), m.group(2).strip()
+            db.set_profile_field(config.USER_NAME, key, val, source="manual")
+            return f"告诉TA啦：{key}：{val}"
         if action == "reuse":
             # 把全局 profile.md（老朋友时代的清单）复制给当前朋友
             path = config.BASE_DIR / "profile.md"
@@ -279,12 +282,14 @@ def handle(cmd_line: str) -> str:
                      and "：" in l and l.split("：", 1)[1].strip()]
             if not lines:
                 return "profile.md 里没有已填写的项。"
-            db.set_kv("profile_locked", "1")
-            db.set_kv("profile_text", "\n".join(lines))
+            for line in lines:
+                m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", line.strip())
+                if m and m.group(2).strip():
+                    db.set_profile_field(config.USER_NAME, m.group(1).strip(),
+                                         m.group(2).strip(), source="manual")
             return f"已把旧清单交给TA（{len(lines)} 项）。"
         if action == "clear":
-            db.set_kv("profile_locked", "1")
-            db.set_kv("profile_text", "")
+            db.clear_profiles()
             return "已清空，TA 又对你一无所知了。"
         return "用法：/profile | /profile add <一行> | /profile reuse | /profile clear"
 
