@@ -91,6 +91,23 @@ def _read_profile(person: str | None = None) -> str:
     return db.profile_text(person)
 
 
+def group_profile_hint(members: list[tuple[str, str]]) -> str:
+    """群聊：渲染多位对象的 profile（每对象一个「名字：」块），无内容返回空串。
+
+    members: list[(profile键, 显示名)]——键用于查 profiles 表，显示名用于注入文案。
+    一视同仁：真人和其他朋友都是"我认识的一个人"，各有各的一份了解。
+    """
+    import db
+    blocks = []
+    for key, display in members:
+        txt = db.profile_text(key)
+        if txt:
+            blocks.append(f"{display}：\n{txt}")
+    if not blocks:
+        return ""
+    return "【你对各位的了解】\n" + "\n".join(blocks)
+
+
 def behavior_params() -> dict:
     """当前朋友的行为参数（作息/冒泡频率），无人格卡时用全局默认。"""
     import persona_pool

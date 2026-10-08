@@ -364,6 +364,13 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
                     "AWAKE", now=s.now, life_wake_hour=config.WAKE_HOUR) + "\n"
                     + GROUP_RULES.format(members=members, self_name=p.name,
                                          user_name=uname))
+                # 群聊多对象：把其他成员（真人 + 其他朋友）的 profile 也注入——
+                # 一视同仁，稳稳也记得小葵、阿燃的事，不只记得真人
+                profile_members = [(config.USER_NAME, uname)] + [
+                    (p2.name, p2.name) for p2 in s.participants if p2 is not p]
+                hint = persona.group_profile_hint(profile_members)
+                if hint:
+                    sys_prompt += "\n" + hint
                 if idle:
                     sys_prompt += "\n" + IDLE_HINT.format(user_name=uname)
                 # 长会话防遗忘：滚出窗口的更早内容压成摘要，别把"这是新朋友阿燃"忘了
@@ -489,8 +496,7 @@ def _idle_burst(s: GroupSession) -> None:
 
 def _extract_group_memories(s: GroupSession, p: Participant) -> None:
     """散群后让每位朋友从群聊记录里提取记忆（存进TA自己的库，此时 db 已指向TA）。"""
-    log = "\n".join(f"{'用户' if sp == config.USER_NAME else sp}：{tx}"
-                    for sp, tx in s.transcript[-30:])
+    log = "\n".join(f"{sp}：{tx}" for sp, tx in s.transcript[-30:])
     now = datetime.now()
     week = "一二三四五六日"[now.weekday()]
     user_msg = (f"【现在时间】{now:%Y-%m-%d} 周{week} {now:%H:%M}\n\n"
@@ -501,7 +507,7 @@ def _extract_group_memories(s: GroupSession, p: Participant) -> None:
                      + "\n".join(f"- {x}" for x in known[:50]))
     try:
         raw = llm.chat([
-            {"role": "system", "content": memory._extract_prompt()},
+            {"role": "system", "content": memory._extract_prompt(group=True)},
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in memory._parse_json_array(raw):

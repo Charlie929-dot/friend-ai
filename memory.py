@@ -84,11 +84,12 @@ EXTRACT_PROMPT = """你在回想并写下自己的记忆——从最近的对话
 没有合格的新信息就输出：[]"""
 
 
-def _extract_prompt() -> str:
+def _extract_prompt(group: bool = False) -> str:
     """提取器 system prompt：注入当前朋友的名字，模型才知道"我"是谁。
 
     不注名字时模型只能靠猜，会写出"小徐对小徐（AI）说…"这种四不像自称
     （2026-10-07 实测）；prompt 里全项目不出现"AI"身份——TA 就是抽到的角色本人。
+    group=True：群聊提取，追加多对象规则（profile_person 注明是谁、视角判定）。
     """
     try:
         import persona_pool
@@ -97,9 +98,18 @@ def _extract_prompt() -> str:
     except Exception:
         name = ""
     import persona  # 延迟导入避免循环依赖
-    return (EXTRACT_PROMPT
-            .replace("{WHO}", name or "这位朋友")
-            .replace("{USER}", persona.user_name()))
+    prompt = (EXTRACT_PROMPT
+              .replace("{WHO}", name or "这位朋友")
+              .replace("{USER}", persona.user_name()))
+    if group:
+        prompt += _GROUP_EXTRACT_EXTRA.replace("{WHO}", name or "这位朋友")
+    return prompt
+
+
+_GROUP_EXTRACT_EXTRA = """\n\n【群聊场景】这段对话是群聊，除了你（{WHO}）还有好几个人，都是你的朋友、一视同仁。
+- 记「profile」清单字段时，额外加一项 "profile_person"：这条字段是关于谁的（用那个人在对话里的名字；就是正在私聊的对方本人时可不写，默认记给 TA）。
+- 视角 subject 里「对方」可以指群里任意一位朋友，「某人」指提到的、不在场的第三方。
+- 多个朋友各有各的事，别把 A 的事记到 B 头上。"""
 
 
 # ---------- 确定性后处理：能正则判断的红线不进 prompt（2026-10-07 用户拍板）----------
@@ -259,7 +269,8 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
     # 个人清单：属于 profile 字段的确定性事实同步进 TA 的清单（/profile 可见）
     profile_line = str(item.get("profile", "")).strip()
     if profile_line:
-        _apply_profile(profile_line)
+        _apply_profile(profile_line,
+                       person=_resolve_profile_person(item.get("profile_person")))
 
     category = str(item.get("category", "画像")).strip()
     category = _LEGACY_CATEGORY.get(category, category)
@@ -304,6 +315,21 @@ def _apply(item: dict, assistant_tail: bool = False, source: str = "private") ->
     dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
     print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
     return True
+
+
+def _resolve_profile_person(name: str | None) -> str:
+    """把提取器给的 profile_person 归一成 profiles 键：真人→config.USER_NAME，其余原样。
+
+    群聊里真人可能被写成 config.USER_NAME（本名）或 user_name()（该朋友的称呼），
+    也可能沿旧习惯写"用户/对方"——统一归到真人键 config.USER_NAME。
+    """
+    name = (name or "").strip()
+    if not name or name in ("用户", "对方"):
+        return config.USER_NAME
+    import persona
+    if name in (config.USER_NAME, persona.user_name()):
+        return config.USER_NAME
+    return name
 
 
 def _apply_profile(line: str, person: str | None = None) -> None:
@@ -375,7 +401,7 @@ def backfill_group(batch: int = 12, progress=print) -> int:
     写 source='group' 的记忆。修复散群时提取失败（如旧库缺列）导致的遗漏。
 
     群聊记录 content 格式 = 「【群聊·发言人】内容」，发言人可能是多个朋友；
-    提取时把「config.USER_NAME」映射成「用户」、其余保留朋友名，让提取器分清谁说了什么。
+    提取时保留发言人的名字（真人=config.USER_NAME，其余朋友名），让提取器分清谁说了什么。
     「我」= 当前朋友（_extract_prompt 注入的人格名）。断点续跑：memfill_group_offset。"""
     offset = int(db.get_kv("memfill_group_offset", "0") or 0)
     added = 0
@@ -387,8 +413,7 @@ def backfill_group(batch: int = 12, progress=print) -> int:
         for r in rows:
             m = _GROUP_PREFIX.match(r["content"])
             if m:
-                who = "用户" if m.group(1) == config.USER_NAME else m.group(1)
-                lines.append(f"{who}：{r['content'][m.end():]}")
+                lines.append(f"{m.group(1)}：{r['content'][m.end():]}")
             else:
                 lines.append(r["content"])
         convo = "\n".join(lines)
@@ -406,7 +431,7 @@ def backfill_group(batch: int = 12, progress=print) -> int:
             user_msg += ("\n\n【已知记忆（内容几乎一样的不要重复提取）】\n"
                          + "\n".join(f"- {x}" for x in known[:50]))
         raw = llm.chat([
-            {"role": "system", "content": _extract_prompt()},
+            {"role": "system", "content": _extract_prompt(group=True)},
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in _parse_json_array(raw):

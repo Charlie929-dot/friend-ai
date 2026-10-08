@@ -745,6 +745,44 @@ def test_memory_subject():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
+def test_group_multi_profile():
+    """群聊多对象：profile_person 路由到正确成员 + group_profile_hint 多成员渲染。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+    import persona as _persona
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # 1) profile_person 归一：真人称呼/本名/用户/对方 → config.USER_NAME
+        assert _mem._resolve_profile_person(None) == config.USER_NAME
+        assert _mem._resolve_profile_person("用户") == config.USER_NAME
+        assert _mem._resolve_profile_person("对方") == config.USER_NAME
+        assert _mem._resolve_profile_person(config.USER_NAME) == config.USER_NAME
+        # 2) 群聊提取：profile_person=小葵 → 写到"小葵"名下，不动真人
+        _mem._apply({"content": "小葵喜欢熬夜", "category": "偏好",
+                     "subject": "对方", "profile": "作息习惯：夜猫子",
+                     "profile_person": "小葵"})
+        assert _db.profile_field("小葵", "作息习惯")["value"] == "夜猫子"
+        assert _db.profile_field(config.USER_NAME, "作息习惯") is None
+        # 3) 没写 profile_person 的 → 默认真人
+        _mem._apply({"content": "小徐喜欢喝奶茶", "category": "偏好",
+                     "subject": "对方", "profile": "饮食偏好：奶茶"})
+        assert _db.profile_field(config.USER_NAME, "饮食偏好")["value"] == "奶茶"
+        # 4) group_profile_hint 多成员渲染
+        hint = _persona.group_profile_hint([("小葵", "小葵"), (config.USER_NAME, "徐哥")])
+        assert "【你对各位的了解】" in hint
+        assert "小葵：" in hint and "作息习惯：夜猫子" in hint
+        assert "徐哥：" in hint and "饮食偏好：奶茶" in hint
+        print("ok 群聊多对象 profile（profile_person 路由 + 多成员渲染）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
 def test_interrupt_detection():
     """插话检测：打字阶段打断→整段回复作废；连发中途打断→停发+让步语。"""
     import tempfile
@@ -1873,9 +1911,10 @@ def test_backfill_group():
         added = _mem.backfill_group(progress=lambda *a: None)
         assert added == 1, f"补提取应记 1 条：{added}"
         user_msg = calls[0][-1]["content"]
-        assert "用户：哈喽" in user_msg and "小葵：哈喽哈喽" in user_msg, \
+        assert "小徐：哈喽" in user_msg and "小葵：哈喽哈喽" in user_msg, \
             f"群聊记录格式化不对：{user_msg}"
         assert "【群聊·" not in user_msg, "发言人不该保留【群聊·前缀"
+        assert "用户：" not in user_msg, "真人应按名字（小徐）而非「用户」标注"
         mems = _db.all_memories()
         assert any(m["content"] == "群聊里认识了新朋友阿燃" and m["source"] == "group"
                    for m in mems), f"群聊记忆没写 source=group：{mems}"
@@ -2154,6 +2193,7 @@ if __name__ == "__main__":
     test_typing_indicator()
     test_profile_autofill()
     test_memory_subject()
+    test_group_multi_profile()
     test_interrupt_detection()
     test_group_persist_and_friend_name()
     test_db_path_lock()
