@@ -369,7 +369,7 @@ def test_memory_append_timeline():
         assert "一件事只留一条" not in _mem.EXTRACT_PROMPT
         # 红线代码化（2026-10-07 用户拍板）：确定性规则移出 prompt，只留一句兜底
         assert "时序铁律" not in _mem.EXTRACT_PROMPT
-        assert "这条用户还没回应" in _mem.EXTRACT_PROMPT   # 结构化标注的说明保留
+        assert "这条对方还没回应" in _mem.EXTRACT_PROMPT   # 结构化标注的说明保留
         # 身份清洗（2026-10-07 用户拍板）：prompt 全项目不出现 AI 身份——TA 就是抽到的角色本人
         assert "AI" not in _mem.EXTRACT_PROMPT
         import persona as _persona
@@ -392,7 +392,7 @@ def test_memory_append_timeline():
                 {"role": "user", "content": "嗯嗯"},
                 {"role": "assistant", "content": "吃完跟我说吃了啥"}]
         convo, tail = _mem._format_convo(rows)
-        assert "我（这条用户还没回应）：吃完跟我说吃了啥" in convo
+        assert "我（这条对方还没回应）：吃完跟我说吃了啥" in convo
         assert "我：先去吃个午饭" in convo
         assert tail is True
         convo2, tail2 = _mem._format_convo(rows[:2])
