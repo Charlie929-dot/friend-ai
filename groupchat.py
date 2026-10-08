@@ -68,6 +68,7 @@ class GroupSession:
     def __init__(self, participants: list[Participant]):
         self.participants = participants
         self.transcript = []  # list[(speaker, text)]，speaker="小徐" 或朋友名
+        self.now = datetime.now()   # 统一时钟：同一轮发言所有朋友共用（修"四个人四个时间"）
         self.active = True
         self.channel = None          # 发送通道（/group 后由 main 挂载，或首次发言时带上）
         self.lock = threading.RLock()          # 用户回应流程 vs 自主闲聊 互斥
@@ -208,6 +209,7 @@ def _pick_responders(s: GroupSession, user_text: str) -> list[Participant]:
 
 
 def _respond_flow(s: GroupSession, channel, user_text: str) -> None:
+    s.now = datetime.now()   # 每轮回应刷新一次统一时钟，这一轮所有朋友共用
     ai_turns = 0
     spoken = set()
     read = min(len(user_text) * config.READING_SECONDS_PER_CHAR,
@@ -354,8 +356,11 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
                 reply = corpus.pick(corpus.SLEEPY_REPLIES, "sleepy")
             else:
                 members = "、".join([*(x.name for x in s.participants), "小徐（用户）"])
-                sys_prompt = (persona.build_system_prompt("AWAKE") + "\n"
-                              + GROUP_RULES.format(members=members, self_name=p.name))
+                # 统一时钟 + 统一生活日：群里所有朋友共用同一个 now、同一个
+                # 起床参照（config.WAKE_HOUR），修"四个人四个时间"
+                sys_prompt = (persona.build_system_prompt(
+                    "AWAKE", now=s.now, life_wake_hour=config.WAKE_HOUR) + "\n"
+                    + GROUP_RULES.format(members=members, self_name=p.name))
                 if idle:
                     sys_prompt += "\n" + IDLE_HINT
                 # 长会话防遗忘：滚出窗口的更早内容压成摘要，别把"这是新朋友阿燃"忘了
@@ -449,6 +454,7 @@ def _idle_loop(s: GroupSession) -> None:
 
 def _idle_burst(s: GroupSession) -> None:
     """一轮自主闲聊：间隔拉长（省 token 也像真人有一搭没一搭），轮数有上限。"""
+    s.now = datetime.now()   # 每轮闲聊刷新一次统一时钟
     turns = 0
     skips = 0
     prev = None

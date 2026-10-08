@@ -92,20 +92,26 @@ def behavior_params() -> dict:
             "bubble_mult": 1.0}
 
 
-def _life_day(now: datetime) -> tuple[datetime, bool]:
+def _life_day(now: datetime, wake_hour: int | None = None) -> tuple[datetime, bool]:
     """生活日：过午夜但还没到起床时间 = 还在"昨天"的深夜。
     只有睡一觉醒来（到起床点）才算新的一天。返回 (生活日, 是否熬夜时段)。
-    起床点跟随当前朋友的人格作息。"""
-    if now.hour < behavior_params()["wake_hour"]:
+    wake_hour 不给时跟随当前朋友的人格作息；群聊里传入统一值，让多个朋友对
+    "今天/昨天"的认知一致（否则凌晨到上午，不同作息的朋友各说各的日期）。"""
+    wh = wake_hour if wake_hour is not None else behavior_params()["wake_hour"]
+    if now.hour < wh:
         return now - timedelta(days=1), True
     return now, False
 
 
-def build_system_prompt(state: str) -> str:
+def build_system_prompt(state: str, now: datetime | None = None,
+                        life_wake_hour: int | None = None) -> str:
+    """组装 system prompt。now 不传则取当前时间（私聊行为不变）；群聊里传入
+    统一 now + 统一 life_wake_hour，保证同一时刻所有朋友的钟表时间一致、
+    生活日一致——修"群聊四个人四个时间"。"""
     import db  # 延迟导入避免循环依赖
     import persona_pool
-    now = datetime.now()
-    day, late_night = _life_day(now)
+    now = now or datetime.now()
+    day, late_night = _life_day(now, life_wake_hour)
     weekday = "一二三四五六日"[day.weekday()]
     time_info = (f"现在是 {day:%Y年%m月%d日} 星期{weekday} "
                  f"{now:%H:%M}，{_time_period(now.hour)}。")
