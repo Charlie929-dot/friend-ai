@@ -2084,8 +2084,8 @@ def test_memory_tool_source_filter():
     try:
         _db.init()
 
-        # 1) 空库：召回为空返回"记不清了"（大脑反馈，不是冷冰冰的"没查到"）
-        assert "记不清" in _mem.run_memory_tool("search_memories", {"query": "随便搜"})
+        # 1) 空库：召回为空返回"回忆不起来了"（拟人大脑反馈，不是"没查到"）
+        assert "回忆不起来" in _mem.run_memory_tool("search_memories", {"query": "随便搜"})
 
         # 2) source 过滤命中：group 只搜群聊、private 只搜私聊
         _db.add_memory("群聊里认识了新朋友阿燃", "人际", source="group")
@@ -2104,7 +2104,7 @@ def test_memory_tool_source_filter():
         for t in _mem.MEMORY_TOOLS:
             assert "source" in t["function"]["parameters"]["properties"]
 
-        print("ok 检索工具来源过滤（source=group 只搜群聊 + 召回空返回记不清）")
+        print("ok 检索工具来源过滤（source=group 只搜群聊 + 召回空返回回忆不起来）")
     finally:
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()

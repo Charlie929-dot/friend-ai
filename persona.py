@@ -36,6 +36,29 @@ def friend_name(default: str = "老朋友") -> str:
     alias = db.get_kv("alias")
     return alias or default
 
+
+def user_name() -> str:
+    """当前朋友对用户的称呼（不是全局写死的一个名字——不同朋友有各自的个性称呼）。
+
+    优先级：事实便签"叫我X"（用户亲口，最高）> profile 清单"称呼"字段（AI 提取记录）
+    > config.USER_NAME（兜底默认）。读的是"当前库"（当前朋友）——群聊里发言时
+    db 已切到那位朋友，所以自动返回 TA 对用户的称呼。"""
+    import db
+    for f in db.get_facts():
+        if f.startswith("叫我"):
+            val = f[2:].strip()
+            if val:
+                return val
+    for line in _read_profile().splitlines():
+        line = line.strip()
+        if line.startswith("称呼"):
+            for sep in ("：", ":"):
+                if sep in line:
+                    val = line.split(sep, 1)[1].strip()
+                    if val:
+                        return val
+    return config.USER_NAME
+
 STATE_HINTS = {
     "AWAKE": "你现在醒着，状态正常。",
     "SLEEPY": "你快睡了，有点困，回复可以带一点困意。",

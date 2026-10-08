@@ -20,7 +20,7 @@ import db
 import llm
 import persona
 
-REVIEW_PROMPT = """你是{name}，小徐的朋友。夜深了，你在写今天的日记，顺便复盘今天和小徐的聊天。
+REVIEW_PROMPT = """你是{name}，{user_name}的朋友。夜深了，你在写今天的日记，顺便复盘今天和{user_name}的聊天。
 
 会给你三样东西：
 1. 【今日完整对话】——你们今天的所有聊天记录
@@ -28,10 +28,10 @@ REVIEW_PROMPT = """你是{name}，小徐的朋友。夜深了，你在写今天�
 
 请你以{name}的第一人称完成，只输出一个 JSON（别输出其他任何文字）：
 {{
-  "reflection": "复盘：今天你答得怎么样？有没有没听懂/误解小徐意思的地方？聊天里你的感受如何？（一两句内心话，第一人称）",
-  "diary": "日记正文：以{name}的口吻写今天和小徐相处的一天。要有生活感、有情感，别写成流水账总结。引用今天真实发生的事，可以结合你记得的旧事。150字以内。",
+  "reflection": "复盘：今天你答得怎么样？有没有没听懂/误解{user_name}意思的地方？聊天里你的感受如何？（一两句内心话，第一人称）",
+  "diary": "日记正文：以{name}的口吻写今天和{user_name}相处的一天。要有生活感、有情感，别写成流水账总结。引用今天真实发生的事，可以结合你记得的旧事。150字以内。",
   "mood": "今天的心情词（两个字以内，如：开心/平静/有点累/想TA；没有就空字符串）",
-  "memory_add": ["今天值得记住、但你之前可能漏记的新事实，一句话一条，第一人称视角（如『小徐说他下周要考试』）。没有就 []"],
+  "memory_add": ["今天值得记住、但你之前可能漏记的新事实，一句话一条，第一人称视角（如『{user_name}说他下周要考试』）。没有就 []"],
   "memory_delete": ["你发现之前记错了、要作废的旧记忆关键词（原文里的关键片段）。没有就 []"]
 }}
 
@@ -54,7 +54,7 @@ def today_transcript(day: str | None = None) -> str:
     name = persona.friend_name()
     lines = []
     for r in rows:
-        who = "小徐" if r["role"] == "user" else name
+        who = persona.user_name() if r["role"] == "user" else name
         lines.append(f"{who}：{r['content']}")
     return "\n".join(lines)
 
@@ -89,7 +89,8 @@ def daily_review(force: bool = False) -> str:
         user_msg += "\n\n【你脑子里已有的记忆】\n" + "\n".join(f"- {x}" for x in known[:60])
 
     raw = llm.chat([
-        {"role": "system", "content": REVIEW_PROMPT.format(name=name)},
+        {"role": "system", "content": REVIEW_PROMPT.format(name=name,
+                                                           user_name=persona.user_name())},
         {"role": "user", "content": user_msg},
     ], temperature=0.7)
     data = _parse_json_object(raw)

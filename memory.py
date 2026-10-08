@@ -22,8 +22,8 @@ import corpus
 import db
 import llm
 
-EXTRACT_PROMPT = """你在整理{WHO}和小徐的聊天记录，从最近的对话片段里提取值得长期记住的事。
-对话里"我"是{WHO}，"用户"是小徐。标注"（这条用户还没回应）"的
+EXTRACT_PROMPT = """你在整理{WHO}和{USER}的聊天记录，从最近的对话片段里提取值得长期记住的事。
+对话里"我"是{WHO}，"用户"是{USER}。标注"（这条用户还没回应）"的
 "我"的消息用户还没看到——不能记成用户已回应/已答应。
 
 输出：一个 JSON 数组，不要输出任何其他文字。每项格式：
@@ -59,14 +59,14 @@ EXTRACT_PROMPT = """你在整理{WHO}和小徐的聊天记录，从最近的对�
 【值得记的——别漏】
 - 用户亲口说的事实、计划、偏好
 - **你们的互动里程碑**：深入讨论过的话题、你帮TA弄懂的东西、一起做过的事。
-  例："你给小徐详细讲过SVD图像压缩的原理"——共同经历用一句话记下，这是你们的关系。
+  例："你给{USER}详细讲过SVD图像压缩的原理"——共同经历用一句话记下，这是你们的关系。
 - **同一话题的新进展、新细节、计划变更**：直接新记一条，不要和旧记忆合并，
   也不要改写旧记忆。系统会把同主题的记忆排成时间线，能看到事情的演变。
   只有和已知记忆内容几乎完全一样的，才不要重复提取。
 
 【质量红线——违反就不要输出】
 - 不记"我"自己说的话："我"对用户的评价、起的昵称、调侃、客套都不是用户的事实。
-  反例："小徐被我称为技术宅"——那是"我"自己说的俏皮话，一律不记。
+  反例："{USER}被我称为技术宅"——那是"我"自己说的俏皮话，一律不记。
   只有用户亲口陈述或明确确认过的事才能记。
 - 不记闲聊客套、一次性话题、"我"自己的事
 - **不记"失忆"类（关键）**：不记"我"不记得/想不起来某事、不记用户追问"记不记得"、
@@ -75,7 +75,7 @@ EXTRACT_PROMPT = """你在整理{WHO}和小徐的聊天记录，从最近的对�
   群里聊了 X → 记"群里聊了 X"，而不是"用户问我记不记得群里聊了 X"。
 - 一条记忆只说一件事，别囫囵吞枣把多个事实塞进一句
 - 兜底（程序还会再过滤一道，漏网=失败）：元信息、不确定推测、
-  把用户还没回应的提议记成"小徐答应…"
+  把用户还没回应的提议记成"{USER}答应…"
 
 没有合格的新信息就输出：[]"""
 
@@ -92,7 +92,10 @@ def _extract_prompt() -> str:
         name = card["name"] if card else ""
     except Exception:
         name = ""
-    return EXTRACT_PROMPT.replace("{WHO}", name or "这位朋友")
+    import persona  # 延迟导入避免循环依赖
+    return (EXTRACT_PROMPT
+            .replace("{WHO}", name or "这位朋友")
+            .replace("{USER}", persona.user_name()))
 
 
 # ---------- 确定性后处理：能正则判断的红线不进 prompt（2026-10-07 用户拍板）----------
@@ -374,7 +377,7 @@ def backfill_group(batch: int = 12, progress=print) -> int:
     写 source='group' 的记忆。修复散群时提取失败（如旧库缺列）导致的遗漏。
 
     群聊记录 content 格式 = 「【群聊·发言人】内容」，发言人可能是多个朋友；
-    提取时把「小徐」映射成「用户」、其余保留朋友名，让提取器分清谁说了什么。
+    提取时把「config.USER_NAME」映射成「用户」、其余保留朋友名，让提取器分清谁说了什么。
     「我」= 当前朋友（_extract_prompt 注入的人格名）。断点续跑：memfill_group_offset。"""
     offset = int(db.get_kv("memfill_group_offset", "0") or 0)
     added = 0
@@ -386,7 +389,7 @@ def backfill_group(batch: int = 12, progress=print) -> int:
         for r in rows:
             m = _GROUP_PREFIX.match(r["content"])
             if m:
-                who = "用户" if m.group(1) == "小徐" else m.group(1)
+                who = "用户" if m.group(1) == config.USER_NAME else m.group(1)
                 lines.append(f"{who}：{r['content'][m.end():]}")
             else:
                 lines.append(r["content"])
@@ -454,9 +457,10 @@ _IDENTITY_QUERY = re.compile(corpus.IDENTITY_QUERY)
 
 
 def _query_person_names(query: str) -> list[str]:
-    """识别 query 里出现的人物名（朋友名 + 小徐 + 别名），用于 person 标签命中加权。"""
+    """识别 query 里出现的人物名（朋友名 + 用户称呼 + 别名），用于 person 标签命中加权。"""
+    import persona
     import persona_pool
-    names = {"小徐"}
+    names = {config.USER_NAME, persona.user_name()}
     for p in persona_pool.POOL:
         names.update(p["names"])
     try:
@@ -603,25 +607,26 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
 
 # 工具文案：与工具 schema 强耦合的固定描述/返回句/渲染标记。
 # 这些"未来不会扩充"，按约定不归语料，就近维护在本模块（不塞 corpus）。
+# 拟人化约定（2026-10-08 用户定）：工具不是外部 API，是 TA 自己的"身体组分"——
+# 记忆检索 = TA 的大脑在回忆，所以描述用"我可以回想"的能力口吻、返回用
+# "想起来了/回忆不起来了"的体感口吻，不出现"搜索/检索/数据库/工具"这类词。
 _TOOL_SEARCH_DESC = (
-    "搜索你关于小徐的记忆库，返回相关的记忆摘要。"
-    "当你想不起某件事、需要回忆过去聊过的内容时调用。"
-    "只在确实需要查证时才调，别每句话都查。"
-    "如果用户说的是群里/群聊里发生的事，传 source=group 只在群聊记忆里搜。")
+    "这是你的记忆，你可以随时回想。想不起某件事、需要回忆过去聊过的内容时，"
+    "就回想一下。别每句话都回想，真的需要才回想。"
+    "如果用户说的是群里/群聊里发生的事，用 source=group 专门回想群里的记忆。")
 _TOOL_DETAIL_DESC = (
-    "深入回忆某件事的完整细节（展开长文本）。"
-    "当 search_memories 的结果里某条标了【有长文】，"
-    "且你想听完整经过时，用这个把全文取出来。"
+    "把模糊的印象想成完整的细节。当上面的回想结果里某条标了【有长文】，"
+    "且你想把整件事想起来时，用它展开。"
     "同样：用户说的是群里的事就传 source=group。")
-_TOOL_NO_QUERY = "（没有提供检索关键词）"
-_TOOL_NO_HIT = "（记不清了）"
-_TOOL_HIT_PREFIX = "找到这些相关记忆："
-_TOOL_DETAIL_NO_HIT = "（记不清了）"
-_TOOL_DETAIL_PREFIX = "相关记忆的完整内容："
-_TOOL_UNKNOWN = "（未知工具）"
+_TOOL_NO_QUERY = "（一下子不知道该从哪想起）"
+_TOOL_NO_HIT = "（回忆不起来了）"
+_TOOL_HIT_PREFIX = "想起来了："
+_TOOL_DETAIL_NO_HIT = "（细节回忆不起来了）"
+_TOOL_DETAIL_PREFIX = "想起来的具体内容："
+_TOOL_UNKNOWN = "（不知道这是什么能力）"
 _TOOL_GROUP_TAG = "（群聊）"
-_TOOL_LONG_MARK = "【有长文，可调 recall_detail 展开】"
-_TOOL_FULL_PREFIX = "（全文）"
+_TOOL_LONG_MARK = "【还记得更细，可以再回想一下】"
+_TOOL_FULL_PREFIX = "（想起来的完整内容）"
 
 MEMORY_TOOLS = [
     {
@@ -634,12 +639,12 @@ MEMORY_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "检索关键词。把用户口语化的问法重写成检索友好的关键词、可多写几个近义/相关词（空格分隔）：如'几点睡'→'睡觉时间 作息 熬夜 凌晨'，'那次爬山'→'爬山 出行 旅游'。",
+                        "description": "你想回想的事，用你自己的话说出来。可以多想几个相关的词一起回想：比如想'几点睡'，就一起想'睡觉时间 作息 熬夜 凌晨'。",
                     },
                     "source": {
                         "type": "string",
                         "enum": ["private", "group", "all"],
-                        "description": "记忆来源：group=只在群聊记忆里搜，private=只在私聊记忆里搜，all=全部。用户提到'群里/群聊/那天在群里'时用 group。",
+                        "description": "这些事发生在哪：group=在群里发生的，private=单独聊的，all=都回想一下。用户提到'群里/群聊/那天在群里'就用 group。",
                     },
                 },
                 "required": ["query"],
@@ -656,12 +661,12 @@ MEMORY_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "要展开细节的检索关键词（同样把口语问法重写成关键词）。",
+                        "description": "想展开细节的那件事（用你自己的话说，可多想几个相关词）。",
                     },
                     "source": {
                         "type": "string",
                         "enum": ["private", "group", "all"],
-                        "description": "记忆来源：group=只在群聊记忆里搜，private=只在私聊记忆里搜，all=全部。",
+                        "description": "这些事发生在哪：group=在群里发生的，private=单独聊的，all=都回想一下。",
                     },
                 },
                 "required": ["query"],

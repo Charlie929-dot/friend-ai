@@ -40,13 +40,13 @@ GROUP_RULES = """【群聊模式】你现在在一个群聊里。
 - 群成员：{members}。你是{self_name}，记录里其他带名字的发言都不是你说的。
 - 直接说你要说的话，不要带名字前缀，不要替别人发言。
 - 想跟某位成员说话就在话里带TA的名字（比如"稳稳你也太卷了"）。
-- 你们都是小徐的朋友，彼此也认识：可以接梗、附和，也可以不同意对方。
+- 你们都是{user_name}的朋友，彼此也认识：可以接梗、附和，也可以不同意对方。
 - 回复要短，一两句话，像微信群聊。"""
 
 # 自主闲聊（没有话题焦点时）的额外指引
-IDLE_HINT = """【现在的情况】小徐有一会儿没说话了，群里冷下来了。
+IDLE_HINT = """【现在的情况】{user_name}有一会儿没说话了，群里冷下来了。
 - 你们自己随便聊：聊你自己的生活、最近遇到的事、奇怪的想法，或者接上面某位的话。
-- 别总围着小徐，也别做总结陈词。有一搭没一搭，想哪说哪。"""
+- 别总围着{user_name}，也别做总结陈词。有一搭没一搭，想哪说哪。"""
 
 # 用户把焦点交给朋友们的信号（词表在 corpus，语料统一维护）
 def _is_handoff(text: str) -> bool:
@@ -67,7 +67,7 @@ class Participant:
 class GroupSession:
     def __init__(self, participants: list[Participant]):
         self.participants = participants
-        self.transcript = []  # list[(speaker, text)]，speaker="小徐" 或朋友名
+        self.transcript = []  # list[(speaker, text)]，speaker=config.USER_NAME 或朋友名
         self.now = datetime.now()   # 统一时钟：同一轮发言所有朋友共用（修"四个人四个时间"）
         self.active = True
         self.channel = None          # 发送通道（/group 后由 main 挂载，或首次发言时带上）
@@ -142,7 +142,7 @@ def on_user_text(text: str, channel) -> None:
     handoff = _is_handoff(text)
     s.user_event.set()   # 用户回来了：闲聊停下
     s.interrupt.set()    # 在途回应：发完手头这条就停，看这条新消息
-    s.transcript.append(("小徐", text))  # 原子 append，立即
+    s.transcript.append((config.USER_NAME, text))  # 原子 append，立即
     with s._cond:
         s.user_queue.append((text, handoff))
         s._cond.notify_all()
@@ -321,7 +321,7 @@ def end() -> str:
                 config.DB_PATH = p.db_path
                 db.init()  # 切到归档库先迁移（旧库补 source 等后加的列）
                 for sp, tx in s.transcript:
-                    role = "user" if sp == "小徐" else "assistant"
+                    role = "user" if sp == config.USER_NAME else "assistant"
                     db.add_message(role, f"【群聊·{sp}】{tx}", kind="group")
             finally:
                 config.DB_PATH = real_db
@@ -355,14 +355,17 @@ def _speak(p: Participant, s: GroupSession, channel, idle: bool = False) -> str:
                 # 回应流程：睡着的人回一句迷糊话（和私聊一致，不调 LLM，省钱）
                 reply = corpus.pick(corpus.SLEEPY_REPLIES, "sleepy")
             else:
-                members = "、".join([*(x.name for x in s.participants), "小徐（用户）"])
+                # 此时 db 已切到这位朋友：user_name() 返回 TA 对用户的称呼（各朋友可不同）
+                uname = persona.user_name()
+                members = "、".join([*(x.name for x in s.participants), f"{uname}（用户）"])
                 # 统一时钟 + 统一生活日：群里所有朋友共用同一个 now、同一个
                 # 起床参照（config.WAKE_HOUR），修"四个人四个时间"
                 sys_prompt = (persona.build_system_prompt(
                     "AWAKE", now=s.now, life_wake_hour=config.WAKE_HOUR) + "\n"
-                    + GROUP_RULES.format(members=members, self_name=p.name))
+                    + GROUP_RULES.format(members=members, self_name=p.name,
+                                         user_name=uname))
                 if idle:
-                    sys_prompt += "\n" + IDLE_HINT
+                    sys_prompt += "\n" + IDLE_HINT.format(user_name=uname)
                 # 长会话防遗忘：滚出窗口的更早内容压成摘要，别把"这是新朋友阿燃"忘了
                 _maybe_summarize(s)
                 # 信息调度层统一组装：人设+群聊规则 → 群聊记忆优先召回 →
@@ -486,7 +489,7 @@ def _idle_burst(s: GroupSession) -> None:
 
 def _extract_group_memories(s: GroupSession, p: Participant) -> None:
     """散群后让每位朋友从群聊记录里提取记忆（存进TA自己的库，此时 db 已指向TA）。"""
-    log = "\n".join(f"{'用户' if sp == '小徐' else sp}：{tx}"
+    log = "\n".join(f"{'用户' if sp == config.USER_NAME else sp}：{tx}"
                     for sp, tx in s.transcript[-30:])
     now = datetime.now()
     week = "一二三四五六日"[now.weekday()]

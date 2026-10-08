@@ -32,6 +32,9 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 
+# --- 用户称呼（你的名字，AI 口中的"你"） ---
+USER_NAME = os.environ.get("USER_NAME", "小徐")  # 不写死：改名改 .env 的 USER_NAME + /refresh 即可
+
 # --- 企业微信自建应用 ---
 WECOM_CORPID = os.environ.get("WECOM_CORPID", "")
 WECOM_CORPSECRET = os.environ.get("WECOM_CORPSECRET", "")
