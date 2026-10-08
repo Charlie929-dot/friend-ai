@@ -513,7 +513,7 @@ def expand_long_memory(mem: dict) -> str | None:
 
 
 def recall(query: str, top_k: int = 5, group_first: bool = False,
-           expand_long: bool = False) -> list[dict]:
+           expand_long: bool = False, source: str | None = None) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
     记忆总量还小（≤10）时直接全量返回——早期每条都珍贵。
     打分：bigram/关键词重叠 + 时间标签加成（query 的相对时间词换算成日期匹配）。
@@ -526,6 +526,10 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
     更早的群聊记忆靠关键词命中召回。"""
     mems = [m for m in db.all_memories(limit=200)
             if m.get("status", "ok") == "ok"]  # 待确认删除的不参与召回
+    # 来源过滤：AI 主动检索时按用户语境指定（"群聊"→只在群聊记忆里搜）。
+    # 一旦指定 group，群聊记忆全量参与，不再受私聊场景"最近 5 条"的新鲜度限制。
+    if source in ("group", "private"):
+        mems = [m for m in mems if m.get("source", "private") == source]
     if not mems:
         return []
     if len(mems) <= 10:
@@ -602,15 +606,17 @@ def recall(query: str, top_k: int = 5, group_first: bool = False,
 _TOOL_SEARCH_DESC = (
     "搜索你关于小徐的记忆库，返回相关的记忆摘要。"
     "当你想不起某件事、需要回忆过去聊过的内容时调用。"
-    "只在确实需要查证时才调，别每句话都查。")
+    "只在确实需要查证时才调，别每句话都查。"
+    "如果用户说的是群里/群聊里发生的事，传 source=group 只在群聊记忆里搜。")
 _TOOL_DETAIL_DESC = (
     "深入回忆某件事的完整细节（展开长文本）。"
     "当 search_memories 的结果里某条标了【有长文】，"
-    "且你想听完整经过时，用这个把全文取出来。")
+    "且你想听完整经过时，用这个把全文取出来。"
+    "同样：用户说的是群里的事就传 source=group。")
 _TOOL_NO_QUERY = "（没有提供检索关键词）"
-_TOOL_NO_HIT = "（记忆库里没找到相关的内容）"
+_TOOL_NO_HIT = "（记不清了）"
 _TOOL_HIT_PREFIX = "找到这些相关记忆："
-_TOOL_DETAIL_NO_HIT = "（没找到相关记忆）"
+_TOOL_DETAIL_NO_HIT = "（记不清了）"
 _TOOL_DETAIL_PREFIX = "相关记忆的完整内容："
 _TOOL_UNKNOWN = "（未知工具）"
 _TOOL_GROUP_TAG = "（群聊）"
@@ -628,8 +634,13 @@ MEMORY_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "检索关键词或问题，如人名、事件、话题",
-                    }
+                        "description": "检索关键词。把用户口语化的问法重写成检索友好的关键词、可多写几个近义/相关词（空格分隔）：如'几点睡'→'睡觉时间 作息 熬夜 凌晨'，'那次爬山'→'爬山 出行 旅游'。",
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["private", "group", "all"],
+                        "description": "记忆来源：group=只在群聊记忆里搜，private=只在私聊记忆里搜，all=全部。用户提到'群里/群聊/那天在群里'时用 group。",
+                    },
                 },
                 "required": ["query"],
             },
@@ -645,8 +656,13 @@ MEMORY_TOOLS = [
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "要展开细节的检索关键词",
-                    }
+                        "description": "要展开细节的检索关键词（同样把口语问法重写成关键词）。",
+                    },
+                    "source": {
+                        "type": "string",
+                        "enum": ["private", "group", "all"],
+                        "description": "记忆来源：group=只在群聊记忆里搜，private=只在私聊记忆里搜，all=全部。",
+                    },
                 },
                 "required": ["query"],
             },
@@ -674,15 +690,18 @@ def _render_tool_memories(mems: list[dict]) -> str:
 def run_memory_tool(name: str, args: dict) -> str:
     """执行记忆检索工具，返回渲染好的文本结果（供 AI 阅读后继续回复）。"""
     query = str(args.get("query", "")).strip()
+    source = str(args.get("source", "")).strip() or None
+    if source not in ("group", "private"):
+        source = None  # 只认 group/private，其余（含 all/空/乱填）一律不过滤
     if not query:
         return _TOOL_NO_QUERY
     if name == "search_memories":
-        hits = recall(query, top_k=5, group_first=False)
+        hits = recall(query, top_k=5, group_first=False, source=source)
         if not hits:
             return _TOOL_NO_HIT
         return _TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
     if name == "recall_detail":
-        hits = recall(query, top_k=3, group_first=False, expand_long=True)
+        hits = recall(query, top_k=3, group_first=False, expand_long=True, source=source)
         if not hits:
             return _TOOL_DETAIL_NO_HIT
         return _TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)

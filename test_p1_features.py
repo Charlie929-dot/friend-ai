@@ -2071,6 +2071,45 @@ def test_memory_tool_calling():
         _db.init()
 
 
+def test_memory_tool_source_filter():
+    """检索工具按来源过滤（source=group 只搜群聊记忆）+ 召回为空返回"记不清"大脑反馈。"""
+    import tempfile
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+
+        # 1) 空库：召回为空返回"记不清了"（大脑反馈，不是冷冰冰的"没查到"）
+        assert "记不清" in _mem.run_memory_tool("search_memories", {"query": "随便搜"})
+
+        # 2) source 过滤命中：group 只搜群聊、private 只搜私聊
+        _db.add_memory("群聊里认识了新朋友阿燃", "人际", source="group")
+        _db.add_memory("小徐爱吃辣", "偏好", source="private")
+        g = _mem.recall("认识", source="group")
+        assert g and all(m.get("source", "private") == "group" for m in g), \
+            f"source=group 应只返回群聊记忆：{g}"
+        assert any("阿燃" in m["content"] for m in g)
+        p = _mem.recall("爱吃", source="private")
+        assert p and all(m.get("source", "private") == "private" for m in p)
+
+        # 3) 非法 source 值：不过滤、不报错
+        assert _mem.recall("认识", source="bogus") is not None
+
+        # 4) 工具 schema 含 source 参数（两个工具都有）
+        for t in _mem.MEMORY_TOOLS:
+            assert "source" in t["function"]["parameters"]["properties"]
+
+        print("ok 检索工具来源过滤（source=group 只搜群聊 + 召回空返回记不清）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -2105,6 +2144,7 @@ if __name__ == "__main__":
     test_identity_recall()
     test_long_memory()
     test_memory_tool_calling()
+    test_memory_tool_source_filter()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
     print("\n全部通过")
