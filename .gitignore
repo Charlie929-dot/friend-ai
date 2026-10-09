@@ -12,6 +12,10 @@ archive.log
 outbox.log
 *.log
 
+# 用户导入的电子书（不进 git，只留 README 说明）
+books/*
+!books/README.txt
+
 # 常驻守护的运行时产物（PID / 停止标志）
 *.pid
 web.stop

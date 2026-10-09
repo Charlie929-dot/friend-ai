@@ -145,9 +145,14 @@ def _settle(state: dict, now: datetime) -> bool:
                                   state["energy"] + config.WORK_ENERGY_RECOVER)
         state["energy"] = max(0, state["energy"] - config.WORK_ENERGY_COST)
         state["money"] += config.WORK_PAY_PER_UNIT
-        # 工作=读书：这个单元读一篇（推进阅读进度），读完产出"摘抄+读后感"素材
-        import reading
-        article = reading.next_article() if config.READING_ENABLED else None
+        # 工作=读书：这个单元读一段（优先用户导入的真书，没书回退内置书摘），读完产出"摘抄+读后感"素材
+        article = None
+        if config.READING_ENABLED:
+            import library
+            article = library.next_passage()          # 用户书库优先
+            if article is None:
+                import reading
+                article = reading.next_article()      # 没导入书才读内置书摘
         _produce_shareable(state["day"], state["settled"] + 1, article)
         state["settled"] += 1
         changed = True
@@ -166,7 +171,7 @@ _SHARE_PROMPT = (
 # 工作=读书：每读完一篇，产出"摘抄金句 + 人格化读后感"（quote 是预摘的真实金句，
 # 读后感由 LLM 按它的人格生成——爱吐槽就吐槽、爱感慨就感慨）。
 _READING_PROMPT = (
-    "（内心活动，不用回复这句话）你刚读完一篇{genre}类的文字——{source}《{title}》，"
+    "（内心活动，不用回复这句话）你刚读完{what}——{source}《{title}》，"
     "里面那句「{quote}」你很有感觉。\n"
     "补一句你的读后感或联想，带你的性格（爱吐槽就吐槽、爱感慨就感慨），"
     "可以自然地带出上面这句摘抄。\n"
@@ -207,9 +212,11 @@ def _gen_shareable(day: str, seq: int, article: dict | None = None) -> str:
 def _reading_content(article: dict | None, seq: int) -> str:
     """按"读没读到素材"选 prompt：读到 → 摘抄+读后感；没读到 → 泛化小事。"""
     if article and config.READING_ENABLED:
+        genre = article.get("genre")
+        what = f"一篇{genre}类的文字" if genre else "一本书里的一段"
         return _READING_PROMPT.format(
-            genre=article["genre"], source=article["source"],
-            title=article["title"], quote=article["quote"])
+            what=what, source=article["source"], title=article["title"],
+            quote=article["quote"])
     return _SHARE_PROMPT.format(seq=seq)
 
 

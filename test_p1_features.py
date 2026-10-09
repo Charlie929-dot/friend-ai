@@ -1532,6 +1532,89 @@ def test_reading_system():
         _db.init()
 
 
+def test_user_library():
+    """S4 用户书库：本地 txt（含 gbk）/ epub 解析、偏好选书、段级进度、结构与内置同构。"""
+    import json
+    import tempfile
+    import zipfile
+
+    import config as _cfg
+    import db as _db
+    import library as _lib
+
+    def _make_epub(path, title, author, chapters):
+        container = ('<?xml version="1.0" encoding="UTF-8"?>'
+                     '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                     '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+                     'media-type="application/oebps-package+xml"/></rootfiles></container>')
+        manifest = "".join(f'<item id="c{i}" href="chapter{i}.xhtml" '
+                           f'media-type="application/xhtml+xml"/>' for i in range(len(chapters)))
+        spine = "".join(f'<itemref idref="c{i}"/>' for i in range(len(chapters)))
+        opf = (f'<?xml version="1.0" encoding="UTF-8"?>'
+               f'<package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+               f'<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+               f'<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator></metadata>'
+               f'<manifest>{manifest}</manifest><spine>{spine}</spine></package>')
+        with zipfile.ZipFile(path, "w") as z:
+            z.writestr("mimetype", "application/epub+zip")
+            z.writestr("META-INF/container.xml", container)
+            z.writestr("OEBPS/content.opf", opf)
+            for i, ch in enumerate(chapters):
+                z.writestr(f"OEBPS/chapter{i}.xhtml",
+                           f"<html><body><p>{ch}</p></body></html>")
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_books = config.BOOKS_DIR
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        books_dir = tmp / "books"
+        (books_dir / "科幻").mkdir(parents=True)
+        (books_dir / "散文").mkdir(parents=True)
+        # txt（gbk 编码，模拟中文书常见编码）
+        (books_dir / "科幻" / "三体.txt").write_bytes(
+            "给时光以生命，给岁月以文明。\n\n给岁月以文明，而不是给文明以岁月。\n\n"
+            "弱小和无知不是生存的障碍，傲慢才是。".encode("gbk"))
+        # epub（带书名/作者元数据）
+        _make_epub(books_dir / "散文" / "背影.epub", "背影", "朱自清",
+                   ["我与父亲不相见已二年余了。", "我最不能忘记的是他的背影。"])
+        config.BOOKS_DIR = books_dir
+
+        # 夜猫子人格：爱读科幻
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "q",
+            "text": "夜猫子", "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2,
+            "reading_pref": "科幻", "drawn_at": "2026-10-10T00:00:00"}, ensure_ascii=False))
+
+        items = _lib.books()
+        assert len(items) == 2, f"应解析出 2 本书：{items}"
+        assert {b["title"] for b in items} == {"三体", "背影"}, items
+
+        # 偏好选书：科幻（三体）优先读；返回结构与 reading.next_article 同构
+        first = _lib.next_passage()
+        assert first["genre"] == "科幻" and first["title"] == "三体", first
+        assert set(("genre", "title", "source", "quote", "text")) <= set(first), \
+            f"返回结构要对齐内置书摘：{first.keys()}"
+        assert first["quote"] == "给时光以生命，给岁月以文明。", first["quote"]
+
+        # 段级进度：三体 3 段读完后换散文（背影）
+        _lib.next_passage()
+        _lib.next_passage()
+        fourth = _lib.next_passage()
+        assert fourth["title"] == "背影" and fourth["source"] == "朱自清", fourth
+
+        # 书架空 → None（work 层回退内置书摘）
+        config.BOOKS_DIR = tmp / "empty"
+        assert _lib.next_passage() is None, "空书架应返回 None"
+
+        print("ok 用户书库（txt/gbk + epub 解析 + 偏好选书 + 段级进度 + 结构与内置同构）")
+    finally:
+        config.BOOKS_DIR = real_books
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_legacy_persona_card_compat():
     """旧人格卡（缺 quirk/reading_pref/archetype）补全：/persona 不崩、阅读标签能显示。"""
     import json
@@ -2012,6 +2095,7 @@ if __name__ == "__main__":
     test_work_system()
     test_offline_inbox_and_rhythm()
     test_reading_system()
+    test_user_library()
     test_legacy_persona_card_compat()
     test_care_events()
     test_interruption_cost()

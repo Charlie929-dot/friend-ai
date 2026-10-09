@@ -44,6 +44,7 @@ HELP = """可用命令：
   /keepmem <编号>  保留一条 AI 提议删除的记忆（取消待删除标记）
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
   /work            看它今天手头的事（进度/精力/余额/攒了多少素材）
+  /books           看我书架上的书（导入的 txt/epub 真书）
   /autostart       查开机自启状态；/autostart on|off 开/关（网页端开机自己回来）
   /diary           看今天的日记（含复盘）；/diary <日期> 看指定那天
   /diaries         列出所有写过日记的日期
@@ -500,6 +501,24 @@ def handle(cmd_line: str) -> str:
                 f"今日进度 {s['done']}/{s['quota']} 件 · 精力 {s['energy']}/{config.WORK_ENERGY_MAX}"
                 f" · 余额 {s['money']} · 攒了 {fresh} 条没说过的素材\n"
                 f"（余额是纯叙事资源，不绑任何真实付费）")
+
+    if cmd == "/books":
+        # 用户书库（S4）：TA 读你导入的真实电子书（txt/epub）
+        import library as _lib
+        items = _lib.books()
+        if not items:
+            return (f"我书架上还没有书。把 txt/epub 丢进 {config.BOOKS_DIR} 目录"
+                    f"（可按分类放子目录，如 books/科幻/三体.txt），/refresh 后我就能读真书啦。")
+        prog = _lib.progress()
+        cur_id = prog.get("book_id")
+        lines = []
+        for b in items:
+            genre = f"·{b['genre']}" if b["genre"] else ""
+            mark = " ← 正在读" if b["id"] == cur_id else ""
+            lines.append(f"  {b['title']}（{b['author'] or '佚名'}）{genre} · {b['count']} 段{mark}")
+        return ("我书架上的书（忙自己的事时会读，优先读我偏好的分类）：\n"
+                + "\n".join(lines)
+                + "\n（放新书进 books/ 后 /refresh 即可）")
 
     if cmd == "/autostart":
         # 开机自启与常驻（G 模块）：查状态 / 开 / 关。start、stop 只在终端做——

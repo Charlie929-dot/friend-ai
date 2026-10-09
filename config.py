@@ -104,6 +104,7 @@ WORK_ENERGY_RECOVER = int(os.environ.get("WORK_ENERGY_RECOVER", "8"))        # �
 WORK_PAY_PER_UNIT = int(os.environ.get("WORK_PAY_PER_UNIT", "20"))           # 每个单元产出（纯叙事余额，绝不绑真实付费/内购）
 WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() == "on"  # 每单元产出 1 条可分享素材（供 C 模块主动分享当内容源）
 READING_ENABLED = os.environ.get("READING_ENABLED", "on").lower() == "on"   # 工作=读书（reading.py 素材库）；关了素材退回泛化"手头的事"
+BOOKS_DIR = Path(os.environ.get("BOOKS_DIR", str(BASE_DIR / "books")))     # 用户书库目录：丢 txt/epub 进来，TA 优先读真书（子目录名=阅读偏好分类）
 
 # --- 打断成本（S3 招牌：它忙不忙/累不累 → 现在找它的代价 costIndex = R×(1+F)） ---
 COST_R_FLOW = float(os.environ.get("COST_R_FLOW", "1.0"))          # 心流期阻力（最高：刚进入状态，打断最伤）
