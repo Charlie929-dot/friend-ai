@@ -32,10 +32,14 @@ HELP = """可用命令：
   /profile add <一行>   往清单里加一条（如 /profile add 年级：大二）
   /profile reuse   让当前朋友沿用之前填过的清单
   /profile clear   清空清单
+  /profile why <字段>   看TA某条清单的依据（当时对话原文）
+  /profile pending     看和旧记忆冲突、待你确认的新说法
+  /profile accept|reject <字段>  接受/否决待确认的新说法
   /note <内容>     记一条事实便签（如 /note 叫我小徐），AI 会长期记住
   /notes           查看所有事实便签
   /forget <编号>   删除一条事实便签
-  /memories        查看 AI 自动记住的事（记忆系统，含待确认删除区）
+  /memories        查看 AI 自动记住的事（分类分组，含待确认删除区）
+  /memories time   按时间（新→旧）平铺看全部记忆
   /delmem <编号>   删掉一条自动记忆（也用于确认 AI 提议的删除）
   /keepmem <编号>  保留一条 AI 提议删除的记忆（取消待删除标记）
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
@@ -270,6 +274,7 @@ def handle(cmd_line: str) -> str:
 
     if cmd == "/profile":
         import persona
+        import memory as _mem
         sub = arg.split(maxsplit=1)
         action = sub[0] if sub else ""
         value = sub[1].strip() if len(sub) > 1 else ""
@@ -277,7 +282,45 @@ def handle(cmd_line: str) -> str:
             current = persona._read_profile()
             if not current:
                 return "TA 现在对你一无所知。/profile add <一行> 告诉TA，或 /profile reuse 沿用旧清单。"
-            return f"TA 知道的关于你的事（预填清单）：\n{current}"
+            ev = _mem.profile_evidence()
+            lines = []
+            for l in current.splitlines():
+                l = l.strip()
+                if not l:
+                    continue
+                key = l.split("：", 1)[0].split(":", 1)[0].strip()
+                lid = ev.get(key, {}).get("long_id", 0) if isinstance(ev, dict) else 0
+                marker = f"　〔证据#{lid}〕" if lid else ""
+                lines.append(l + marker)
+            out = f"TA 知道的关于你的事（预填清单）：\n" + "\n".join(lines)
+            if ev:
+                out += "\n（〔证据#N〕是TA得出这条的依据，/profile why <字段> 看当时对话原文）"
+            pending = _mem.profile_pending()
+            if pending:
+                plines = [f"  {k} → {p['value']}"
+                          + (f"〔证据#{p['long_id']}〕" if p.get("long_id") else "")
+                          for k, p in pending.items()]
+                out += ("\n\n⚠ 有几处新说法跟旧的不一致，等你确认：\n" + "\n".join(plines)
+                        + "\n/profile accept <字段> 接受新说法 · /profile reject <字段> 保留旧的")
+            return out
+        if action == "why" and value:
+            text = _mem.profile_evidence_text(value)
+            if not text:
+                return f"「{value}」没有证据记录（可能是你手动填的，或还没自动提取过）。"
+            return f"「{value}」这条的依据（当时对话原文）：\n{text}"
+        if action == "pending":
+            pending = _mem.profile_pending()
+            if not pending:
+                return "没有待确认的更新。"
+            plines = [f"  {k} → {p['value']}" for k, p in pending.items()]
+            return ("待你确认的说法（新的和旧的冲突，TA 没擅自改）：\n" + "\n".join(plines)
+                    + "\n/profile accept <字段> 接受 · /profile reject <字段> 保留旧的")
+        if action == "accept" and value:
+            v = _mem.accept_pending_profile(value)
+            return f"好，记下啦：{value}：{v}" if v else f"「{value}」没有待确认的更新"
+        if action == "reject" and value:
+            v = _mem.reject_pending_profile(value)
+            return f"好，保留原来的说法，这条新说法不记了（{value}）。" if v else f"「{value}」没有待确认的更新"
         if action == "add" and value:
             db.set_kv("profile_locked", "1")
             old = db.get_kv("profile_text")
@@ -300,7 +343,7 @@ def handle(cmd_line: str) -> str:
             db.set_kv("profile_locked", "1")
             db.set_kv("profile_text", "")
             return "已清空，TA 又对你一无所知了。"
-        return "用法：/profile | /profile add <一行> | /profile reuse | /profile clear"
+        return "用法：/profile | /profile add <一行> | /profile reuse | /profile clear | /profile why <字段> | /profile pending | /profile accept|reject <字段>"
 
     if cmd == "/persona":
         card = persona_pool.load()
@@ -369,6 +412,21 @@ def handle(cmd_line: str) -> str:
         return f"已忘掉：{removed}" if removed else "没有这个编号的便签"
 
     if cmd == "/memories":
+        sub = arg.strip().lower()
+        if sub in ("time", "时间", "-t", "--time"):
+            # 按时间平铺（新→旧）：不分组，每条带存储时间 + 事发时间标签，方便看时间线
+            mems = [m for m in db.all_memories(limit=200)
+                    if m.get("status", "ok") == "ok"]
+            if not mems:
+                return "我还没自动记住什么。聊着聊着就会有啦，也可以 /note 直接告诉我。"
+            lines = []
+            for m in mems:  # all_memories 已是 id 倒序（新→旧）
+                stored = m.get("created_at", "")[:16].replace("T", " ")  # MM-DD HH:MM
+                anchor = f"@{m['time_label']}" if m.get("time_label") else ""
+                lines.append(f"[{m['id']}] {m['content']}"
+                             + (f"  {anchor}" if anchor else "")
+                             + f"（记于{stored}）")
+            return f"我记住的 {len(mems)} 件事（按时间，新→旧）：\n" + "\n".join(lines)
         mems = [m for m in db.all_memories(limit=50)
                 if m.get("status", "ok") == "ok"]
         pendings = db.pending_delete_memories()
@@ -392,6 +450,7 @@ def handle(cmd_line: str) -> str:
                              + (f"  {dims}" if dims else "")
                              + (f"（记于{stored}）" if stored else ""))
         out = f"我记住的 {len(mems)} 件事：\n" + "\n".join(lines)
+        out += "\n（想按时间看全部，用 /memories time）"
         if pendings:
             plines = [f"  [{m['id']}] {m['content']}" for m in pendings]
             out += ("\n\n🗑 我想忘掉这些（待你确认）：\n" + "\n".join(plines)

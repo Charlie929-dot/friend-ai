@@ -185,7 +185,29 @@ def build_system_prompt(state: str) -> str:
     if facts:
         facts_text = "\n".join(f"- {f}" for f in facts)
         parts.append(f"【TA亲口告诉你、你记下来的事】（与上面信息冲突时，以这里为准）\n{facts_text}")
+    pending_hint = _pending_profile_hint()
+    if pending_hint:
+        parts.append(pending_hint)
     return "\n".join(parts)
+
+
+def _pending_profile_hint() -> str:
+    """有"和旧记忆冲突、待用户确认"的 profile 新说法时，注入提示——
+    让 TA 在合适时机自然地跟对方核实，而不是自己悄悄改掉（有疑惑要交流清楚）。"""
+    import json
+    import db
+    raw = db.get_kv("profile_pending")
+    if not raw:
+        return ""
+    try:
+        pending = json.loads(raw)
+    except ValueError:
+        return ""
+    if not pending:
+        return ""
+    items = "；".join(f"{k}→{v['value']}" for k, v in pending.items())
+    return (f"【待你确认的事】你之前记的关于TA的几件事，现在听到的新说法跟旧的不一样"
+            f"（{items}）。别自己悄悄改，找个自然的时机跟TA确认一下、问清楚。")
 
 
 def _time_period(hour: int) -> str:

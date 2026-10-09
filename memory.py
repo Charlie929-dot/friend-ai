@@ -201,7 +201,7 @@ def _extract() -> None:
     ], temperature=0.2)
     items = _parse_json_array(raw)
     for it in items:
-        _apply(it, assistant_tail)
+        _apply(it, assistant_tail, evidence=convo)
 
 
 def _parse_json_array(raw: str) -> list[dict]:
@@ -223,8 +223,12 @@ _LEGACY_CATEGORY = {"fact": "画像", "preference": "偏好", "plan": "计划",
                     "event": "事件", "person": "人际"}
 
 
-def _apply(item: dict, assistant_tail: bool = False) -> bool:
-    """落库一条提取结果。返回是否新记了一条。"""
+def _apply(item: dict, assistant_tail: bool = False, evidence: str = "") -> bool:
+    """落库一条提取结果。返回是否新记了一条。
+
+    evidence：本轮提取窗口的对话原文（_extract 传入），用于给 profile 清单
+    字段留"上下文证据"——B 库存原文、A 库记忆挂 long_id 链接（见 _apply_profile）。
+    """
     content = str(item["content"]).strip()
 
     # AI 提议删除：只标记待确认，不真删（用户 /delmem 确认、/keepmem 保留）
@@ -253,8 +257,6 @@ def _apply(item: dict, assistant_tail: bool = False) -> bool:
 
     # 个人清单：属于 profile 字段的确定性事实同步进 TA 的清单（/profile 可见）
     profile_line = str(item.get("profile", "")).strip()
-    if profile_line:
-        _apply_profile(profile_line)
 
     category = str(item.get("category", "画像")).strip()
     category = _LEGACY_CATEGORY.get(category, category)
@@ -282,53 +284,174 @@ def _apply(item: dict, assistant_tail: bool = False) -> bool:
         if m["content"] == content:
             return False
 
+    # profile 证据（B 库）先落，好让下面这条 A 库记忆挂上证据链接
+    evidence_long_id = 0
+    if profile_line and evidence:
+        evidence_long_id = db.add_long_memory(
+            summary=f"清单证据：{profile_line}",
+            content=f"这条清单字段（{profile_line}）提取自这段对话：\n\n{evidence}",
+            category="画像", theme=theme, time_label=time_label)
+
     if is_long:
         long_id = db.add_long_memory(content, full, category, tags, time_label,
                                      place, person, theme)
-        db.add_memory(content, category, tags, time_label, place, person, theme,
-                      long_id=long_id)
+        mem_id = db.add_memory(content, category, tags, time_label, place, person,
+                               theme, long_id=long_id)
         print(f"[memory] 记住长文：({category}|{theme or '—'}) {content[:30]}…"
               f"（全文 {len(full)} 字，B库#{long_id}）")
-        return True
+    else:
+        # 普通记忆；若带 profile 清单事实，long_id 指向证据（A 库挂链接 → B 库原文）
+        mem_id = db.add_memory(content, category, tags, time_label, place, person,
+                               theme, long_id=evidence_long_id)
+        dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
+        print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
 
-    db.add_memory(content, category, tags, time_label, place, person, theme)
-    dims = "".join(f" @{x}" for x in (time_label, place, person) if x)
-    print(f"[memory] 记住：({category}|{theme or '—'}) {content[:30]}{dims}")
+    if profile_line:
+        _apply_profile(profile_line, mem_id=mem_id, evidence_long_id=evidence_long_id)
+
     return True
 
 
-def _apply_profile(line: str) -> None:
-    """把一条"字段：值"写进当前朋友的 profile 清单（kv.profile_text）。
+# 稳定字段：这些是"身份级"事实（作息/生日/城市/称呼等），一旦记错很伤人，
+# 所以 AI 遇到跟旧值冲突的新说法时**不静默覆盖**，标 pending 待用户确认（留痕+有疑惑交流）。
+STABLE_PROFILE_FIELDS = {"称呼", "生日", "城市", "所在城市", "作息习惯",
+                         "职业", "专业", "职业/专业", "学校", "年级"}
+# 其余字段（在忙的事/兴趣爱好/喜欢的内容类型/雷区/其他）属自然变动，可直接更新。
 
-    规则：
-    - 必须有"字段：值"结构（否则只是普通记忆，不进清单）
-    - 字段已存在时：AI 自己写过的字段才更新值；用户手动加的（不在
-      profile_auto_keys 里）不覆盖——以用户为准
-    - 自动填写会置 profile_locked=1，让新朋友沿用这份清单而非遗产 profile.md
-    """
-    m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", line.strip())
-    if not m:
+_PROFILE_EVIDENCE_KEY = "profile_evidence"   # 字段 → 证据映射（mem_id/long_id/at）
+_PROFILE_PENDING_KEY = "profile_pending"     # 字段 → 待确认的新说法
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _json_kv(key: str) -> dict:
+    raw = db.get_kv(key)
+    try:
+        return json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+
+
+def _set_json_kv(key: str, data: dict) -> None:
+    db.set_kv(key, json.dumps(data, ensure_ascii=False))
+
+
+def profile_evidence() -> dict:
+    """profile 字段的证据映射：{字段: {mem_id, long_id, at}}。"""
+    return _json_kv(_PROFILE_EVIDENCE_KEY)
+
+
+def profile_pending() -> dict:
+    """待确认的 profile 更新：{字段: {value, mem_id, long_id, at}}。"""
+    return _json_kv(_PROFILE_PENDING_KEY)
+
+
+def profile_evidence_text(field: str) -> str | None:
+    """取某个字段的证据原文（B 库）；无证据返回 None。"""
+    ev = profile_evidence().get(field)
+    if not ev or not ev.get("long_id"):
+        return None
+    long = db.get_long_memory(ev["long_id"])
+    return long["content"] if long else None
+
+
+def _record_evidence(field: str, mem_id: int, long_id: int) -> None:
+    if not (mem_id or long_id):
         return
-    key, value = m.group(1).strip(), m.group(2).strip()
-    if not value or len(value) > 60:
-        return
+    ev = profile_evidence()
+    ev[field] = {"mem_id": mem_id, "long_id": long_id, "at": _now_iso()}
+    _set_json_kv(_PROFILE_EVIDENCE_KEY, ev)
+
+
+def _record_pending(field: str, value: str, mem_id: int, long_id: int) -> None:
+    pending = profile_pending()
+    pending[field] = {"value": value, "mem_id": mem_id, "long_id": long_id,
+                      "at": _now_iso()}
+    _set_json_kv(_PROFILE_PENDING_KEY, pending)
+
+
+def _write_profile_value(key: str, value: str, force: bool = False) -> bool:
+    """把 (key, value) 写进 profile_text。force=True 时无视"用户手动字段"保护。"""
     auto_keys = set(filter(None, db.get_kv("profile_auto_keys").split(",")))
     lines = [l for l in db.get_kv("profile_text").splitlines() if l.strip()]
     new_line = f"{key}：{value}"
     for i, l in enumerate(lines):
         if re.match(rf"^{re.escape(key)}\s*[：:]", l.strip()):
-            if key in auto_keys:        # AI 自己写过的字段：更新值
-                lines[i] = new_line
-            else:                       # 用户手动加的字段：以用户为准，不覆盖
-                return
+            if not force and key not in auto_keys:   # 用户手动字段：以用户为准
+                return False
+            lines[i] = new_line
             break
     else:
-        lines.append(new_line)          # 新字段：追加
+        lines.append(new_line)
     db.set_kv("profile_text", "\n".join(lines))
     db.set_kv("profile_locked", "1")
     auto_keys.add(key)
     db.set_kv("profile_auto_keys", ",".join(sorted(auto_keys)))
-    print(f"[memory] 清单更新：{new_line}")
+    return True
+
+
+def _apply_profile(line: str, mem_id: int = 0, evidence_long_id: int = 0) -> str | None:
+    """把一条"字段：值"写进当前朋友的 profile 清单（kv.profile_text）。
+
+    规则：
+    - 必须有"字段：值"结构（否则只是普通记忆，不进清单）
+    - 字段已存在时：AI 自己写过的字段才更新；用户手动加的（不在
+      profile_auto_keys 里）不覆盖——以用户为准
+    - **稳定字段遇到冲突值 → 不静默覆盖，标 pending 待用户确认**（留痕 + 有疑惑交流）
+    - 自动填写会置 profile_locked=1，并记录证据映射（mem_id/long_id）
+
+    返回 "applied" / "pending" / "same" / None（无结构或不覆盖）。
+    """
+    m = re.match(r"^([^：:]{1,10})[：:]\s*(.+)$", line.strip())
+    if not m:
+        return None
+    key, value = m.group(1).strip(), m.group(2).strip()
+    if not value or len(value) > 60:
+        return None
+    auto_keys = set(filter(None, db.get_kv("profile_auto_keys").split(",")))
+    for l in [x for x in db.get_kv("profile_text").splitlines() if x.strip()]:
+        if re.match(rf"^{re.escape(key)}\s*[：:]", l.strip()):
+            if l.strip() == f"{key}：{value}":
+                return "same"                      # 值和已记的一样，无需动作
+            if key not in auto_keys:
+                return None                        # 用户手动字段：以用户为准，不覆盖
+            if key in STABLE_PROFILE_FIELDS:
+                # 稳定字段冲突：新说法和旧的打架 → 不擅自改，交给用户确认
+                _record_pending(key, value, mem_id, evidence_long_id)
+                print(f"[memory] 清单冲突待确认：{key} 旧「{l.strip()}」新「{f'{key}：{value}'}」")
+                return "pending"
+            break
+    _write_profile_value(key, value)
+    _record_evidence(key, mem_id, evidence_long_id)
+    print(f"[memory] 清单更新：{key}：{value}")
+    return "applied"
+
+
+def accept_pending_profile(field: str) -> str | None:
+    """用户确认接受待确认的新说法：写入清单并转为正式证据。"""
+    pending = profile_pending()
+    p = pending.get(field)
+    if not p:
+        return None
+    _write_profile_value(field, p["value"], force=True)
+    _record_evidence(field, p.get("mem_id", 0), p.get("long_id", 0))
+    del pending[field]
+    _set_json_kv(_PROFILE_PENDING_KEY, pending)
+    print(f"[memory] 清单确认（用户接受）：{field}：{p['value']}")
+    return p["value"]
+
+
+def reject_pending_profile(field: str) -> str | None:
+    """用户否决待确认的新说法：保留旧值，丢弃新说法。"""
+    pending = profile_pending()
+    p = pending.pop(field, None)
+    if p is None:
+        return None
+    _set_json_kv(_PROFILE_PENDING_KEY, pending)
+    print(f"[memory] 清单确认（用户保留旧值）：{field}")
+    return p["value"]
 
 
 def backfill_history(batch: int = 16, progress=print) -> int:
@@ -361,7 +484,7 @@ def backfill_history(batch: int = 16, progress=print) -> int:
             {"role": "user", "content": user_msg},
         ], temperature=0.2)
         for it in _parse_json_array(raw):
-            if _apply(it, assistant_tail):
+            if _apply(it, assistant_tail, evidence=convo):
                 added += 1
         offset = rows[-1]["id"]
         db.set_kv("memfill_offset", str(offset))

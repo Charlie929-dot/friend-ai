@@ -48,6 +48,7 @@
 6. **内部 LLM 调用不拼完整人设** —— 记忆提取、素材生成这类"后台"调用一律用 `persona.core_identity_prompt()`，**不要用 `build_system_prompt()`**。完整人设里塞的动态段（时间/状态/手头的事）只要有一个会触发新的 LLM 调用就成环递归爆栈（实测 #17 已踩）。
 7. **Windows 上别用 `os.kill(pid, 0)` 探活** —— 它不等于 POSIX 的信号 0，CPython 会直接 `TerminateProcess`，**是杀人不是探活**。查进程活着用 `autostart._pid_alive()`（`OpenProcess` + `GetExitCodeProcess`）。
 8. **注册计划任务别用 `schtasks.exe`** —— 部分终端（含受限会话）里它连 `/query` 都返回 "The system cannot find the path specified"。统一走 `autostart._ps()`（PowerShell 的 `ScheduledTasks` cmdlet）。
+9. **profile 自动填写要留痕、稳定字段不静默覆盖** —— AI 自动填 profile 字段时，上下文证据存 **B 库**（`long_memories`），**A 库记忆挂 `long_id` 链接**；`/profile why <字段>` 看证据原文。**稳定字段**（`memory.STABLE_PROFILE_FIELDS`：作息/生日/城市/称呼等身份级）遇到与旧值冲突的新说法**不静默覆盖**，标 `pending` 待用户确认（`/profile pending/accept/reject`），并由 `persona._pending_profile_hint()` 注入提示让 AI 主动跟用户核实（实测 #21）。可变字段（在忙的事等）可照旧更新。
 
 ---
 

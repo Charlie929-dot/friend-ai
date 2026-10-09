@@ -29,13 +29,18 @@
   .bar-e>i{background:#7ee0a8} .bar-p>i{background:#6bb8ff}
   .meta { display:flex; gap:14px; font-size:11px; color:#9aa0c0; margin-top:8px; flex-wrap:wrap; }
   .typing { font-size:11px; color:#8a8fc0; margin-top:6px; min-height:14px; }
-  .chat { flex:1; overflow-y:auto; padding:6px 4px; display:flex; flex-direction:column; gap:10px; }
-  .msg { max-width:82%; padding:9px 12px; border-radius:14px; font-size:13.5px;
+  .chat { flex:1; overflow-y:auto; padding:10px 6px 4px; display:flex; flex-direction:column; }
+  .daydiv { align-self:center; background:#2a2d3d; color:#9aa0c0; font-size:11px;
+    padding:3px 10px; border-radius:12px; margin:10px 0 2px; }
+  .msg { display:flex; flex-direction:column; max-width:82%; margin:3px 0; }
+  .msg.ai { align-self:flex-start; align-items:flex-start; }
+  .msg.user { align-self:flex-end; align-items:flex-end; }
+  .bubble { padding:9px 12px; border-radius:14px; font-size:13.5px;
     line-height:1.55; white-space:pre-wrap; }
-  .msg.ai{background:#33374f;align-self:flex-start;border-bottom-left-radius:4px}
-  .msg.user{background:#3a6df0;align-self:flex-end;border-bottom-right-radius:4px}
+  .msg.ai .bubble { background:#33374f; border-bottom-left-radius:4px; }
+  .msg.user .bubble { background:#3a6df0; border-bottom-right-radius:4px; }
+  .mtime { font-size:10px; color:#7e84a8; margin-top:3px; padding:0 4px; }
   .msg.sys{align-self:center;background:transparent;color:#7e84a8;font-size:11px;text-align:center}
-  .ts { display:block; font-size:10px; color:#8a8fc0; margin-bottom:3px; }
   .urgent { display:flex; align-items:center; gap:6px; font-size:11px; color:#ff8e8e;
     margin-top:6px; }
   .inputbar { display:flex; gap:6px; margin-top:8px; }
@@ -145,6 +150,7 @@
         <button class="btn" data-cmd="/diary">今天的日记</button>
         <button class="btn" data-cmd="/diaries">日记目录</button>
         <button class="btn" data-cmd="/memories">TA 记住的事</button>
+        <button class="btn" data-cmd="/memories time">记忆（时间序）</button>
         <button class="btn" data-cmd="/notes">事实便签</button>
         <button class="btn" data-cmd="/profile">TA 知道的你</button>
         <button class="btn" data-cmd="/review">现在就复盘</button>
@@ -182,11 +188,50 @@ const chat = () => $('chat');
 
 function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
+// --- 时间：今天只显示 HH:MM，非今天带日期；换天插一条日期分隔（微信/Telegram 风格） ---
+let lastMsgDay = '';
+function weekdayOf(ts){
+  const d = new Date(ts.slice(0,10) + 'T12:00:00');
+  return '日一二三四五六'[d.getDay()];
+}
+function dayLabel(ts){
+  const day = ts.slice(0,10);
+  const now = new Date();
+  const today = now.toISOString().slice(0,10);
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  const yestStr = yest.toISOString().slice(0,10);
+  if (day === today) return '今天';
+  if (day === yestStr) return '昨天';
+  const y = +ts.slice(0,4), m = +ts.slice(5,7), d = +ts.slice(8,10);
+  const year = (y === now.getFullYear()) ? '' : (y + '年');
+  return year + m + '月' + d + '日 星期' + weekdayOf(ts);
+}
+function fmtTime(ts){
+  if (!ts) return '';
+  const hhmm = ts.slice(11,16);
+  const now = new Date();
+  const day = ts.slice(0,10);
+  const today = now.toISOString().slice(0,10);
+  if (day === today) return hhmm;
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  if (day === yest.toISOString().slice(0,10)) return '昨天 ' + hhmm;
+  const y = ts.slice(0,4), m = ts.slice(5,7), dd = ts.slice(8,10);
+  return (y === String(now.getFullYear())) ? (m + '-' + dd + ' ' + hhmm)
+                                            : (y + '-' + m + '-' + dd + ' ' + hhmm);
+}
+
 function addMsg(m){
+  const day = m.ts ? m.ts.slice(0,10) : '';
+  if (day && day !== lastMsgDay){
+    const div = document.createElement('div');
+    div.className = 'daydiv'; div.textContent = dayLabel(m.ts);
+    chat().appendChild(div); lastMsgDay = day;
+  }
   const d = document.createElement('div');
   d.className = 'msg ' + (m.role === 'user' ? 'user' : 'ai');
-  const t = m.ts ? m.ts.slice(11,16) : '';
-  d.innerHTML = (t ? '<span class="ts">'+t+'</span>' : '') + esc(m.content);
+  const t = fmtTime(m.ts);
+  d.innerHTML = '<div class="bubble">' + esc(m.content) + '</div>'
+              + (t ? '<div class="mtime">' + t + '</div>' : '');
   chat().appendChild(d);
   chat().scrollTop = chat().scrollHeight;
 }
@@ -274,7 +319,7 @@ async function runCmd(cmd, title){
 }
 
 // 换人之后整个库都换了：聊天区必须清掉重来，不然两条时间线会串在一起
-function resetChat(){ chat().innerHTML = ''; lastId = 0; }
+function resetChat(){ chat().innerHTML = ''; lastId = 0; lastMsgDay = ''; }
 
 document.querySelectorAll('.btn[data-cmd]').forEach(b => {
   b.onclick = () => runCmd(b.dataset.cmd, b.textContent);
@@ -311,7 +356,6 @@ async function loadFriends(){
 }
 
 async function switchFriend(idx, name){
-  if (!confirm('切换到 ' + name + '？当前这位会先自动归档，随时能换回来。')) return;
   panelBusy('换朋友');
   const r = await (await fetch('/api/send', {
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -339,7 +383,6 @@ $('btnSwitch').onclick = () => {
 };
 
 $('btnNew').onclick = async () => {
-  if (!confirm('抽一位新朋友：当前这位会先归档（随时能换回来），然后从零开始认识。确定？')) return;
   panelBusy('抽新朋友');
   const r = await (await fetch('/api/send', {
     method:'POST', headers:{'Content-Type':'application/json'},

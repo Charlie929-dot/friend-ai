@@ -580,8 +580,9 @@ def test_typing_indicator():
 
 
 def test_profile_autofill():
-    """AI 自动维护 profile：profile 字段进清单、自动字段可更新、手动字段不覆盖。"""
+    """AI 自动维护 profile：写入/稳定字段冲突待确认/可变字段更新/手动字段不覆盖/证据留痕。"""
     import tempfile
+    import commands as _cmd
     import db as _db
     import memory as _mem
 
@@ -591,32 +592,72 @@ def test_profile_autofill():
     config.DB_PATH = tmp / "friend.db"
     try:
         _db.init()
-        # 1) 提取结果带 profile 字段 → 写进清单并锁定
+        ev = "对方：我最近都熬夜到凌晨\n我：原来你是夜猫子"
+        # 1) 提取结果带 profile 字段 → 写进清单并锁定 + 证据留痕
         _mem._apply({"content": "小徐是夜猫子作息", "category": "画像",
-                     "profile": "作息习惯：夜猫子，凌晨才睡"})
+                     "profile": "作息习惯：夜猫子，凌晨才睡"}, evidence=ev)
         assert _db.get_kv("profile_locked") == "1", "自动填写应锁定清单"
         assert "作息习惯：夜猫子，凌晨才睡" in _db.get_kv("profile_text"), \
             f"清单没写进去：{_db.get_kv('profile_text')!r}"
-        # 2) 同一字段新值 → AI 写过的字段可更新
+        pe = _mem.profile_evidence()
+        assert "作息习惯" in pe and pe["作息习惯"].get("long_id"), "应留证据映射"
+        # A 库记忆挂了证据链接（long_id → B 库原文）
+        mem = [m for m in _db.all_memories() if m["content"] == "小徐是夜猫子作息"][0]
+        assert mem["long_id"] == pe["作息习惯"]["long_id"], "A 库应挂 B 库证据链接"
+        # /profile 展示证据标记；/profile why 取当时对话原文
+        out = _cmd.handle("/profile")
+        assert "证据#" in out, f"/profile 缺证据标记：{out}"
+        why = _cmd.handle("/profile why 作息习惯")
+        assert "夜猫子" in why, f"/profile why 缺证据原文：{why}"
+
+        # 2) 稳定字段（作息习惯）遇到冲突新值 → 不静默覆盖，标 pending 待确认
         _mem._apply({"content": "小徐最近开始早睡了", "category": "画像",
-                     "profile": "作息习惯：最近在调整，十一点前就睡"})
+                     "profile": "作息习惯：最近在调整，十一点前就睡"},
+                    evidence="对方：我昨晚十一点就睡了")
+        assert "凌晨才睡" in _db.get_kv("profile_text"), \
+            f"稳定字段不应被静默覆盖：{_db.get_kv('profile_text')!r}"
+        assert "十一点前就睡" not in _db.get_kv("profile_text"), "冲突值不应写入"
+        pending = _mem.profile_pending()
+        assert "作息习惯" in pending and "十一点前就睡" in pending["作息习惯"]["value"], \
+            f"冲突应标 pending：{pending}"
+
+        # 2b) 用户接受 pending → 覆盖旧值并转为正式证据
+        assert _mem.accept_pending_profile("作息习惯") == "最近在调整，十一点前就睡"
         assert "十一点前就睡" in _db.get_kv("profile_text") \
-            and "凌晨才睡" not in _db.get_kv("profile_text"), \
-            f"自动字段未更新：{_db.get_kv('profile_text')!r}"
-        # 3) 用户手动加的字段 → AI 不覆盖
+            and "凌晨才睡" not in _db.get_kv("profile_text")
+        assert "作息习惯" not in _mem.profile_pending(), "accept 后应清掉 pending"
+
+        # 2c) 用户否决 pending：保留旧值，丢弃新说法
+        _mem._apply({"content": "小徐说他要早睡", "category": "画像",
+                     "profile": "作息习惯：每天九点睡"}, evidence="对方：我以后九点睡")
+        assert _mem.reject_pending_profile("作息习惯") == "每天九点睡"
+        assert "每天九点睡" not in _db.get_kv("profile_text"), "reject 后不应写入新值"
+
+        # 3) 可变字段（在忙的事）→ 可直接更新（自然变动）
+        _mem._apply({"content": "小徐在写图像作业", "category": "画像",
+                     "profile": "在忙的事：写图像作业"})
+        _mem._apply({"content": "小徐开始做项目了", "category": "画像",
+                     "profile": "在忙的事：做AI朋友项目"})
+        assert "做AI朋友项目" in _db.get_kv("profile_text") \
+            and "写图像作业" not in _db.get_kv("profile_text"), \
+            f"可变字段未更新：{_db.get_kv('profile_text')!r}"
+
+        # 4) 用户手动加的字段 → AI 不覆盖
         _db.set_kv("profile_text", _db.get_kv("profile_text") + "\n称呼：小徐")
         _mem._apply({"content": "小徐让大家叫他徐哥", "category": "画像",
                      "profile": "称呼：徐哥"})
         assert "称呼：小徐" in _db.get_kv("profile_text"), \
             f"手动字段被覆盖：{_db.get_kv('profile_text')!r}"
-        # 4) 无"字段：值"结构的 profile 不写入
+
+        # 5) 无"字段：值"结构的 profile 不写入
         _mem._apply_profile("没有结构的一整句话")
         assert "没有结构" not in _db.get_kv("profile_text")
-        # 5) 记忆本身照常入库（profile 是附加动作）
+        # 6) 记忆本身照常入库（profile 是附加动作）
         assert any(m["content"] == "小徐是夜猫子作息" for m in _db.all_memories())
-        print("ok AI 自动维护 profile（写入/更新/不覆盖手动/结构校验）")
+        print("ok AI 自动维护 profile（写入/稳定冲突待确认/可变更新/不覆盖手动/证据留痕）")
     finally:
         config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
 
 
 def test_interrupt_detection():
