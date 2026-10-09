@@ -170,15 +170,17 @@ def _pick_quote(passage: str) -> str:
     return passage[:40].rstrip()
 
 
-def next_passage() -> dict | None:
-    """取 TA 下一段要读的：按人格阅读偏好选书、段级顺序推进、一轮读完再从头。
+def next_passage(n: int = 1) -> dict | None:
+    """取 TA 下一段（或下 n 段）要读的：按人格阅读偏好选书、段级顺序推进、一轮读完再从头。
 
-    返回 {genre, title, source, quote, text}（与 reading.next_article 同构）；
-    书架为空返回 None（work 层回退内置书摘）。
+    一个工作单元读 n 段（n 可配，如 50）：text = 这 n 段合并的内容（截断），
+    quote = 从中摘的金句，进度推进 n 段。返回 {genre, title, source, quote, text}
+    （与 reading.next_article 同构）；书架为空返回 None（work 层回退内置书摘）。
     """
     books_full = _scan()
     if not books_full:
         return None
+    n = max(1, n)
     import persona
     pref = persona.behavior_params().get("reading_pref", "")
     # 偏好书 → 无分类书 → 其他偏好书；同类内按文件名序（稳定）
@@ -189,19 +191,31 @@ def next_passage() -> dict | None:
     book_id = prog.get("book_id")
     idx = prog.get("idx", 0)
     cur = next((i for i, b in enumerate(ordered) if b["id"] == book_id), 0)
-    # 当前书读到末尾（或空书）就换下一本
-    for _ in range(len(ordered)):
-        book = ordered[cur]
-        if idx < len(book["passages"]):
+
+    chunks = []
+    title = author = genre = ""
+    for i in range(n):
+        # 当前书读到末尾（或空书）就换下一本
+        for _ in range(len(ordered)):
+            book = ordered[cur]
+            if idx < len(book["passages"]):
+                break
+            idx = 0
+            cur = (cur + 1) % len(ordered)
+        passages = ordered[cur]["passages"]
+        if not passages:
             break
-        idx = 0
-        cur = (cur + 1) % len(ordered)
-    book = ordered[cur]
-    passages = book["passages"]
-    if not passages:
+        chunks.append(passages[idx])
+        if i == 0:
+            title = ordered[cur]["title"]
+            author = ordered[cur]["author"]
+            genre = ordered[cur]["genre"]
+        idx += 1
+    if not chunks:
         return None
-    passage = passages[idx]
-    _save_progress(book["id"], idx + 1)
-    return {"genre": book["genre"], "title": book["title"],
-            "source": book["author"] or "佚名",
-            "quote": _pick_quote(passage), "text": passage}
+    _save_progress(ordered[cur]["id"], idx)
+
+    text = " ".join(chunks)[:800]
+    return {"genre": genre, "title": title,
+            "source": author or "佚名",
+            "quote": _pick_quote(text), "text": text}

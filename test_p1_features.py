@@ -1610,6 +1610,12 @@ def test_user_library():
             "This is a good sentence.", _lib._pick_quote("This is a good sentence. Next one here.")
         assert "3.14" in _lib._pick_quote("圆周率是 3.14 左右的常数。这是一句完整的话。")
 
+        # 一次读 n 段：进度按 n 推进（读 2 段 → 进度 idx=2）
+        _lib._save_progress("", 0)   # 空 book_id → 从偏好排序的第一本（科幻·三体）开始
+        art = _lib.next_passage(2)
+        assert _lib.progress()["idx"] == 2, f"读 2 段后进度应为 2：{_lib.progress()}"
+        assert art["title"] == "三体" and art["quote"], f"读 2 段应返回三体摘抄：{art}"
+
         # 书架空 → None（work 层回退内置书摘）
         config.BOOKS_DIR = tmp / "empty"
         assert _lib.next_passage() is None, "空书架应返回 None"

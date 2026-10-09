@@ -145,11 +145,11 @@ def _settle(state: dict, now: datetime) -> bool:
                                   state["energy"] + config.WORK_ENERGY_RECOVER)
         state["energy"] = max(0, state["energy"] - config.WORK_ENERGY_COST)
         state["money"] += config.WORK_PAY_PER_UNIT
-        # 工作=读书：这个单元读一段（优先用户导入的真书，没书回退内置书摘），读完产出"摘抄+读后感"素材
+        # 工作=读书：这个单元读 N 段（优先用户导入的真书，没书回退内置书摘），读完产出"摘抄+读后感"素材
         article = None
         if config.READING_ENABLED:
             import library
-            article = library.next_passage()          # 用户书库优先
+            article = library.next_passage(config.WORK_READ_PER_UNIT)  # 用户书库优先
             if article is None:
                 import reading
                 article = reading.next_article()      # 没导入书才读内置书摘
