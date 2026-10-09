@@ -91,3 +91,18 @@ PURGE_REVIEWED_MESSAGES = os.environ.get("PURGE_REVIEWED_MESSAGES", "off").lower
 # --- 记忆主动检索（function calling / MCP 阶段） ---
 MEMORY_TOOLS_ENABLED = os.environ.get("MEMORY_TOOLS_ENABLED", "on").lower() == "on"   # AI 在对话里主动调检索工具的总开关（反复要求回忆时自己翻记忆库）
 MEMORY_TOOL_MAX_ROUNDS = int(os.environ.get("MEMORY_TOOL_MAX_ROUNDS", "3"))           # 一轮回复里工具调用循环的最大轮数（防无限循环/失控）
+
+# --- 工作系统（S3「有自己的生活」：它自己的日子，工作循环 + 心流期） ---
+WORK_ENABLED = os.environ.get("WORK_ENABLED", "on").lower() == "on"          # 总开关（关了它就没有"手头的事"，打断成本也无从算起）
+WORK_DAILY_QUOTA = int(os.environ.get("WORK_DAILY_QUOTA", "6"))              # 今日工作单元配额（做满才下班）
+WORK_UNIT_MINUTES = int(os.environ.get("WORK_UNIT_MINUTES", "50"))           # 一个工作单元多长
+WORK_BREAK_MINUTES = int(os.environ.get("WORK_BREAK_MINUTES", "15"))         # 单元之间歇多久（带抖动，不整齐才像人）
+WORK_FLOW_RATIO = float(os.environ.get("WORK_FLOW_RATIO", "0.2"))            # 单元前 20% 是心流期（这段时间打断代价最高）
+WORK_ENERGY_MAX = int(os.environ.get("WORK_ENERGY_MAX", "100"))              # 精力上限（E）
+WORK_ENERGY_COST = int(os.environ.get("WORK_ENERGY_COST", "12"))             # 每个单元消耗精力
+WORK_ENERGY_RECOVER = int(os.environ.get("WORK_ENERGY_RECOVER", "8"))        # 每段休息恢复精力
+WORK_PAY_PER_UNIT = int(os.environ.get("WORK_PAY_PER_UNIT", "20"))           # 每个单元产出（纯叙事余额，绝不绑真实付费/内购）
+WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() == "on"  # 每单元产出 1 条可分享素材（供 C 模块主动分享当内容源）
+
+# --- 紧急通道（打断成本的安全阀） ---
+URGENT_WINDOW_MINUTES = int(os.environ.get("URGENT_WINDOW_MINUTES", "10"))   # 识别到"有急事"后的窗口：这段时间内它随叫随到

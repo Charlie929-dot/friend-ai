@@ -56,6 +56,12 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> l
     """私聊回复的完整 messages：system（人设+便签+profile）→ 游戏规则 →
     相关记忆（system）→ 最近聊天上下文（user）。"""
     messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
+    # 紧急通道（打断成本的安全阀）：识别到急事 → 手头的活先放下，简短回应、先听TA说
+    import guard
+    if guard.in_urgent_window():
+        messages.append({"role": "system", "content": (
+            "【急事】TA 刚才的话听着有急事。把手头的事先放下，立刻回应、"
+            "简短、先听TA说，别扯别的、别卖关子。")})
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
     combined = " ".join(batch)

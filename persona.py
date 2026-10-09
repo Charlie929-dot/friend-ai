@@ -138,6 +138,20 @@ def _life_day(now: datetime) -> tuple[datetime, bool]:
     return now, False
 
 
+def core_identity_prompt() -> str:
+    """通用规则 + 名字 + 人格（**不含**"手头的事"这类会反过来再调它的动态段）。
+
+    内部 prompt（如工作系统生成素材）用这个——用 build_system_prompt 会
+    build_system_prompt → work.prompt_hint → 生成素材 → build_system_prompt 无限递归。
+    """
+    import persona_pool
+    card = persona_pool.load()
+    flavor = card["text"] if card else DEFAULT_FLAVOR
+    return "\n".join([COMMON_RULES,
+                      f"【你的名字】你叫{friend_name()}，别人这么称呼你。",
+                      f"【你的人格】{flavor}"])
+
+
 def build_system_prompt(state: str) -> str:
     """组装 system prompt，注入当前日期/时间/时段 + 生活日换算。"""
     import db  # 延迟导入避免循环依赖
@@ -152,18 +166,18 @@ def build_system_prompt(state: str) -> str:
                       "这还是「今天」的深夜，只有睡一觉醒来才算新的一天。"
                       "所以别把这个夜晚说成「昨天」，也别道早安。")
 
-    card = persona_pool.load()
-    flavor = card["text"] if card else DEFAULT_FLAVOR
-
     stage = db.get_kv("relationship_stage", "new")
     stage_hint = NEW_STAGE_HINT if stage == "new" else FAMILIAR_STAGE_HINT
 
-    parts = [COMMON_RULES,
-             f"【你的名字】你叫{friend_name()}，别人这么称呼你。",
-             f"【你的人格】{flavor}",
+    parts = [core_identity_prompt(),
              f"【当前时间】{time_info}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
              f"【当前状态】{STATE_HINTS.get(state, STATE_HINTS['AWAKE'])}",
              stage_hint]
+    # 手头的事（S3 工作系统）：它得知道自己正在忙什么，才谈得上"什么时候找它会打扰"
+    import work
+    whint = work.prompt_hint()
+    if whint:
+        parts.append(f"【手头的事】{whint}")
     profile = _read_profile()
     if profile:
         parts.append(f"【你已经知道的关于TA的事】\n{profile}")

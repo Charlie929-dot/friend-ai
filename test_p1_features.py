@@ -1259,6 +1259,131 @@ def test_random_chat_hours_follow_persona():
     print("ok 闲聊时段按人格作息自适应（跨午夜拆段 + cron 可解析）")
 
 
+def test_work_system():
+    """S3 工作系统：排班跟人格作息、惰性结算、心流期、下班、跨天重排、素材不重复取。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import db as _db
+    import persona as _persona
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False      # 素材要调 LLM，这里只测机制本身
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 夜猫子人格：10 点起、凌晨 2 点睡（作息必须跟着人格走）
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+
+        morning = _dt(2026, 10, 9, 10, 0)
+        units = _work.plan(morning)
+        assert units, "今天没排出班"
+        first_start = _dt.fromisoformat(units[0]["start"])
+        assert first_start.hour >= 10, f"夜猫子 10 点才起，排班却从 {first_start} 开始"
+        assert _dt.fromisoformat(units[-1]["end"]) <= _dt(2026, 10, 10, 2, 0), \
+            f"排班越过了睡觉时间：{units[-1]['end']}"
+        # 同一天幂等：再读一次不能换计划（否则它手头的事会一直乱跳）
+        assert _work.plan(morning) == units, "同一天重排出了新计划"
+
+        # 心流期 = 单元前 WORK_FLOW_RATIO 比例（这段打断代价最高）
+        flow = _work.status(first_start + _td(minutes=2))
+        assert flow["phase"] == "flow" and flow["flow"], f"单元刚开工应是心流期：{flow}"
+        working = _work.status(first_start + _td(minutes=30))
+        assert working["phase"] == "working" and not working["flow"], f"过了心流期：{working}"
+
+        # HUD 与 prompt 注入（要趁它还在忙的时候测：状态是持久的，
+        # 一旦结算推进到"下班"，再把时间调回去也回不到心流期）
+        assert "刚进入状态" in _work.hud(first_start + _td(minutes=2))
+        assert _work.prompt_hint(first_start + _td(minutes=2)), "忙的时候没注入手头的事"
+        # 红线：工作状态注入自己不能踩「代价归因」（它只说自己的状态）
+        for hint in _work.PHASE_HINTS.values():
+            assert not _persona.has_cost_blame(hint.format(done=1, quota=6)), \
+                f"工作提示踩了反愧疚红线：{hint}"
+
+        # 单元结束 → 自动结算（精力降、余额涨、进度 +1）
+        done1 = _work.status(first_start + _td(minutes=60))
+        assert done1["done"] == 1, f"单元结束了却没结算：{done1}"
+        assert done1["money"] == _cfg.WORK_PAY_PER_UNIT
+        assert done1["energy"] == _cfg.WORK_ENERGY_MAX - _cfg.WORK_ENERGY_COST
+
+        # 休眠/关机的关键回归：错过好几个单元，睡醒回来要能一次性补上
+        late = _work.status(_dt(2026, 10, 10, 1, 0))   # 夜猫子的"今天深夜"
+        assert late["done"] == len(units), f"错过的单元没补账：{late}"
+        assert late["phase"] == "off", f"活都干完了还在忙：{late}"
+
+        # 新的一天（睡醒）→ 重新排班、进度归零
+        _work._state(_dt(2026, 10, 10, 12, 0))
+        st = _work._load()
+        assert st["day"] == "2026-10-10" and st["settled"] == 0, f"跨天没重排：{st}"
+
+        # 素材池：取过的不再取（一条素材只分享一次）
+        _db.set_kv("work_shareables", json.dumps(
+            [{"day": "2026-10-09", "seq": 1, "text": "刚发现楼下那只猫会自己开门", "used": 0}]))
+        assert _work.take_shareable() == "刚发现楼下那只猫会自己开门"
+        assert _work.take_shareable() == "", "同一条素材被取了两次"
+        print("ok 工作系统（排班跟人格作息 + 心流期 + 惰性补账 + 跨天重排 + 素材不重复）")
+    finally:
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_urgent_channel():
+    """S3 紧急通道（打断成本的安全阀）：急事能突破，日常夸张说法不能误触。"""
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import context as _ctx
+    import corpus as _corpus
+    import db as _db
+    import guard as _guard
+
+    for t in ("有急事，快帮我看看", "出事了", "十万火急", "这事很急，在线等", "紧急情况"):
+        assert _guard.is_urgent(t), f"急事没识别出来：{t}"
+    for t in ("在吗", "我急死了", "着急", "帮我个忙呗", "快点啦", "今天真累"):
+        assert not _guard.is_urgent(t), f"日常话被误判成急事：{t}"
+    assert hasattr(_corpus, "URGENT_QUERY") and _corpus.URGENT_QUERY, \
+        "紧急词表必须收在 corpus（会扩充）"
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        now = _dt.now()
+        assert not _guard.in_urgent_window(now), "没开窗口却已经在窗口里"
+        _guard.open_urgent_window(now)
+        assert _guard.in_urgent_window(now), "开了紧急窗口却没生效"
+
+        # 急事当前：「在忙」的静默期要让路（否则安全阀形同虚设）
+        _db.set_kv("quiet_until", (now + _td(hours=3)).isoformat(timespec="seconds"))
+        _guard.open_urgent_window(now)
+        assert not _db.get_kv("quiet_until"), "急事没解除忙碌静默期"
+
+        def _injected(messages):
+            return any("急事" in (m.get("content") or "")
+                       for m in messages if m["role"] == "system")
+
+        assert _injected(_ctx.build_chat_messages("AWAKE", ["在吗"])), \
+            "紧急窗口内没注入「先听TA说」"
+        # 窗口过期 → 恢复常态（不能一直随叫随到，那它就没自己的日子了）
+        _db.set_kv("urgent_until", (now - _td(minutes=1)).isoformat(timespec="seconds"))
+        assert not _injected(_ctx.build_chat_messages("AWAKE", ["在吗"])), \
+            "紧急窗口过期了还在注入"
+        print("ok 紧急通道（急事命中 / 日常不误伤 / 静默期让路 / 窗口会过期）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1285,4 +1410,6 @@ if __name__ == "__main__":
     test_cost_blame_redline()
     test_busy_signals_not_merged()
     test_random_chat_hours_follow_persona()
+    test_work_system()
+    test_urgent_channel()
     print("\n全部通过")

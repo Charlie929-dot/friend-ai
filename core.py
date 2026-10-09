@@ -78,7 +78,11 @@ class Engine:
             return
         self._flush_outbox()  # 你回来了：先把离开期间 TA 的留言重放给你
         db.add_message("user", text)
-        guard.check_busy_signal(text)
+        # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
+        if guard.is_urgent(text):
+            guard.open_urgent_window()
+        else:
+            guard.check_busy_signal(text)
         game.on_user_text(text)  # 娱乐模式：提到游戏名开局，"不玩了"结束
         db.reset_counter("unanswered_proactive")  # 用户回复了，清零连续未回复
         self._reset_bubble_timer()  # 聊上了，冒泡倒计时重新计

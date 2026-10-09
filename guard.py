@@ -1,9 +1,42 @@
 """防打扰：主动消息的刹车系统。"""
+import re
 from datetime import datetime, timedelta
 
 import config
 import corpus
 import db
+
+# 紧急信号（词表在 corpus，会扩充）
+_URGENT = re.compile(corpus.URGENT_QUERY)
+
+
+def is_urgent(text: str) -> bool:
+    """对方是不是有急事？紧急通道的判定入口（打断成本的安全阀）。
+
+    判定必须保守——日常夸张说法（"我急死了""着急"）不算，否则安全阀天天被误触，
+    等于没有。词表在 corpus.URGENT_QUERY，可扩充。
+    """
+    return bool(_URGENT.search(text or ""))
+
+
+def in_urgent_window(now: datetime | None = None) -> bool:
+    """现在是否处于紧急窗口：这段时间内它随叫随到（绕开静默与打断阻尼）。"""
+    now = now or datetime.now()
+    until = db.get_kv("urgent_until")
+    if not until:
+        return False
+    try:
+        return datetime.fromisoformat(until) > now
+    except ValueError:
+        return False
+
+
+def open_urgent_window(now: datetime | None = None) -> None:
+    """识别到急事 → 开一扇窗（URGENT_WINDOW_MINUTES 分钟内随叫随到）。"""
+    now = now or datetime.now()
+    db.set_kv("urgent_until", (now + timedelta(
+        minutes=config.URGENT_WINDOW_MINUTES)).isoformat(timespec="seconds"))
+    db.set_kv("quiet_until", "")      # 急事当前：静默期一并解除
 
 
 def check_busy_signal(text: str) -> bool:

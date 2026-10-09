@@ -39,6 +39,7 @@ HELP = """可用命令：
   /delmem <编号>   删掉一条自动记忆（也用于确认 AI 提议的删除）
   /keepmem <编号>  保留一条 AI 提议删除的记忆（取消待删除标记）
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
+  /work            看它今天手头的事（进度/精力/余额/攒了多少素材）
   /diary           看今天的日记（含复盘）；/diary <日期> 看指定那天
   /diaries         列出所有写过日记的日期
   /review          现在立刻复盘今天并写日记（睡前会自动写）
@@ -214,7 +215,10 @@ def handle(cmd_line: str) -> str:
         model = db.get_kv("model_override", config.DEEPSEEK_MODEL)
         g = game.current()
         playing = f" | 游戏中：{game.GAMES[g['game']]['label']}" if g else ""
-        return (f"状态：{db.get_state()} | 关系阶段：{stage} | 模型：{model}{playing}\n"
+        import work as _work
+        hud = _work.hud()   # 它手头的事（工作系统关着时为空）
+        return (f"状态：{db.get_state()} | 关系阶段：{stage} | 模型：{model}{playing}"
+                + (f" | {hud}" if hud else "") + "\n"
                 f"今日主动：{db.get_counter('proactive_count')}/{config.DAILY_PROACTIVE_LIMIT} "
                 f"| 冒泡：{db.get_counter('bubble_count')}/{config.BUBBLE_DAILY_LIMIT} "
                 f"| 连续未回复：{db.get_counter('unanswered_proactive')}")
@@ -405,6 +409,18 @@ def handle(cmd_line: str) -> str:
         if added == 0:
             return "历史里没有新东西可记（或已经全部回填过了）。"
         return f"回填完成：从旧聊天里新记住 {added} 条。用 /memories 看看吧。"
+
+    if cmd == "/work":
+        # 工作系统（S3）：它今天手头的事。看得见它的日子，才知道什么时候找它会打扰
+        import work as _work
+        s = _work.status()
+        if not s["quota"]:
+            return "工作系统关着（WORK_ENABLED=off）——它没有「手头的事」，打断成本也无从算起。"
+        fresh = len([x for x in _work._shareables() if not x.get("used")])
+        return (f"{_work.hud()}\n"
+                f"今日进度 {s['done']}/{s['quota']} 件 · 精力 {s['energy']}/{config.WORK_ENERGY_MAX}"
+                f" · 余额 {s['money']} · 攒了 {fresh} 条没说过的素材\n"
+                f"（余额是纯叙事资源，不绑任何真实付费）")
 
     if cmd == "/diary":
         import diary as _diary
