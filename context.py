@@ -68,6 +68,11 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> l
         chint = cost.prompt_hint()
         if chint:
             messages.append({"role": "system", "content": f"【此刻的相处】{chint}"})
+        # 心情（D 模块，10-09 解冻）：它此刻的感受，落到语气上（只说自己状态）
+        import mood
+        mhint = mood.prompt_hint()
+        if mhint:
+            messages.append({"role": "system", "content": f"【此刻的心情】{mhint}"})
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
     combined = " ".join(batch)

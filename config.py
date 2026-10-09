@@ -116,6 +116,11 @@ COST_TOLERATED_MAX = float(os.environ.get("COST_TOLERATED_MAX", "0.9"))  # costI
 # --- 紧急通道（打断成本的安全阀） ---
 URGENT_WINDOW_MINUTES = int(os.environ.get("URGENT_WINDOW_MINUTES", "10"))   # 识别到"有急事"后的窗口：这段时间内它随叫随到
 
+# --- 情绪状态（D 模块，10-09 解冻：HUD「心情」维度） ---
+MOOD_ENABLED = os.environ.get("MOOD_ENABLED", "on").lower() == "on"    # 心情维度总开关（关了 HUD 不显示心情、不注入心情语态）
+MOOD_TIRED_ENERGY = int(os.environ.get("MOOD_TIRED_ENERGY", "30"))    # 精力 ≤ 此值 = 疲惫（累是最强烈的感受，盖过其它）
+MOOD_EVENING_HOUR = int(os.environ.get("MOOD_EVENING_HOUR", "21"))    # 这之后忙完 = 平静（夜里自然沉下来，而不是"轻松"）
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

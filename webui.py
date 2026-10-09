@@ -90,6 +90,8 @@ def _state_payload(channel: WebChannel) -> dict:
     s = work.status()
     import cost
     c = cost.state()
+    import mood
+    m = mood.mood()
     import persona_pool
     card = persona_pool.load()
     p = persona.behavior_params()
@@ -105,6 +107,7 @@ def _state_payload(channel: WebChannel) -> dict:
         "cost": {"level": c["level"],
                  "badge": cost.LEVEL_BADGE.get(c["level"], ""),
                  "index": c["cost_index"]},
+        "mood": {"label": m["label"], "tone": m["tone"]},
         "materials": fresh,
         "schedule": f"{p['wake_hour']}:00 起 · {p['sleep_hour']}:00 睡",
         "stage": "初见" if db.get_kv("relationship_stage", "new") == "new" else "熟悉",

@@ -1499,6 +1499,84 @@ def test_urgent_channel():
         _db.init()
 
 
+def test_mood():
+    """情绪状态（10-09 解冻）：心情由它自己的生活推，不围绕任何人转，语态不踩红线。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import db as _db
+    import mood as _mood
+    import persona as _persona
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    saved_mood = config.MOOD_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False      # 素材要调 LLM，这里只测心情本身
+    config.MOOD_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+
+        morning = _dt(2026, 10, 9, 10, 0)
+        units = _work.plan(morning)
+        first_start = _dt.fromisoformat(units[0]["start"])
+
+        # 工作状态 → 心情（心流=投入积极 / 忙=专注中性）
+        assert _mood.mood(first_start + _td(minutes=2)) == \
+            {"label": "投入", "tone": "positive"}, "心流期应是投入"
+        assert _mood.mood(first_start + _td(minutes=30)) == \
+            {"label": "专注", "tone": "neutral"}, "忙自己的事应是专注"
+
+        # 还没开工（idle）→ 慵懒
+        idle = _mood.mood(_dt(2026, 10, 9, 10, 0))
+        assert idle == {"label": "慵懒", "tone": "neutral"}, idle
+
+        # 精力低 → 疲惫（累是最强烈的感受，盖过 phase）
+        _db.set_kv("work_state", json.dumps({
+            "day": "2026-10-09", "quota": 1,
+            "units": [{"start": first_start.isoformat(timespec="seconds"),
+                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
+            "settled": 0, "energy": 20, "money": 0}))
+        tired = _mood.mood(first_start + _td(minutes=30))
+        assert tired == {"label": "疲惫", "tone": "tired"}, tired
+
+        # 忙完（off）白天 → 轻松；夜里 → 平静（时段情绪，独立于 phase）
+        _db.set_kv("work_state", json.dumps({
+            "day": "2026-10-09", "quota": 1,
+            "units": [{"start": first_start.isoformat(timespec="seconds"),
+                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
+            "settled": 1, "energy": 100, "money": 20}))
+        assert _mood.mood(_dt(2026, 10, 9, 14, 0)) == {"label": "轻松", "tone": "positive"}
+        assert _mood.mood(_dt(2026, 10, 9, 22, 0)) == {"label": "平静", "tone": "neutral"}
+
+        # 语态提示：全部非空、且不踩反愧疚红线（只说自己状态）
+        for label in ("投入", "专注", "慵懒", "放松", "轻松", "疲惫", "平静"):
+            hint = _mood.MOOD_HINTS[label]
+            assert hint, f"缺心情语态：{label}"
+            assert not _persona.has_cost_blame(hint), \
+                f"心情语态踩了反愧疚红线：{hint}"
+
+        # 关掉开关 → 空心情、不注入语态
+        config.MOOD_ENABLED = False
+        assert _mood.mood(first_start) == {"label": "", "tone": ""}
+        assert _mood.prompt_hint(first_start) == ""
+
+        print("ok 情绪状态（心情由生活推 + 时段独立 + 精力疲惫 + 语态不踩红线）")
+    finally:
+        config.MOOD_ENABLED = saved_mood
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_webui():
     """G 模块网页端（自用阶段主载体）：HUD 页面 + 消息/命令 API + 紧急通道。"""
     import tempfile
@@ -1645,6 +1723,7 @@ if __name__ == "__main__":
     test_work_system()
     test_interruption_cost()
     test_urgent_channel()
+    test_mood()
     test_webui()
     test_autostart()
     print("\n全部通过")
