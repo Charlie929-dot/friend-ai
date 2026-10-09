@@ -1579,6 +1579,7 @@ def test_user_library():
         # epub（带书名/作者元数据）
         _make_epub(books_dir / "散文" / "背影.epub", "背影", "朱自清",
                    ["我与父亲不相见已二年余了。", "我最不能忘记的是他的背影。"])
+        (books_dir / "README.txt").write_text("说明文件，不该被当成书", encoding="utf-8")
         config.BOOKS_DIR = books_dir
 
         # 夜猫子人格：爱读科幻

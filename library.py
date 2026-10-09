@@ -117,6 +117,8 @@ def _scan() -> list[dict]:
     for path in sorted(config.BOOKS_DIR.rglob("*")):
         if not path.is_file():
             continue
+        if path.name.lower().startswith("readme"):   # 跳过说明文件
+            continue
         ext = path.suffix.lower()
         if ext not in _FORMATS:
             continue
