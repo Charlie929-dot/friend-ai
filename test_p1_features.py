@@ -1384,6 +1384,71 @@ def test_urgent_channel():
         _db.init()
 
 
+def test_webui():
+    """G 模块网页端（自用阶段主载体）：HUD 页面 + 消息/命令 API + 紧急通道。"""
+    import tempfile
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    import commands as _cmds
+    import db as _db
+    import guard as _guard
+    import httpx
+    import webui as _webui
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_web_dir = _webui.WEB_DIR
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _webui.WEB_DIR = Path(real_base) / "web"     # 页面文件仍留在项目里
+
+        def fake_engine(text):
+            """替身引擎：命令返回输出，普通消息入库（真引擎会异步生成回复）。"""
+            if text.startswith("/"):
+                return _cmds.handle(text)
+            _db.add_message("user", text)
+            return None
+
+        ch = _webui.WebChannel()
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _webui._make_handler(ch, fake_engine))
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            # ⚠️ 沙箱里有 HTTP_PROXY，127.0.0.1 会被代理劫持，必须 trust_env=False
+            c = httpx.Client(trust_env=False, timeout=10)
+            base = f"http://127.0.0.1:{port}"
+
+            html = c.get(base + "/").text
+            assert 'class="hud"' in html and "barE" in html and "barP" in html, \
+                "页面缺 HUD 结构（状态条/精力条/进度条）"
+
+            st = c.get(base + "/api/state").json()
+            assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
+            assert st["work"]["phase"] in _webui.work.PHASE_LABELS, f"phase 不合法：{st}"
+
+            r = c.post(base + "/api/send", json={"text": "你好呀"}).json()
+            assert r["echo"] is True, f"普通消息应回显用户输入：{r}"
+            r2 = c.post(base + "/api/send", json={"text": "/work"}).json()
+            assert r2["echo"] is False and r2["reply"], f"命令输出该回给浏览器：{r2}"
+
+            msgs = c.get(base + "/api/messages?after=0").json()["messages"]
+            assert any(m["role"] == "user" and m["content"] == "你好呀" for m in msgs), \
+                f"消息没进库（网页端会看不到自己发的）：{msgs}"
+
+            # 手动安全阀：页面上勾"紧急"要能开窗口
+            c.post(base + "/api/send", json={"text": "在吗", "urgent": True})
+            assert _guard.in_urgent_window(), "网页端勾了紧急却没开窗口"
+            print("ok 网页端 Web UI（HUD 页面 + 消息/命令 API + 紧急通道）")
+        finally:
+            srv.shutdown()
+    finally:
+        _webui.WEB_DIR = real_web_dir
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1412,4 +1477,5 @@ if __name__ == "__main__":
     test_random_chat_hours_follow_persona()
     test_work_system()
     test_urgent_channel()
+    test_webui()
     print("\n全部通过")

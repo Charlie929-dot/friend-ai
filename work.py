@@ -16,6 +16,7 @@
 """
 import json
 import random
+import threading
 from datetime import datetime, timedelta
 
 import config
@@ -152,32 +153,53 @@ def _settle(state: dict, now: datetime) -> bool:
     return changed
 
 
-# --- 每单元产出 1 条可分享素材：它忙完一件事，脑子里留下的那点东西 ---
-def _produce_shareable(day: str, seq: int) -> str:
-    if not config.WORK_SHAREABLE_ENABLED:
-        return ""
+_SHARE_PROMPT = (
+    "（内心活动，不用回复这句话）你刚忙完今天第 {seq} 件自己的事。"
+    "用一句话说一件你刚才手头遇到或想到的、值得一说的小事——"
+    "可以是一个发现、一个小麻烦、一个念头、一件好笑的事。"
+    "要求：第一人称、口语、不超过 30 字、不要提对方、"
+    "不要写成'我想跟你说'、不要出现'工作'这个词。")
+
+_generating = False   # 有素材正在生成（同一时刻只排一条，见 _produce_shareable）
+
+
+def _gen_shareable(day: str, seq: int) -> str:
+    """真的去生成一条素材（要调 LLM，所以只能在后台线程里跑）。"""
+    global _generating
     import corpus
     import llm
     import persona
     prompt = [
         {"role": "system", "content": persona.core_identity_prompt()},
-        {"role": "user", "content": (
-            f"（内心活动，不用回复这句话）你刚忙完今天第 {seq} 件自己的事。"
-            "用一句话说一件你刚才手头遇到或想到的、值得一说的小事——"
-            "可以是一个发现、一个小麻烦、一个念头、一件好笑的事。"
-            "要求：第一人称、口语、不超过 30 字、不要提对方、"
-            "不要写成'我想跟你说'、不要出现'工作'这个词。")},
+        {"role": "user", "content": _SHARE_PROMPT.format(seq=seq)},
     ]
     try:
         text = llm.chat(prompt, temperature=1.0).strip()
     except llm.LLMUnavailable:
         return ""
+    finally:
+        _generating = False
     if not text or text == corpus.LLM_STUB:
         return ""                      # 没配 key / 拿不到内容就不硬凑
     items = _shareables()
     items.append({"day": day, "seq": seq, "text": text, "used": 0})
     db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
     return text
+
+
+def _produce_shareable(day: str, seq: int) -> None:
+    """每单元产出 1 条可分享素材：它忙完一件事，脑子里留下的那点东西。
+
+    走**后台线程 + 同时只排一条**：结算是同步的（还要喂 HUD），而素材要调 LLM。
+    冷启动补账时会一次结算好几个单元（电脑睡了一觉），串行生成就是连续几次
+    网络请求——网页端拉 /api/state 会被卡住好几秒。所以这里只管"排队一条"，
+    生成完自然由下一个单元接上（单元间隔几十分钟，不会积压）。
+    """
+    global _generating
+    if not config.WORK_SHAREABLE_ENABLED or _generating:
+        return
+    _generating = True
+    threading.Thread(target=_gen_shareable, args=(day, seq), daemon=True).start()
 
 
 def _shareables() -> list[dict]:

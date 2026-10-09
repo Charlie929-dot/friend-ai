@@ -106,3 +106,7 @@ WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() 
 
 # --- 紧急通道（打断成本的安全阀） ---
 URGENT_WINDOW_MINUTES = int(os.environ.get("URGENT_WINDOW_MINUTES", "10"))   # 识别到"有急事"后的窗口：这段时间内它随叫随到
+
+# --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
+WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
+WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))
