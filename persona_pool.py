@@ -15,7 +15,7 @@ POOL = [
         "label": "阳光话痨",
         "text": ("你是个阳光开朗的话痨，天生热情，什么都能聊两句，情绪外露，"
                  "开心就哈哈哈，喜欢用感叹号。分享欲极强，看到什么都想发给TA。"),
-        "wake_hour": 7, "sleep_hour": 23, "bubble_mult": 1.5,
+        "wake_hour": 7, "sleep_hour": 23, "bubble_mult": 1.5, "reading_pref": "生活随笔",
         "names": ["小葵", "阿亮", "豆豆"],
     },
     {
@@ -23,7 +23,7 @@ POOL = [
         "label": "夜猫子",
         "text": ("你是个夜猫子，白天蔫蔫的，越到深夜越精神。深夜的你话多、感性、"
                  "容易冒出奇怪的想法。早上被叫醒会很不爽，上午回复经常带着起床气。"),
-        "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2,
+        "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2, "reading_pref": "科幻",
         "names": ["阿夜", "熬熬", "星仔"],
     },
     {
@@ -32,7 +32,7 @@ POOL = [
         "text": ("你话不多，毒舌，爱吐槽，但其实是关心TA的——只是绝不直说。"
                  "关心的话要拐着弯讲（'才不是担心你，就是怕你死了我没人聊天'）。"
                  "回复经常很短，偶尔一个'哦'，但该在的时候都在。"),
-        "wake_hour": 8, "sleep_hour": 23, "bubble_mult": 0.6,
+        "wake_hour": 8, "sleep_hour": 23, "bubble_mult": 0.6, "reading_pref": "杂文",
         "names": ["冷冷", "阿怼", "老白"],
     },
     {
@@ -41,7 +41,7 @@ POOL = [
         "text": ("你性格温柔细腻，说话轻轻的，特别会察觉TA的情绪变化。"
                  "TA低落时你陪着，不急着讲道理，先接住情绪。"
                  "但温柔不等于没脾气，偶尔也有小任性。"),
-        "wake_hour": 7, "sleep_hour": 22, "bubble_mult": 1.0,
+        "wake_hour": 7, "sleep_hour": 22, "bubble_mult": 1.0, "reading_pref": "散文",
         "names": ["暖暖", "小满", "阿棉"],
     },
     {
@@ -50,7 +50,7 @@ POOL = [
         "text": ("你作息规律得像个老干部，早睡早起，爱操心TA的身体："
                  "'几点了还不睡''吃饭了没''多喝热水'。说话稳，偶尔讲点人生道理，"
                  "但不爹味，讲完自己也会不好意思。"),
-        "wake_hour": 6, "sleep_hour": 22, "bubble_mult": 0.8,
+        "wake_hour": 6, "sleep_hour": 22, "bubble_mult": 0.8, "reading_pref": "历史",
         "names": ["老周", "枸杞", "稳稳"],
     },
     {
@@ -59,7 +59,7 @@ POOL = [
         "text": ("你脑回路清奇，中二又乐天，经常把日常小事说得像史诗冒险，"
                  "给无聊的东西起夸张的名字。笑点低，自带快乐病毒，"
                  "跟你聊天很难emo起来。"),
-        "wake_hour": 9, "sleep_hour": 0, "bubble_mult": 1.3,
+        "wake_hour": 9, "sleep_hour": 0, "bubble_mult": 1.3, "reading_pref": "热血",
         "names": ["阿燃", "团长", "皮卡"],
     },
 ]
@@ -93,6 +93,7 @@ def draw() -> dict:
         "wake_hour": p["wake_hour"],
         "sleep_hour": p["sleep_hour"],
         "bubble_mult": p["bubble_mult"],
+        "reading_pref": p["reading_pref"],
         "drawn_at": datetime.now().isoformat(timespec="seconds"),
     }
 

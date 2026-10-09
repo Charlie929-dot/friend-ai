@@ -145,7 +145,10 @@ def _settle(state: dict, now: datetime) -> bool:
                                   state["energy"] + config.WORK_ENERGY_RECOVER)
         state["energy"] = max(0, state["energy"] - config.WORK_ENERGY_COST)
         state["money"] += config.WORK_PAY_PER_UNIT
-        _produce_shareable(state["day"], state["settled"] + 1)
+        # 工作=读书：这个单元读一篇（推进阅读进度），读完产出"摘抄+读后感"素材
+        import reading
+        article = reading.next_article() if config.READING_ENABLED else None
+        _produce_shareable(state["day"], state["settled"] + 1, article)
         state["settled"] += 1
         changed = True
     if changed:
@@ -160,18 +163,32 @@ _SHARE_PROMPT = (
     "要求：第一人称、口语、不超过 30 字、不要提对方、"
     "不要写成'我想跟你说'、不要出现'工作'这个词。")
 
+# 工作=读书：每读完一篇，产出"摘抄金句 + 人格化读后感"（quote 是预摘的真实金句，
+# 读后感由 LLM 按它的人格生成——爱吐槽就吐槽、爱感慨就感慨）。
+_READING_PROMPT = (
+    "（内心活动，不用回复这句话）你刚读完一篇{genre}类的文字——{source}《{title}》，"
+    "里面那句「{quote}」你很有感觉。\n"
+    "补一句你的读后感或联想，带你的性格（爱吐槽就吐槽、爱感慨就感慨），"
+    "可以自然地带出上面这句摘抄。\n"
+    "要求：第一人称、口语、合起来一两句话、别写成'我想跟你分享'、"
+    "别太书面、不要出现'工作'这个词。")
+
 _generating = False   # 有素材正在生成（同一时刻只排一条，见 _produce_shareable）
 
 
-def _gen_shareable(day: str, seq: int) -> str:
-    """真的去生成一条素材（要调 LLM，所以只能在后台线程里跑）。"""
+def _gen_shareable(day: str, seq: int, article: dict | None = None) -> str:
+    """真的去生成一条素材（要调 LLM，所以只能在后台线程里跑）。
+
+    article 有值（工作=读书，刚读完的那篇）→ 生成"摘抄 + 读后感"；
+    article 为 None（阅读关了/兜底）→ 退回泛化"手头遇到的小事"。"""
     global _generating
     import corpus
     import llm
     import persona
+    user_content = _reading_content(article, seq)
     prompt = [
         {"role": "system", "content": persona.core_identity_prompt()},
-        {"role": "user", "content": _SHARE_PROMPT.format(seq=seq)},
+        {"role": "user", "content": user_content},
     ]
     try:
         text = llm.chat(prompt, temperature=1.0).strip()
@@ -187,7 +204,16 @@ def _gen_shareable(day: str, seq: int) -> str:
     return text
 
 
-def _produce_shareable(day: str, seq: int) -> None:
+def _reading_content(article: dict | None, seq: int) -> str:
+    """按"读没读到素材"选 prompt：读到 → 摘抄+读后感；没读到 → 泛化小事。"""
+    if article and config.READING_ENABLED:
+        return _READING_PROMPT.format(
+            genre=article["genre"], source=article["source"],
+            title=article["title"], quote=article["quote"])
+    return _SHARE_PROMPT.format(seq=seq)
+
+
+def _produce_shareable(day: str, seq: int, article: dict | None = None) -> None:
     """每单元产出 1 条可分享素材：它忙完一件事，脑子里留下的那点东西。
 
     走**后台线程 + 同时只排一条**：结算是同步的（还要喂 HUD），而素材要调 LLM。
@@ -199,7 +225,7 @@ def _produce_shareable(day: str, seq: int) -> None:
     if not config.WORK_SHAREABLE_ENABLED or _generating:
         return
     _generating = True
-    threading.Thread(target=_gen_shareable, args=(day, seq), daemon=True).start()
+    threading.Thread(target=_gen_shareable, args=(day, seq, article), daemon=True).start()
 
 
 def _shareables() -> list[dict]:

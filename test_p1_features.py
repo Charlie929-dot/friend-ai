@@ -1475,6 +1475,63 @@ def test_offline_inbox_and_rhythm():
         _db.init()
 
 
+def test_reading_system():
+    """S3 工作=读书：素材库非空/分类齐全、阅读顺序偏好优先、进度持久化、一轮循环、金句可摘。"""
+    import json
+    import tempfile
+
+    import config as _cfg
+    import db as _db
+    import persona as _persona
+    import reading as _reading
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 夜猫子人格：爱读科幻
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+
+        # 素材库：非空、六大类齐全、每条都有正文 + 金句（摘抄）可摘
+        assert len(_reading.LIBRARY) >= 18, "素材库太薄"
+        genres = sorted({a["genre"] for a in _reading.LIBRARY})
+        assert genres == ["历史", "散文", "杂文", "热血", "生活随笔", "科幻"], genres
+        for a in _reading.LIBRARY:
+            assert a.get("quote") and a.get("text"), f"素材缺字段：{a['title']}"
+
+        # 人格卡行为参数带阅读偏好（persona 卡已扩字段）
+        assert _persona.behavior_params()["reading_pref"] == "科幻", \
+            f"阅读偏好没跟人格走：{_persona.behavior_params()}"
+
+        # 阅读顺序：偏好分类（科幻）排最前
+        order = _reading._order()
+        first_genres = [_reading.LIBRARY[i]["genre"] for i in order[:4]]
+        assert first_genres == ["科幻"] * 4, f"偏好分类没排前面：{first_genres}"
+
+        # 顺序推进 + 进度持久化
+        a1 = _reading.next_article()
+        assert a1["genre"] == "科幻", f"第一篇应是科幻：{a1}"
+        assert _reading._load()["pos"] == 1, "进度没推进"
+
+        # 一轮读完再循环：把进度推到最后一篇，再取一篇应回到第一篇
+        p = _reading._load()
+        p["pos"] = len(_reading.LIBRARY) - 1
+        _reading._save(p)
+        _reading.next_article()          # 读完最后一篇
+        loop = _reading.next_article()   # 循环回第一篇
+        assert loop["title"] == _reading.LIBRARY[order[0]]["title"], \
+            f"读满一轮后应循环回第一篇：{loop['title']}"
+        print("ok 阅读素材库（分类齐全/偏好优先/进度持久化/一轮循环/金句可摘）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_interruption_cost():
     """S3 招牌：打断成本 = R(phase 阻力) × (1+F(精力疲劳)) → welcomed/tolerated/costly。"""
     import json
@@ -1821,6 +1878,7 @@ if __name__ == "__main__":
     test_random_chat_hours_follow_persona()
     test_work_system()
     test_offline_inbox_and_rhythm()
+    test_reading_system()
     test_interruption_cost()
     test_urgent_channel()
     test_mood()

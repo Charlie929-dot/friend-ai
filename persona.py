@@ -122,14 +122,15 @@ def _read_profile() -> str:
 
 
 def behavior_params() -> dict:
-    """当前朋友的行为参数（作息/冒泡频率），无人格卡时用全局默认。"""
+    """当前朋友的行为参数（作息/冒泡频率/阅读偏好），无人格卡时用全局默认。"""
     import persona_pool
     card = persona_pool.load()
     if card:
         return {"wake_hour": card["wake_hour"], "sleep_hour": card["sleep_hour"],
-                "bubble_mult": card.get("bubble_mult", 1.0)}
+                "bubble_mult": card.get("bubble_mult", 1.0),
+                "reading_pref": card.get("reading_pref", "")}
     return {"wake_hour": config.WAKE_HOUR, "sleep_hour": config.SLEEP_HOUR,
-            "bubble_mult": 1.0}
+            "bubble_mult": 1.0, "reading_pref": ""}
 
 
 def _life_day(now: datetime) -> tuple[datetime, bool]:
