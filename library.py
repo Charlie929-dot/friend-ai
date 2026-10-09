@@ -167,7 +167,7 @@ def _pick_quote(passage: str) -> str:
         s = s.strip()
         if 8 <= len(s) <= 40:
             return s
-    return passage[:40]
+    return passage[:40].rstrip()
 
 
 def next_passage() -> dict | None:
