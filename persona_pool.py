@@ -78,6 +78,26 @@ QUIRKS = [
     "你有个怪癖：自称某种小动物（自己选一种），偶尔带入一下。",
 ]
 
+# 人格 label → archetype / 阅读偏好：给旧卡（早于字段扩展的归档）按 label 反推补全。
+# 旧卡只有 name/label/text/wake_hour/sleep_hour/bubble_mult/drawn_at，缺 archetype/quirk/reading_pref。
+_LABEL_TO_KEY = {"阳光话痨": "sunshine", "夜猫子": "nightowl", "高冷毒舌": "tsundere",
+                 "温柔治愈": "healer", "老干部": "oldcadre", "中二乐天": "chuuni"}
+_LABEL_TO_PREF = {"阳光话痨": "生活随笔", "夜猫子": "科幻", "高冷毒舌": "杂文",
+                  "温柔治愈": "散文", "老干部": "历史", "中二乐天": "热血"}
+
+
+def _normalize(card: dict) -> dict:
+    """补齐旧卡缺失的字段（archetype/quirk/reading_pref），任何代码索引都不崩。
+
+    旧卡缺 quirk 会 `KeyError`（如 /persona），缺 reading_pref 会让阅读标签不显示；
+    这里按 label 反推补全默认值，且只在缺时才补（不覆盖新卡的已有值）。
+    """
+    card.setdefault("quirk", "")
+    card.setdefault("archetype", _LABEL_TO_KEY.get(card.get("label", ""), ""))
+    if not card.get("reading_pref"):
+        card["reading_pref"] = _LABEL_TO_PREF.get(card.get("label", ""), "")
+    return card
+
 
 def draw() -> dict:
     """抽一个人格，返回完整人格卡。"""
@@ -110,6 +130,6 @@ def load() -> dict | None:
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        return _normalize(json.loads(raw))
     except (ValueError, TypeError):
         return None

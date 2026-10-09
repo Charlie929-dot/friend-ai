@@ -1532,6 +1532,55 @@ def test_reading_system():
         _db.init()
 
 
+def test_legacy_persona_card_compat():
+    """旧人格卡（缺 quirk/reading_pref/archetype）补全：/persona 不崩、阅读标签能显示。"""
+    import json
+    import tempfile
+
+    import db as _db
+    import persona_pool as _pool
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 旧卡：只有 name/label/text/作息/bubble_mult/drawn_at，缺 quirk/reading_pref/archetype
+        _db.set_kv("persona_json", json.dumps({
+            "name": "小葵", "label": "阳光话痨", "text": "话痨",
+            "wake_hour": 8, "sleep_hour": 23, "bubble_mult": 1.0,
+            "drawn_at": "2026-10-06",
+        }, ensure_ascii=False))
+
+        card = _pool.load()
+        assert card["quirk"] == "", "旧卡 quirk 应补空"
+        assert card["archetype"] == "sunshine", "旧卡 archetype 应按 label 反推"
+        assert card["reading_pref"] == "生活随笔", "旧卡 reading_pref 应按 label 反推"
+
+        # /persona 不崩、带阅读偏好、空怪癖有兜底
+        out = commands.handle("/persona")
+        assert "阅读偏好" in out and "生活随笔" in out, f"/persona 缺阅读偏好：{out}"
+        assert "没特别怪癖" in out, f"旧卡空怪癖应兜底：{out}"
+
+        # 阅读偏好标签能显示（爱读X）
+        import webui as _webui
+        assert _webui._persona_tags(card) == ["阳光话痨", "爱读生活随笔"], \
+            f"旧卡补全后标签不对：{_webui._persona_tags(card)}"
+
+        # 新卡（已含 reading_pref）不被 normalize 覆盖
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "q",
+            "text": "夜猫子", "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2,
+            "reading_pref": "科幻", "drawn_at": "2026-10-10T00:00:00",
+        }, ensure_ascii=False))
+        assert _pool.load()["reading_pref"] == "科幻", "新卡 reading_pref 不应被覆盖"
+
+        print("ok 旧人格卡兼容（缺字段补全 / /persona 不崩 / 阅读标签显示 / 新卡不覆盖）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_care_events():
     """S4 事件记忆与关怀触发：承诺/约定提取 → 到点提醒（醒着发/睡着醒来补/过期错过）。"""
     import json
@@ -1963,6 +2012,7 @@ if __name__ == "__main__":
     test_work_system()
     test_offline_inbox_and_rhythm()
     test_reading_system()
+    test_legacy_persona_card_compat()
     test_care_events()
     test_interruption_cost()
     test_urgent_channel()

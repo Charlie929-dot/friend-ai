@@ -360,8 +360,8 @@ def handle(cmd_line: str) -> str:
                 f"  作息：{card['wake_hour']}点起 / {card['sleep_hour']}点睡\n"
                 f"  冒泡频率：x{card['bubble_mult']}\n"
                 f"  阅读偏好：{card.get('reading_pref') or '没特别偏好'}\n"
-                f"  怪癖：{card['quirk']}\n"
-                f"  相识于：{card['drawn_at']}")
+                f"  怪癖：{card.get('quirk') or '没特别怪癖'}\n"
+                f"  相识于：{card.get('drawn_at', '')}")
 
     if cmd == "/friends":
         friends = list_friends()
