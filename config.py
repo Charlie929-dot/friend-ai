@@ -121,6 +121,14 @@ MOOD_ENABLED = os.environ.get("MOOD_ENABLED", "on").lower() == "on"    # 心情�
 MOOD_TIRED_ENERGY = int(os.environ.get("MOOD_TIRED_ENERGY", "30"))    # 精力 ≤ 此值 = 疲惫（累是最强烈的感受，盖过其它）
 MOOD_EVENING_HOUR = int(os.environ.get("MOOD_EVENING_HOUR", "21"))    # 这之后忙完 = 平静（夜里自然沉下来，而不是"轻松"）
 
+# --- 离线与作息自主（S3 休眠完整版：工作单元进行中=离线专注，入睡/起床围绕人格锚点浮动） ---
+REST_SLEEP_EARLY_MAX = int(os.environ.get("REST_SLEEP_EARLY_MAX", "45"))     # 早睡最多提前多少分钟
+REST_SLEEP_LATE_MAX = int(os.environ.get("REST_SLEEP_LATE_MAX", "90"))       # 熬夜最多延后多少分钟
+REST_TIRED_ENERGY = int(os.environ.get("REST_TIRED_ENERGY", "20"))           # 精力 ≤ 此值 = 累，倾向早睡
+REST_ENERGETIC_ENERGY = int(os.environ.get("REST_ENERGETIC_ENERGY", "60"))   # 精力 ≥ 此值 = 精力足，倾向熬夜
+REST_WAKE_LIE_IN_MAX = int(os.environ.get("REST_WAKE_LIE_IN_MAX", "45"))     # 赖床最多延后多少分钟
+REST_WAKE_EARLY_MAX = int(os.environ.get("REST_WAKE_EARLY_MAX", "30"))       # 早醒最多提前多少分钟
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

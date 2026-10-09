@@ -236,8 +236,15 @@ def handle(cmd_line: str) -> str:
         playing = f" | 游戏中：{game.GAMES[g['game']]['label']}" if g else ""
         import work as _work
         hud = _work.hud()   # 它手头的事（工作系统关着时为空）
-        return (f"状态：{db.get_state()} | 关系阶段：{stage} | 模型：{model}{playing}"
-                + (f" | {hud}" if hud else "") + "\n"
+        import offline as _off
+        off_txt = ""
+        if _off.is_offline():
+            off_txt = "（离线：" + ("睡着" if _off.offline_reason() == "sleep" else "专注做事") + "）"
+        sleep_at = _off.tonight_sleep_at(datetime.now())
+        wake_at = _off.next_wake_at(datetime.now())
+        sched_txt = f" | 今晚 {sleep_at:%H:%M} 睡 · 下次 {wake_at:%m-%d %H:%M} 起"
+        return (f"状态：{db.get_state()}{off_txt} | 关系阶段：{stage} | 模型：{model}{playing}"
+                + (f" | {hud}" if hud else "") + sched_txt + "\n"
                 f"今日主动：{db.get_counter('proactive_count')}/{config.DAILY_PROACTIVE_LIMIT} "
                 f"| 冒泡：{db.get_counter('bubble_count')}/{config.BUBBLE_DAILY_LIMIT} "
                 f"| 连续未回复：{db.get_counter('unanswered_proactive')}")

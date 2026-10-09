@@ -292,7 +292,7 @@ function renderState(s){
   }
   $('pSch').textContent = s.schedule || '';
   $('pStage').textContent = s.stage || '';
-  $('pLink').textContent = s.urgent ? '紧急窗口中' : (s.state || '—');
+  $('pLink').textContent = s.urgent ? '紧急窗口中' : (s.presence || s.state || '—');
   const g = $('btnGuard');
   g.textContent = s.guard ? '防打扰：开' : '防打扰：关';
   g.classList.toggle('on', !!s.guard);

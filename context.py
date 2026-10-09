@@ -52,10 +52,16 @@ def _memory_message(mems: list[dict]) -> dict | None:
 
 # ---------- 私聊回复 ----------
 
-def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> list[dict]:
+def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
+                        inbox: bool = False) -> list[dict]:
     """私聊回复的完整 messages：system（人设+便签+profile）→ 游戏规则 →
-    相关记忆（system）→ 最近聊天上下文（user）。"""
+    相关记忆（system）→ 最近聊天上下文（user）。inbox=True 时带"刚上线看到留言"语境。"""
     messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
+    if inbox:
+        messages.append({"role": "system", "content": (
+            "【你刚上线】你刚才在忙自己的事（或睡着了），没看手机。"
+            "现在看到 TA 在你不在的时候发来的话，自然地回应一下——"
+            "可以顺口带一句刚在忙/刚醒，然后正经回 TA 说的内容。")})
     # 紧急通道（打断成本的安全阀）：识别到急事 → 手头的活先放下，简短回应、先听TA说
     import guard
     if guard.in_urgent_window():

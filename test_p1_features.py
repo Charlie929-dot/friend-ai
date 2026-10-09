@@ -99,7 +99,8 @@ def test_refresh_reschedules_jobs():
     engine = types.SimpleNamespace(
         wake_up=lambda: None, go_sleep=lambda: None,
         proactive=lambda s: None, check_bubble=lambda: None,
-        check_nudge=lambda: None)
+        check_nudge=lambda: None,
+        _do_sleep=lambda: None, _do_wake=lambda: None, flush_inbox=lambda: None)
     sch = scheduler.start(engine)
 
     old_noon = config.NOON_HOUR
@@ -1405,6 +1406,75 @@ def test_work_system():
         _db.init()
 
 
+def test_offline_inbox_and_rhythm():
+    """S3 休眠完整版：离线判定（睡/工作专注=离线）+ 离线留言 inbox + 作息自主浮动与幂等。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import corpus as _corpus
+    import db as _db
+    import offline as _off
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 老干部人格：6 点起、22 点睡（作息锚点明确，好断言浮动范围）
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "oldcadre", "label": "老干部", "name": "稳稳", "quirk": "",
+            "text": "你作息规律。", "wake_hour": 6, "sleep_hour": 22,
+            "bubble_mult": 0.8, "drawn_at": "2026-10-09T00:00:00"}))
+
+        morning = _dt(2026, 10, 9, 6, 0)
+        _work.plan(morning)
+        first_start = _dt.fromisoformat(_work.plan(morning)[0]["start"])
+        # 工作单元进行中（flow / working）= 离线专注；开工前 = 在线
+        assert _off.is_offline(first_start + _td(minutes=2)), "心流期应算离线专注"
+        assert _off.is_offline(first_start + _td(minutes=30)), "working 应算离线专注"
+        assert not _off.is_offline(first_start - _td(minutes=5)), "开工前应在线"
+
+        # 睡觉 → 离线；reason 区分"睡"和"专注"
+        _db.set_state("SLEEPING")
+        assert _off.is_offline(), "睡觉应离线"
+        assert _off.offline_reason() == "sleep"
+        _db.set_state("AWAKE")
+
+        # 离线留言 inbox：攒 → 取 → 清空
+        assert _off.push_inbox("在吗") == 1
+        assert _off.push_inbox("明天一起吃饭") == 2
+        assert _off.pending_inbox_count() == 2
+        items = _off.take_inbox()
+        assert [m["text"] for m in items] == ["在吗", "明天一起吃饭"]
+        assert _off.pending_inbox_count() == 0, "取走留言后应清空"
+
+        # 作息自主：入睡/起床围绕人格锚点浮动，同一生活日幂等
+        evening = _dt(2026, 10, 9, 20, 0)
+        bed_anchor = _dt(2026, 10, 9, 22, 0)
+        sleep_at = _off.tonight_sleep_at(evening)
+        lo = bed_anchor - _td(minutes=_cfg.REST_SLEEP_EARLY_MAX)      # 早睡最多提前
+        hi = bed_anchor + _td(minutes=_cfg.REST_SLEEP_LATE_MAX)       # 熬夜最多延后
+        assert lo <= sleep_at <= hi, f"入睡浮动越界：{sleep_at}"
+        assert _off.tonight_sleep_at(evening) == sleep_at, "同一晚入睡时间应幂等"
+
+        wake_base = _dt(2026, 10, 10, 6, 0)
+        wake_at = _off.next_wake_at(evening)
+        wlo = wake_base - _td(minutes=_cfg.REST_WAKE_EARLY_MAX)       # 早醒最多提前
+        whi = wake_base + _td(minutes=_cfg.REST_WAKE_LIE_IN_MAX * 2)  # 熬夜可叠加赖床
+        assert wlo <= wake_at <= whi, f"起床浮动越界：{wake_at}"
+        assert _off.next_wake_at(evening) == wake_at, "同一晚起床时间应幂等"
+
+        # 语料：工作专注时的第一人称轻提示存在
+        assert len(_corpus.OFFLINE_FOCUS_NOTICES) >= 3
+        print("ok 离线留言 + 作息自主（离线判定/inbox 攒取/浮动与幂等）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_interruption_cost():
     """S3 招牌：打断成本 = R(phase 阻力) × (1+F(精力疲劳)) → welcomed/tolerated/costly。"""
     import json
@@ -1750,6 +1820,7 @@ if __name__ == "__main__":
     test_busy_signals_not_merged()
     test_random_chat_hours_follow_persona()
     test_work_system()
+    test_offline_inbox_and_rhythm()
     test_interruption_cost()
     test_urgent_channel()
     test_mood()

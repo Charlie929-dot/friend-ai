@@ -96,10 +96,26 @@ def _state_payload(channel: WebChannel) -> dict:
     card = persona_pool.load()
     p = persona.behavior_params()
     fresh = len([x for x in work._shareables() if not x.get("used")])
+    import offline as _off
+    state = db.get_state()
+    off = _off.is_offline()
+    if state == "SLEEPING":
+        presence = "睡着"
+    elif state == "SLEEPY":
+        presence = "快睡了"
+    elif off:
+        presence = "专注中"
+    else:
+        presence = "在线"
+    sleep_at = _off.tonight_sleep_at(datetime.now())
+    wake_at = _off.next_wake_at(datetime.now())
     return {
         "name": persona.friend_name(),
         "clock": datetime.now().strftime("%H:%M"),
-        "state": db.get_state(),
+        "state": state,
+        "presence": presence,
+        "offline": off,
+        "offline_reason": _off.offline_reason() if off else "",
         "urgent": guard.in_urgent_window(),
         "guard": guard.guard_enabled(),
         "typing": channel.typing_now(),
@@ -109,7 +125,7 @@ def _state_payload(channel: WebChannel) -> dict:
                  "index": c["cost_index"]},
         "mood": {"label": m["label"], "tone": m["tone"]},
         "materials": fresh,
-        "schedule": f"{p['wake_hour']}:00 起 · {p['sleep_hour']}:00 睡",
+        "schedule": f"今晚 {sleep_at:%H:%M} 睡 · 下次 {wake_at:%H:%M} 起",
         "stage": "初见" if db.get_kv("relationship_stage", "new") == "new" else "熟悉",
         "persona": {"desc": card["text"] if card else persona.DEFAULT_FLAVOR,
                     "tags": ([card["label"]] if card else [])},

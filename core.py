@@ -13,6 +13,7 @@ import game
 import guard
 import llm
 import memory
+import offline
 import persona
 from channels.base import Channel
 
@@ -81,11 +82,22 @@ class Engine:
         # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
         if guard.is_urgent(text):
             guard.open_urgent_window()
+            if db.get_state() == "SLEEPING":
+                db.set_state("AWAKE")  # 急事把 TA 唤醒
         else:
             guard.check_busy_signal(text)
         game.on_user_text(text)  # 娱乐模式：提到游戏名开局，"不玩了"结束
         db.reset_counter("unanswered_proactive")  # 用户回复了，清零连续未回复
         self._reset_bubble_timer()  # 聊上了，冒泡倒计时重新计
+
+        # 离线留言：TA 专注工作/睡觉时你发的话，攒着等 TA 上线正经回（急事除外）
+        if offline.is_offline() and not guard.is_urgent(text):
+            offline.push_inbox(text)
+            self._send_offline_notice()
+            return
+        # 在线但有积压留言（TA 刚转在线、tick 还没跑到）：先回留言再回这条新的
+        if offline.pending_inbox_count():
+            self.flush_inbox()
 
         with self._lock:
             first = not self._pending
@@ -136,14 +148,15 @@ class Engine:
                 with self._lock:
                     self._sending = False
 
-    def _generate_reply(self, batch: list[str]) -> None:
+    def _generate_reply(self, batch: list[str], from_inbox: bool = False) -> None:
         state = db.get_state()
         if state == "SLEEPING":
             self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
             return
 
         # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
-        messages = context.build_chat_messages(state, batch, game.prompt_injection())
+        messages = context.build_chat_messages(state, batch, game.prompt_injection(),
+                                               inbox=from_inbox)
         reply = self._generate_reply_text(messages, batch)
         # 措辞红线（H 模块·反愧疚）：代价只呈现不归因。prompt 已约束，这里是兜底改写——
         # 归因措辞任何状态都不该出现，命中就换成"只说自己的状态"的安全句（不归因）。
@@ -278,6 +291,40 @@ class Engine:
         if items:
             self.channel.send(format_outbox(items))
 
+    # --- 离线留言（你 → 它）：TA 离线（专注工作/睡觉）时你发的消息攒着，上线后回 ---
+    def _send_offline_notice(self) -> None:
+        """离线时收到消息的轻提示：睡 → 迷糊语；工作专注 → 第一人称"正忙"（不调 LLM）。"""
+        reason = offline.offline_reason()
+        if reason == "sleep":
+            self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
+        else:
+            self._send(corpus.pick(corpus.OFFLINE_FOCUS_NOTICES, "offline_focus"), kind="chat")
+
+    def flush_inbox(self) -> None:
+        """上线了：把离线期间攒下的留言正经回应一遍（后台线程，复用 _sending 互斥）。"""
+        items = offline.take_inbox()
+        if not items:
+            return
+        texts = [m["text"] for m in items]
+        threading.Thread(target=self._reply_inbox_worker, args=(texts,), daemon=True).start()
+
+    def _reply_inbox_worker(self, texts: list[str]) -> None:
+        """等正常回复线程空闲，再以"刚上线看到留言"的语境回应离线留言。"""
+        while not self._stopped:
+            with self._lock:
+                if not self._sending:
+                    self._sending = True
+                    break
+            _time.sleep(0.2)
+        if self._stopped:
+            return
+        try:
+            with db.PATH_LOCK:
+                self._generate_reply(texts, from_inbox=True)
+        finally:
+            with self._lock:
+                self._sending = False
+
     # --- 主动消息（调度器调用） ---
     def proactive(self, scenario: str) -> bool:
         """尝试发一条主动消息，返回是否实际发出。"""
@@ -384,18 +431,35 @@ class Engine:
             db.set_kv("relationship_stage", "familiar")
             self._send(corpus.AUTO_FAMILIAR_NOTE, kind="chat")
 
-    # --- 作息切换（调度器调用） ---
-    def wake_up(self) -> None:
-        db.set_state("AWAKE")
-        self.proactive("morning")
-
+    # --- 作息切换（调度器调用；自主作息说"还能撑/想赖床"就先进 SLEEPY 过渡） ---
     def go_sleep(self) -> None:
+        """锚点到点：自主作息说还能撑 → 进 SLEEPY 等 tick；撑不住 → 直接入睡。"""
+        if datetime.now() < offline.tonight_sleep_at(datetime.now()):
+            db.set_state("SLEEPY")
+            return
+        self._do_sleep()
+
+    def _do_sleep(self) -> None:
+        """真正入睡：道晚安 + 写日记 + 进入睡眠。"""
         # 晚安消息要在睡前发，所以先临时保持 AWAKE 发出去
         self.proactive("night")
         # 睡前写日记 + 复盘当天（P2：记忆 v3 每日回顾 + 日记系统 + 回顾线）
         if config.DIARY_ENABLED:
             self.daily_review()
         db.set_state("SLEEPING")
+
+    def wake_up(self) -> None:
+        """锚点到点：自主作息说还想赖床 → 进 SLEEPY 等 tick；睡饱了 → 直接醒。"""
+        if datetime.now() < offline.next_wake_at(datetime.now()):
+            db.set_state("SLEEPY")
+            return
+        self._do_wake()
+
+    def _do_wake(self) -> None:
+        """真正醒来：道早安 + 回离线留言。"""
+        db.set_state("AWAKE")
+        self.proactive("morning")
+        self.flush_inbox()
 
     # --- 每日回顾 + 写日记（P2） ---
     def daily_review(self) -> str:

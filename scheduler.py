@@ -62,6 +62,10 @@ def start(engine) -> BackgroundScheduler:
     import work
     sch.add_job(work.tick, CronTrigger(minute="*"), id="work")
 
+    # 离线与作息：每分钟检查 SLEEPY 过渡到点 + 上线 flush 离线留言
+    import offline
+    sch.add_job(offline.tick, CronTrigger(minute="*"), args=[engine], id="offline")
+
     sch.start()
     return sch
 
