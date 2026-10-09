@@ -190,6 +190,11 @@ function esc(s){ const d=document.createElement('div'); d.textContent=s; return 
 
 // --- 时间：今天只显示 HH:MM，非今天带日期；换天插一条日期分隔（微信/Telegram 风格） ---
 let lastMsgDay = '';
+function localDateStr(d){
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'),
+        dd = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + dd;
+}
 function weekdayOf(ts){
   const d = new Date(ts.slice(0,10) + 'T12:00:00');
   return '日一二三四五六'[d.getDay()];
@@ -197,9 +202,9 @@ function weekdayOf(ts){
 function dayLabel(ts){
   const day = ts.slice(0,10);
   const now = new Date();
-  const today = now.toISOString().slice(0,10);
-  const yest = new Date(now); yest.setDate(now.getDate() - 1);
-  const yestStr = yest.toISOString().slice(0,10);
+  const today = localDateStr(now);
+  const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const yestStr = localDateStr(yest);
   if (day === today) return '今天';
   if (day === yestStr) return '昨天';
   const y = +ts.slice(0,4), m = +ts.slice(5,7), d = +ts.slice(8,10);
@@ -211,10 +216,9 @@ function fmtTime(ts){
   const hhmm = ts.slice(11,16);
   const now = new Date();
   const day = ts.slice(0,10);
-  const today = now.toISOString().slice(0,10);
-  if (day === today) return hhmm;
-  const yest = new Date(now); yest.setDate(now.getDate() - 1);
-  if (day === yest.toISOString().slice(0,10)) return '昨天 ' + hhmm;
+  if (day === localDateStr(now)) return hhmm;
+  const yest = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (day === localDateStr(yest)) return '昨天 ' + hhmm;
   const y = ts.slice(0,4), m = ts.slice(5,7), dd = ts.slice(8,10);
   return (y === String(now.getFullYear())) ? (m + '-' + dd + ' ' + hhmm)
                                             : (y + '-' + m + '-' + dd + ' ' + hhmm);
