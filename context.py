@@ -62,6 +62,12 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "") -> l
         messages.append({"role": "system", "content": (
             "【急事】TA 刚才的话听着有急事。把手头的事先放下，立刻回应、"
             "简短、先听TA说，别扯别的、别卖关子。")})
+    else:
+        # 打断成本（S3 招牌）：它忙不忙/累不累 → 现在找它的代价，落到回复语态上
+        import cost
+        chint = cost.prompt_hint()
+        if chint:
+            messages.append({"role": "system", "content": f"【此刻的相处】{chint}"})
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
     combined = " ".join(batch)

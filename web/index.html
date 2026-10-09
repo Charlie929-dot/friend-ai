@@ -22,6 +22,12 @@
   .phase.sleep{color:#8a8fc0}
   .badge { display:inline-block; font-size:10px; color:#ff9ecb; border:1px solid #ff9ecb;
     border-radius:6px; padding:0 4px; margin-left:6px; vertical-align:middle; }
+  .cost { display:inline-block; font-size:10px; border-radius:6px; padding:0 5px;
+    margin-left:6px; vertical-align:middle; }
+  .cost.welcomed { color:#7ee0a8; border:1px solid #7ee0a8; }
+  .cost.tolerated { color:#ffcf6b; border:1px solid #ffcf6b; }
+  .cost.costly { color:#ff8e8e; border:1px solid #ff8e8e; }
+  .cost.sleep { color:#8a8fc0; border:1px solid #8a8fc0; }
   .bars { margin-top:8px; display:grid; grid-template-columns:1fr 1fr; gap:6px 12px;
     font-size:11px; color:#b8bce0; }
   .bar { background:#1a1c28; border-radius:6px; height:8px; overflow:hidden; margin-top:3px; }
@@ -101,7 +107,7 @@
   <div class="phone">
     <div class="hud">
       <div class="hud-top">
-        <span><span class="phase" id="phase">…</span><span class="badge">AI 朋友</span></span>
+        <span><span class="phase" id="phase">…</span><span class="cost" id="cost">—</span><span class="badge">AI 朋友</span></span>
         <span class="clock" id="clock">--:--</span>
       </div>
       <div class="bars">
@@ -255,6 +261,9 @@ function renderState(s){
   const ph = document.getElementById('phase');
   ph.textContent = PHASE_TEXT[p.phase] || '—';
   ph.className = 'phase ' + (p.phase || '');
+  const cb = $('cost');
+  cb.textContent = s.cost ? s.cost.badge : '';
+  cb.className = 'cost ' + (s.cost ? s.cost.level : '');
   $('clock').textContent = s.clock || '--:--';
   $('barE').style.width = (p.energy || 0) + '%';
   $('barP').style.width = (p.quota ? (p.done / p.quota * 100) : 0) + '%';

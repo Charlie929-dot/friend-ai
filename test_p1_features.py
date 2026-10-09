@@ -1377,6 +1377,80 @@ def test_work_system():
         _db.init()
 
 
+def test_interruption_cost():
+    """S3 招牌：打断成本 = R(phase 阻力) × (1+F(精力疲劳)) → welcomed/tolerated/costly。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import cost as _cost
+    import db as _db
+    import persona as _persona
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False      # 素材要调 LLM，这里只测机制本身
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+
+        morning = _dt(2026, 10, 9, 10, 0)
+        units = _work.plan(morning)
+        first_start = _dt.fromisoformat(units[0]["start"])
+
+        # 阻力系数映射：心流最高、收工为零
+        assert _cost.resistance("flow") == 1.0
+        assert _cost.resistance("working") == 0.7
+        assert _cost.resistance("off") == 0.0
+
+        # 疲劳系数：精力满 = 0，精力空 = 1
+        assert _cost.fatigue(100) == 0.0
+        assert _cost.fatigue(0) == 1.0
+
+        # 心流期（刚进入状态）恒为 costly——打断代价最高（精力满时 costIndex=1.0）
+        flow = _cost.state(first_start + _td(minutes=2))
+        assert flow["level"] == "costly" and flow["cost_index"] == 1.0, flow
+
+        # 忙自己的事（精力还满）→ tolerated
+        working = _cost.state(first_start + _td(minutes=30))
+        assert working["level"] == "tolerated", working
+
+        # 忙完了 → welcomed（完全欢迎，无论精力）
+        off = _cost.state(_dt(2026, 10, 10, 1, 0))   # 夜猫子深夜，活都干完
+        assert off["level"] == "welcomed" and off["cost_index"] == 0.0, off
+
+        # 精力耗尽时，working 也应升到 costly（累 + 忙 = 双重代价）
+        _db.set_kv("work_state", json.dumps({
+            "day": "2026-10-09", "quota": 6,
+            "units": [{"start": first_start.isoformat(timespec="seconds"),
+                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
+            "settled": 0, "energy": 20, "money": 0}))
+        tired = _cost.state(first_start + _td(minutes=30))
+        assert tired["level"] == "costly", tired
+
+        # 语态提示：三态都非空、且不踩反愧疚红线（只说自己的状态）
+        for lv in ("welcomed", "tolerated", "costly"):
+            assert _cost.LEVEL_HINTS[lv], lv
+            assert not _persona.has_cost_blame(_cost.LEVEL_HINTS[lv]), \
+                f"打断成本语态踩了反愧疚红线：{_cost.LEVEL_HINTS[lv]}"
+        # HUD 徽章文案齐全
+        for lv in ("welcomed", "tolerated", "costly", "sleep"):
+            assert _cost.LEVEL_BADGE[lv], lv
+
+        print("ok 打断成本（R×(1+F) 三态 + 语态不踩红线 + 徽章文案）")
+    finally:
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_urgent_channel():
     """S3 紧急通道（打断成本的安全阀）：急事能突破，日常夸张说法不能误触。"""
     import tempfile
@@ -1569,6 +1643,7 @@ if __name__ == "__main__":
     test_busy_signals_not_merged()
     test_random_chat_hours_follow_persona()
     test_work_system()
+    test_interruption_cost()
     test_urgent_channel()
     test_webui()
     test_autostart()

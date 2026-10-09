@@ -145,9 +145,11 @@ class Engine:
         # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
         messages = context.build_chat_messages(state, batch, game.prompt_injection())
         reply = self._generate_reply_text(messages, batch)
-        # 措辞红线（H 模块·反愧疚）：代价只呈现不归因。prompt 已约束，这里是兜底观测
+        # 措辞红线（H 模块·反愧疚）：代价只呈现不归因。prompt 已约束，这里是兜底改写——
+        # 归因措辞任何状态都不该出现，命中就换成"只说自己的状态"的安全句（不归因）。
         if persona.has_cost_blame(reply):
-            print(f"[红线] 回复把代价归因到对方，应改为只说自己的状态：{reply[:40]}")
+            print(f"[红线] 回复把代价归因到对方，已兜底改写：{reply[:40]}")
+            reply = corpus.pick(corpus.COST_SAFE_LINES, "cost_safe")
 
         # 分段连发：按换行拆成几条消息，像真人连着发
         segments = [s.strip() for s in reply.split("\n") if s.strip()]

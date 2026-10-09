@@ -104,6 +104,15 @@ WORK_ENERGY_RECOVER = int(os.environ.get("WORK_ENERGY_RECOVER", "8"))        # �
 WORK_PAY_PER_UNIT = int(os.environ.get("WORK_PAY_PER_UNIT", "20"))           # 每个单元产出（纯叙事余额，绝不绑真实付费/内购）
 WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() == "on"  # 每单元产出 1 条可分享素材（供 C 模块主动分享当内容源）
 
+# --- 打断成本（S3 招牌：它忙不忙/累不累 → 现在找它的代价 costIndex = R×(1+F)） ---
+COST_R_FLOW = float(os.environ.get("COST_R_FLOW", "1.0"))          # 心流期阻力（最高：刚进入状态，打断最伤）
+COST_R_WORKING = float(os.environ.get("COST_R_WORKING", "0.7"))    # 忙自己的事
+COST_R_IDLE = float(os.environ.get("COST_R_IDLE", "0.3"))          # 还没开工
+COST_R_BREAK = float(os.environ.get("COST_R_BREAK", "0.3"))        # 歇会儿
+COST_R_OFF = float(os.environ.get("COST_R_OFF", "0.0"))            # 忙完了（完全欢迎）
+COST_WELCOMED_MAX = float(os.environ.get("COST_WELCOMED_MAX", "0.4"))    # costIndex < 此值 = welcomed（欢迎）
+COST_TOLERATED_MAX = float(os.environ.get("COST_TOLERATED_MAX", "0.9"))  # costIndex < 此值 = tolerated（可以），否则 costly（有代价）
+
 # --- 紧急通道（打断成本的安全阀） ---
 URGENT_WINDOW_MINUTES = int(os.environ.get("URGENT_WINDOW_MINUTES", "10"))   # 识别到"有急事"后的窗口：这段时间内它随叫随到
 

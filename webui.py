@@ -88,6 +88,8 @@ def _clear_pid() -> None:
 # --- 状态快照：HUD + 朋友档案 ---
 def _state_payload(channel: WebChannel) -> dict:
     s = work.status()
+    import cost
+    c = cost.state()
     import persona_pool
     card = persona_pool.load()
     p = persona.behavior_params()
@@ -100,6 +102,9 @@ def _state_payload(channel: WebChannel) -> dict:
         "guard": guard.guard_enabled(),
         "typing": channel.typing_now(),
         "work": {k: s[k] for k in ("phase", "energy", "money", "done", "quota")},
+        "cost": {"level": c["level"],
+                 "badge": cost.LEVEL_BADGE.get(c["level"], ""),
+                 "index": c["cost_index"]},
         "materials": fresh,
         "schedule": f"{p['wake_hour']}:00 起 · {p['sleep_hour']}:00 睡",
         "stage": "初见" if db.get_kv("relationship_stage", "new") == "new" else "熟悉",
