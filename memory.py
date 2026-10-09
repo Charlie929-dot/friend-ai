@@ -49,6 +49,15 @@ EXTRACT_PROMPT = """你在回想并写下自己的记忆——从最近的对话
 （如 "profile": "作息习惯：夜猫子，凌晨才睡"）。只有对方亲口陈述的确定性事实才能进清单；
 一次性的计划、情绪、事件不进清单。
 
+【你对朋友的承诺】如果你（{WHO}）亲口答应了对方要在某个具体时间做某件事——比如
+"12点提醒你睡觉""明天早上叫我起床""晚上提醒我吃药"——这是你对朋友的一份承诺，
+要专门记下来，给这条记忆额外加一项 "care"：
+  "care": {"what": "12点提醒对方睡觉", "when": "YYYY-MM-DD HH:MM", "kind": "提醒"}
+when 必须是完整的绝对时刻：参照【现在时间】把"12点""今晚11点"换算成日期+时刻；
+"12点提醒睡觉"通常指午夜/次日，要结合上下文判断是中午还是午夜。
+只有你亲口答应、要在具体时刻做的事才加 care；对方自己的计划（"我明天要考试"）
+不是你的承诺，不要加 care。加 care 时这条记忆的 content 就写这句承诺本身。
+
 【类别说明】这些类别可以描述任何一个人——你自己、对方、或提到的别人。
 画像=某个人是谁（称呼/城市/身份）；偏好=喜欢/讨厌；计划=打算做的事；
 事件=已经发生的事；人际=某个人与别人的关系；情绪=状态与感受。
@@ -238,6 +247,18 @@ def _apply(item: dict, assistant_tail: bool = False, evidence: str = "") -> bool
             db.set_memory_status(old["id"], "pending_delete")
             print(f"[memory] 提议删除（待确认）：{old['content'][:30]}")
         return False
+
+    # 关怀承诺（S4）：我亲口答应对方要在某时间做的事 → 存关怀事件（到点提醒）+
+    # 落一条"我答应过"的计划记忆（专门记住，/memories 可见、能被回想）。
+    # 独立于 content 的红线过滤——即使 content 被误杀，这份承诺也要可靠记住。
+    care = item.get("care")
+    if isinstance(care, dict) and care.get("what") and care.get("when"):
+        import events
+        when_norm = events.add_care(care["what"], care["when"], care.get("kind", "提醒"))
+        if when_norm:
+            db.add_memory(f"我答应过：{care['what']}（{when_norm[5:16]}）",
+                          "计划", "", when_norm[:10], "", "", "")
+            print(f"[memory] 记住承诺：{care['what']} @{when_norm}")
 
     # A/B 两级库：带 long+full 的是"一句两句说不完"的长内容——摘要进 A 库
     # （memories，召回只看它），全文进 B 库（long_memories），A 库带 long_id 伪链接

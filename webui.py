@@ -85,6 +85,17 @@ def _clear_pid() -> None:
         pass
 
 
+def _persona_tags(card: dict | None) -> list[str]:
+    """人物标签：人格 label + 阅读偏好（爱读X）。旧卡没 reading_pref 就只给 label。"""
+    if not card:
+        return []
+    tags = [card["label"]]
+    pref = card.get("reading_pref")
+    if pref:
+        tags.append(f"爱读{pref}")
+    return tags
+
+
 # --- 状态快照：HUD + 朋友档案 ---
 def _state_payload(channel: WebChannel) -> dict:
     s = work.status()
@@ -128,7 +139,7 @@ def _state_payload(channel: WebChannel) -> dict:
         "schedule": f"今晚 {sleep_at:%H:%M} 睡 · 下次 {wake_at:%H:%M} 起",
         "stage": "初见" if db.get_kv("relationship_stage", "new") == "new" else "熟悉",
         "persona": {"desc": card["text"] if card else persona.DEFAULT_FLAVOR,
-                    "tags": ([card["label"]] if card else [])},
+                    "tags": _persona_tags(card)},
     }
 
 

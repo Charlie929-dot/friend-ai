@@ -66,6 +66,10 @@ def start(engine) -> BackgroundScheduler:
     import offline
     sch.add_job(offline.tick, CronTrigger(minute="*"), args=[engine], id="offline")
 
+    # 关怀事件（S4）：每分钟检查到点的承诺/约定（提醒），醒着就发、睡着顺延
+    import events
+    sch.add_job(events.tick, CronTrigger(minute="*"), args=[engine], id="care")
+
     sch.start()
     return sch
 

@@ -9,6 +9,7 @@ import config
 import context
 import corpus
 import db
+import events
 import game
 import guard
 import llm
@@ -456,10 +457,11 @@ class Engine:
         self._do_wake()
 
     def _do_wake(self) -> None:
-        """真正醒来：道早安 + 回离线留言。"""
+        """真正醒来：道早安 + 回离线留言 + 补昨晚错过的关怀提醒。"""
         db.set_state("AWAKE")
         self.proactive("morning")
         self.flush_inbox()
+        events.flush_missed(self)  # 昨晚说好要提醒的，结果睡着了，现在补上
 
     # --- 每日回顾 + 写日记（P2） ---
     def daily_review(self) -> str:
@@ -470,6 +472,41 @@ class Engine:
                 return diary.daily_review()
         except llm.LLMUnavailable as e:
             return corpus.LLM_ERROR.format(e)
+
+    # --- 关怀事件（S4）：履行对朋友的承诺，到点提醒 / 醒来补错过 ---
+    def care_remind(self, event: dict, missed: bool = False) -> bool:
+        """履行一份对朋友的承诺：到点轻轻提醒，或醒来补昨晚错过的。返回是否发出。
+
+        missed=True 时带"昨晚说好结果我睡着了"的自嘲语境。优雅失败：对方彻底
+        不理了（连续未回复熔断）就不再追，这承诺就不补了。
+        """
+        if db.get_counter("unanswered_proactive") >= config.MAX_UNANSWERED_PROACTIVE:
+            return False
+        what = event.get("what", "")
+        when = event.get("when", "")
+        state = db.get_state()
+        if missed:
+            ask = (f"（内心活动，不用回复这句话）你之前答应过对方要「{what}」，"
+                   f"说好的时间是 {when}，结果你当时睡着了没提醒。现在刚醒，自然地补一句："
+                   f"带一点\"昨晚我睡着了\"的自嘲或小歉意，然后把该提醒的事补上。"
+                   f"一两句话，别啰嗦。")
+        else:
+            ask = (f"（内心活动，不用回复这句话）你答应过对方要「{what}」，"
+                   f"现在到点了（{when}）。用你自己的口吻轻轻提醒TA一句，"
+                   f"一两句话，别啰嗦。")
+        try:
+            reply = llm.chat([
+                {"role": "system", "content": persona.build_system_prompt(state)},
+                {"role": "user", "content": ask},
+            ], temperature=1.0)
+        except llm.LLMUnavailable as e:
+            print(f"[care] 提醒生成失败：{e}")
+            return False
+        if not reply or reply == corpus.LLM_STUB:
+            return False
+        db.incr_counter("unanswered_proactive")  # 发了主动消息，纳入熔断感知
+        self._send(reply, kind="proactive")
+        return True
 
     def _send(self, text: str, kind: str) -> None:
         db.add_message("assistant", text, kind=kind)

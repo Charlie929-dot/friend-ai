@@ -130,6 +130,9 @@ REST_ENERGETIC_ENERGY = int(os.environ.get("REST_ENERGETIC_ENERGY", "60"))   # �
 REST_WAKE_LIE_IN_MAX = int(os.environ.get("REST_WAKE_LIE_IN_MAX", "45"))     # 赖床最多延后多少分钟
 REST_WAKE_EARLY_MAX = int(os.environ.get("REST_WAKE_EARLY_MAX", "30"))       # 早醒最多提前多少分钟
 
+# --- 关怀事件（S4「事件记忆与关怀触发」：记住对朋友的承诺/约定，到点提醒） ---
+CARE_ENABLED = os.environ.get("CARE_ENABLED", "on").lower() == "on"   # 承诺提醒总开关（关了就不记承诺、不提醒）
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

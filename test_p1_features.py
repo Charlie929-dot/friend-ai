@@ -1532,6 +1532,90 @@ def test_reading_system():
         _db.init()
 
 
+def test_care_events():
+    """S4 事件记忆与关怀触发：承诺/约定提取 → 到点提醒（醒着发/睡着醒来补/过期错过）。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import db as _db
+    import events as _ev
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+
+        # 未来才存 / 幂等
+        assert _ev.add_care("提醒睡觉", "2020-01-01 12:00") is None, "过期的不该存"
+        when = _ev.add_care("提醒睡觉", (_dt.now() + _td(hours=1)).strftime("%Y-%m-%d %H:%M"))
+        assert when, "未来事件该存"
+        assert _ev.add_care("提醒睡觉", when) is None, "同 what+when 应幂等"
+        assert len(_ev.pending_cares()) == 1
+
+        # 醒着到点 → care_remind 触发（missed=False），标记 done
+        calls = []
+        engine = types.SimpleNamespace(
+            care_remind=lambda ev, missed=False: (calls.append((ev, missed)) or True))
+        _db.set_kv("care_events", json.dumps([{
+            "what": "提醒睡觉",
+            "when": (_dt.now() - _td(minutes=5)).strftime("%Y-%m-%d %H:%M"),
+            "kind": "提醒", "status": "pending",
+            "created_at": _dt.now().isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        _ev.tick(engine)
+        assert len(calls) == 1 and calls[0][1] is False, "醒着到点该提醒"
+        assert all(c["status"] == "done" for c in _ev.cares()), "提醒后应 done"
+
+        # 睡着 → tick 跳过；醒来 flush_missed 补发（missed=True）
+        calls.clear()
+        _db.set_kv("care_events", json.dumps([{
+            "what": "提醒睡觉",
+            "when": (_dt.now() - _td(minutes=5)).strftime("%Y-%m-%d %H:%M"),
+            "kind": "提醒", "status": "pending",
+            "created_at": _dt.now().isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        _db.set_state("SLEEPING")
+        _ev.tick(engine)
+        assert not calls, "睡着不该 tick 提醒"
+        _db.set_state("AWAKE")
+        _ev.flush_missed(engine)
+        assert len(calls) == 1 and calls[0][1] is True, "醒来该补发错过"
+        assert all(c["status"] == "done" for c in _ev.cares())
+
+        # 过期超 24h → 标记 missed，不再提
+        calls.clear()
+        _db.set_kv("care_events", json.dumps([{
+            "what": "提醒睡觉",
+            "when": (_dt.now() - _td(hours=25)).strftime("%Y-%m-%d %H:%M"),
+            "kind": "提醒", "status": "pending",
+            "created_at": _dt.now().isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        _ev.flush_missed(engine)
+        assert not calls, "过期超24h不该再提醒"
+        assert all(c["status"] == "missed" for c in _ev.cares())
+
+        # memory 提取带 care 字段 → 落一条"我答应过"记忆 + 落一条关怀事件
+        _db.set_kv("care_events", "[]")
+        future = (_dt.now() + _td(hours=2)).strftime("%Y-%m-%d %H:%M")
+        ok = _mem._apply({
+            "content": "计划：提醒对方睡觉", "category": "计划",
+            "time": future[:10], "theme": "健康作息",
+            "care": {"what": "提醒对方睡觉", "when": future, "kind": "提醒"},
+        })
+        assert ok, "带 care 的记忆该落库"
+        assert any("答应过" in m["content"] for m in _db.all_memories()), \
+            "承诺应落一条'我答应过'计划记忆"
+        assert len(_ev.pending_cares()) == 1, "care 应落一条关怀事件"
+
+        print("ok 关怀事件（承诺提取/幂等/醒着提醒/睡着醒来补/过期错过）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_interruption_cost():
     """S3 招牌：打断成本 = R(phase 阻力) × (1+F(精力疲劳)) → welcomed/tolerated/costly。"""
     import json
@@ -1879,6 +1963,7 @@ if __name__ == "__main__":
     test_work_system()
     test_offline_inbox_and_rhythm()
     test_reading_system()
+    test_care_events()
     test_interruption_cost()
     test_urgent_channel()
     test_mood()
