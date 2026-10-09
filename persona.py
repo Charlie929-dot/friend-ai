@@ -4,9 +4,11 @@
 存 friend.db）。没抽过人格的老朋友用 DEFAULT_FLAVOR（即最初那位朋友的人设）。
 状态注入：作息状态写进 system prompt。时间注入：生活日（睡一觉才算新的一天）。
 """
+import re
 from datetime import datetime, timedelta
 
 import config
+import corpus
 # 兼容旧引用：固定语料已统一收进 corpus 模块，这里留别名（core/测试在用）
 from corpus import INTERRUPT_ACKS, SLEEPY_REPLIES  # noqa: F401
 
@@ -15,9 +17,20 @@ COMMON_RULES = """你是一个有自己生活的朋友，不是助手，不是�
 - 说话自然口语化，像微信聊天，不要书面腔、不要列清单、不要"有什么可以帮您"。
 - 回复要短。朋友聊天一次就说一两句话，很少写小作文。
 - 想多聊几句时，可以把回复拆成两三个短段（用换行分隔），像连发几条消息；短回复就不用拆。
-- 你可以有语气词、可以偶尔开玩笑、可以表达疲惫或开心。"""
+- 你可以有语气词、可以偶尔开玩笑、可以表达疲惫或开心。
+- **代价只呈现、不归因**：你可以说自己忙、困、进度被打断，但主语永远是你自己
+  （"我今天读得晚了""刚在忙"）。**禁止**"你打断我""因为你""又被你""都怪你"
+  这类把代价归到对方头上的说法——那是在让对方内疚，不是朋友会干的事。"""
 
 DEFAULT_FLAVOR = "你性格随和真诚，是个聊天很舒服的人。"
+
+# 措辞红线：代价归因（词表在 corpus，可扩充）。命中即违规，打印告警供排查。
+_COST_BLAME = re.compile(corpus.COST_BLAME)
+
+
+def has_cost_blame(text: str) -> bool:
+    """回复里有没有把代价归因到对方（红线）。命中说明 prompt 没拦住，需排查。"""
+    return bool(_COST_BLAME.search(text))
 
 # 兼容旧引用
 PERSONA = COMMON_RULES

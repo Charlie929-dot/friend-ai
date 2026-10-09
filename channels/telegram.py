@@ -1,4 +1,7 @@
-"""Telegram 通道（备案等待期兜底）：长轮询，无需域名/公网 IP。"""
+"""Telegram 通道（备用）：长轮询，无需域名/公网 IP。
+
+自用阶段主载体已定档为网页端 Web UI，本通道保留作备用兜底。
+"""
 import time
 
 import httpx
@@ -10,9 +13,7 @@ _API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
 
 
 class TelegramChannel(Channel):
-    def send(self, text: str, sender: str = "") -> None:
-        if sender:  # 群聊模式：带上发言人名字
-            text = f"{sender}：{text}"
+    def send(self, text: str) -> None:
         try:
             httpx.post(f"{_API}/sendMessage", json={
                 "chat_id": config.TELEGRAM_CHAT_ID, "text": text,
@@ -20,7 +21,7 @@ class TelegramChannel(Channel):
         except httpx.HTTPError as e:
             print(f"[telegram] 发送失败: {e}")
 
-    def typing(self, sender: str = "") -> None:
+    def typing(self) -> None:
         # Telegram 原生"正在输入"状态（约 5 秒有效，正文紧随其后发出）
         try:
             httpx.post(f"{_API}/sendChatAction", json={

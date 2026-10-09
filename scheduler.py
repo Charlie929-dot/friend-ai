@@ -7,6 +7,22 @@ from apscheduler.triggers.cron import CronTrigger
 import config
 
 
+def _awake_hours(wake_hour: int, sleep_hour: int) -> str:
+    """醒着的时间段 → cron hour 表达式。
+
+    时段**跟随人格作息**（待确认 #8 结论：全局固定会与人格作息打架——夜猫子
+    10 点才起，用全局 8 点起排随机闲聊会在它睡觉时发起）。跨午夜（10 点起、
+    2 点睡）要拆成两段，否则 cron 拿到 10-1 这种倒序区间。
+    """
+    wake = wake_hour % 24
+    sleep = sleep_hour % 24 or 24          # 0 点睡 = 24 点，不是"睡 0 小时"
+    if wake == sleep:
+        return "*"                         # 起睡同点 = 整天都醒着
+    if wake < sleep:
+        return f"{wake}-{sleep - 1}"       # 同一天内：如 7-22
+    return f"{wake}-23,0-{sleep - 1}"      # 跨午夜：如 10-23,0-1
+
+
 def start(engine) -> BackgroundScheduler:
     sch = BackgroundScheduler()
 
@@ -33,7 +49,7 @@ def start(engine) -> BackgroundScheduler:
             engine.proactive("random")
 
     sch.add_job(maybe_random_chat, CronTrigger(
-        hour=f"{config.WAKE_HOUR}-{config.SLEEP_HOUR - 1}", minute=random.randint(0, 59)),
+        hour=_awake_hours(wake_hour, sleep_hour), minute=random.randint(0, 59)),
         id="random_chat")
 
     # 初见阶段冒泡：每分钟检查一次是否到了冒泡时间
@@ -60,4 +76,5 @@ def reschedule_all(sch: BackgroundScheduler, engine) -> None:
     sch.reschedule_job("noon", trigger=CronTrigger(
         hour=config.NOON_HOUR, minute=30, jitter=2400))
     sch.reschedule_job("random_chat", trigger=CronTrigger(
-        hour=f"{config.WAKE_HOUR}-{config.SLEEP_HOUR - 1}", minute=random.randint(0, 59)))
+        hour=_awake_hours(p["wake_hour"], p["sleep_hour"]),
+        minute=random.randint(0, 59)))

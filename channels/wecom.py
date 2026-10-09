@@ -1,4 +1,7 @@
-"""企业微信自建应用通道。
+"""企业微信自建应用通道（备用通道）。
+
+⚠️ 自用阶段**不再是主载体**（v0.30 定档：自用用网页端 Web UI，服务端常驻本机），
+本通道保留作可选备用，不再有新功能投入。
 
 - 发送：应用消息 API（access_token 自动缓存刷新）
 - 接收：FastAPI 回调（GET 验证 + POST 收消息），AES-CBC 加解密按官方算法实现
@@ -87,9 +90,7 @@ class WecomChannel(Channel):
         self._token_cache = (resp["access_token"], time.time() + resp["expires_in"])
         return self._token_cache[0]
 
-    def send(self, text: str, sender: str = "") -> None:
-        if sender:  # 群聊模式：带上发言人名字
-            text = f"{sender}：{text}"
+    def send(self, text: str) -> None:
         resp = httpx.post(
             f"{_API}/message/send",
             params={"access_token": self._access_token()},

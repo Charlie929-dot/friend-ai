@@ -4,10 +4,10 @@ from abc import ABC, abstractmethod
 
 class Channel(ABC):
     @abstractmethod
-    def send(self, text: str, sender: str = "") -> None:
-        """向用户发送一条消息。sender 非空时表示发言人名字（群聊模式）。"""
+    def send(self, text: str) -> None:
+        """向对方发送一条消息（1:1 私聊，没有发言人概念）。"""
 
-    def typing(self, sender: str = "") -> None:
+    def typing(self) -> None:
         """开始"正在输入"提示（可选能力，默认无操作）。
         Engine 在回复正文发出前调用；CLI 显示提示，Telegram 发原生 typing 状态。"""
 

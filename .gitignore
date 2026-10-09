@@ -5,11 +5,12 @@ profile.md
 # 数据（聊天记录/记忆库）
 *.db
 *.db-journal
+# 测试跑出来的临时目录（里面是临时 friend.db 等产物）
+tmp*/
 backups/
 archive.log
 outbox.log
 *.log
-group_session.json
 
 # Python
 __pycache__/

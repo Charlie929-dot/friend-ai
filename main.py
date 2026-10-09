@@ -1,8 +1,11 @@
 """入口：python main.py [cli|server|telegram]
 
-  cli      本地命令行调试（默认，备案等待期用这个开发）
-  server   企业微信通道（FastAPI 回调，部署到云服务器后用）
-  telegram Telegram 通道（手机上提前体验的兜底方案）
+载体路线（v0.30 定档）：**自用阶段 = 网页端 Web UI**（服务端常驻本机），
+**推广阶段 = 鸿蒙 App**（服务端上云）。当前通道的用途随之调整：
+
+  cli      命令行调试通道（默认；网页端上线后仍保留作调试用）
+  server   企业微信通道（备用，不再是自用阶段主载体——见待确认 #1）
+  telegram Telegram 通道（备用，无需域名/公网 IP 的兜底方案）
 """
 import sys
 

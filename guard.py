@@ -29,11 +29,11 @@ def can_send_proactive(now: datetime | None = None, scenario: str = "") -> tuple
     scenario='bubble' 时使用冒泡独立额度（初见期高频冒泡不占普通主动上限）。"""
     now = now or datetime.now()
 
-    # 0. 睡觉状态永远不发（作息系统，不属于防打扰）
+    # 1. 睡觉状态永远不发（作息系统，不属于防打扰）
     if db.get_state() == "SLEEPING":
         return False, "睡觉中"
 
-    # 0.5 娱乐模式：游戏进行中暂停一切主动消息（冒泡/问候/轻催），结束自动恢复
+    # 2. 娱乐模式：游戏进行中暂停一切主动消息（冒泡/问候/轻催），结束自动恢复
     import game
     if game.current():
         return False, "游戏中"
@@ -41,19 +41,19 @@ def can_send_proactive(now: datetime | None = None, scenario: str = "") -> tuple
     if not guard_enabled():
         return True, "ok"
 
-    # 2. 忙碌静默期
+    # 3. 忙碌静默期
     quiet_until = db.get_kv("quiet_until")
     if quiet_until and datetime.fromisoformat(quiet_until) > now:
         return False, f"静默期至 {quiet_until}"
 
-    # 3. 每日上限（冒泡走独立额度）
+    # 4. 每日上限（冒泡走独立额度）
     if scenario == "bubble":
         if db.get_counter("bubble_count") >= config.BUBBLE_DAILY_LIMIT:
             return False, "已达每日冒泡上限"
     elif db.get_counter("proactive_count") >= config.DAILY_PROACTIVE_LIMIT:
         return False, "已达每日主动消息上限"
 
-    # 4. 连续未回复上限（所有类型共用：连发都不理就该停了）
+    # 5. 连续未回复上限（所有类型共用：连发都不理就该停了）
     if db.get_counter("unanswered_proactive") >= config.MAX_UNANSWERED_PROACTIVE:
         return False, "连续主动消息未获回复，今日停止主动"
 

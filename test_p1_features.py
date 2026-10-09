@@ -541,9 +541,9 @@ def test_typing_indicator():
         class Ch:
             def __init__(self):
                 self.events = []  # ("typing",)/("send", text)
-            def send(self, text, sender=""):
+            def send(self, text):
                 self.events.append(("send", text))
-            def typing(self, sender=""):
+            def typing(self):
                 self.events.append(("typing",))
 
         ch = Ch()
@@ -646,9 +646,9 @@ def test_interrupt_detection():
         class Ch:
             def __init__(self):
                 self.events = []
-            def send(self, text, sender=""):
+            def send(self, text):
                 self.events.append(("send", text))
-            def typing(self, sender=""):
+            def typing(self):
                 self.events.append(("typing",))
 
         real_chat = _mem.llm.chat
@@ -821,7 +821,7 @@ def test_bubble_fixed_corpus():
     class DummyChannel:
         def __init__(self):
             self.sent = []
-        def send(self, text, sender=""):
+        def send(self, text):
             self.sent.append(text)
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
@@ -1169,6 +1169,96 @@ def test_memory_tool_calling():
         _db.init()
 
 
+def test_no_groupchat_leftovers():
+    """v0.27 已砍群聊：通道接口不该再有 sender/群聊概念，代码里不该再有群聊措辞。"""
+    import inspect
+    import channels.base as _base
+    import channels.cli as _cli
+    import channels.telegram as _tg
+    import channels.wecom as _wc
+
+    # 通道签名回归 1:1 私聊（send/typing 不再带 sender）
+    for cls in (_cli.CliChannel, _tg.TelegramChannel, _wc.WecomChannel):
+        assert list(inspect.signature(cls.send).parameters) == ["self", "text"], \
+            f"{cls.__name__}.send 还带着群聊参数"
+    assert list(inspect.signature(_cli.CliChannel.typing).parameters) == ["self"]
+    assert list(inspect.signature(_base.Channel.send).parameters) == ["self", "text"]
+
+    # 需求文档口径：1:1 私聊，日记/记忆里不再出现"一群人""群里"
+    import diary as _diary
+    assert "一群人" not in _diary.REVIEW_PROMPT, "日记复盘 prompt 还留着群聊措辞"
+    print("ok 群聊残留已清理（通道签名回到 1:1 + 群聊措辞清除）")
+
+
+def test_cost_blame_redline():
+    """H 模块反愧疚红线：代价只呈现不归因。词表在 corpus，检测在 persona，prompt 有约束。"""
+    import corpus
+    import persona as _persona
+
+    # 红线词表必须是语料（会扩充），不能散在业务模块
+    assert hasattr(corpus, "COST_BLAME") and corpus.COST_BLAME
+    assert _persona.has_cost_blame("你打断我，我刚想说的全忘了")
+    assert _persona.has_cost_blame("都是因为你，我今天什么都没干成")
+    assert _persona.has_cost_blame("又被你打断了")
+    # 只说自己的状态（呈现不归因）→ 不违规
+    assert not _persona.has_cost_blame("我今天读得晚了，有点困")
+    assert not _persona.has_cost_blame("刚在忙，回你晚了")
+    assert not _persona.has_cost_blame("没事，我正好也想歇会儿")
+    # 人设 prompt 里必须有这条约束（否则模型不知道）
+    assert "不归因" in _persona.COMMON_RULES and "你打断我" in _persona.COMMON_RULES
+    print("ok 反愧疚措辞红线（归因命中 / 呈现不命中 / 人设有约束）")
+
+
+def test_busy_signals_not_merged():
+    """回归：BUSY_SIGNALS 曾漏一个逗号，Python 隐式拼接把"不要说""安静"粘成一个词。"""
+    import corpus
+    import guard as _guard
+    import tempfile
+    import db as _db
+
+    for word in ("不要说", "别说", "安静", "在忙", "开会"):
+        assert word in corpus.BUSY_SIGNALS, f"忙碌信号丢了：{word}"
+    assert not any(len(w) > 6 for w in corpus.BUSY_SIGNALS), \
+        f"有信号词被粘成一坨：{corpus.BUSY_SIGNALS}"
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        assert _guard.check_busy_signal("安静") is True, "'安静'没被识别成忙碌信号"
+        assert _guard.check_busy_signal("不要说了") is True
+        assert _db.get_kv("quiet_until"), "忙碌信号没触发静默期"
+        _db.set_kv("quiet_until", "")
+        assert _guard.check_busy_signal("今天天气不错") is False
+        assert not _db.get_kv("quiet_until"), "普通消息不该进静默期"
+        print("ok 忙碌信号词表完整（不粘词 + 安静/不要说各自生效 + 普通消息不误伤）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_random_chat_hours_follow_persona():
+    """待确认 #8 结论：闲聊时段按人格作息自适应，全局固定会与人格作息打架。"""
+    import scheduler as _sched
+    from apscheduler.triggers.cron import CronTrigger
+
+    # 同一天内的作息
+    assert _sched._awake_hours(7, 23) == "7-22"
+    assert _sched._awake_hours(6, 22) == "6-21"
+    assert _sched._awake_hours(8, 8) == "*"
+    # 跨午夜（夜猫子 10 点起、凌晨 2 点睡）必须拆成两段，否则 cron 拿到倒序区间
+    assert _sched._awake_hours(10, 2) == "10-23,0-1"
+    # 0 点睡 = 24 点，不是"睡 0 小时"（中二人格 9 点起、0 点睡）
+    assert _sched._awake_hours(9, 0) == "9-23"
+
+    # 生成的表达式 APScheduler 真能解析（跨午夜两段也能）
+    for hours in ("7-22", "10-23,0-1", "9-23"):
+        assert CronTrigger(hour=hours, minute=0) is not None
+    print("ok 闲聊时段按人格作息自适应（跨午夜拆段 + cron 可解析）")
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1191,4 +1281,8 @@ if __name__ == "__main__":
     test_memory_tool_calling()
     test_diary_daily_review()
     test_diary_purge_reviewed_messages()
+    test_no_groupchat_leftovers()
+    test_cost_blame_redline()
+    test_busy_signals_not_merged()
+    test_random_chat_hours_follow_persona()
     print("\n全部通过")

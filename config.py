@@ -35,7 +35,7 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # --- 用户称呼（你的名字，AI 口中的"你"） ---
 USER_NAME = os.environ.get("USER_NAME", "小徐")  # 不写死：改名改 .env 的 USER_NAME + /refresh 即可
 
-# --- 企业微信自建应用 ---
+# --- 企业微信自建应用（备用通道；自用阶段主载体已定档网页端 Web UI）---
 WECOM_CORPID = os.environ.get("WECOM_CORPID", "")
 WECOM_CORPSECRET = os.environ.get("WECOM_CORPSECRET", "")
 WECOM_AGENTID = os.environ.get("WECOM_AGENTID", "")
@@ -43,7 +43,7 @@ WECOM_TOKEN = os.environ.get("WECOM_TOKEN", "")           # 回调配置里的 T
 WECOM_ENCODING_AES_KEY = os.environ.get("WECOM_ENCODING_AES_KEY", "")
 WECOM_USER_ID = os.environ.get("WECOM_USER_ID", "")       # 你自己的企业微信 UserID
 
-# --- Telegram（兜底通道） ---
+# --- Telegram（备用兜底通道） ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 

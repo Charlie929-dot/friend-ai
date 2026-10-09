@@ -94,16 +94,15 @@ class CliChannel(Channel):
             sys.stdout.write("\x1b[2K" + line + "\n")
             self._redraw()
 
-    def send(self, text: str, sender: str = "") -> None:
-        # 群聊时 sender 是发言人自己的名字；单聊退回当前朋友名
-        name = sender or _friend_name()
+    def send(self, text: str) -> None:
+        name = _friend_name()
         if not self._interactive:
             print(f"\n[{_ts()} {name}] {text}")
             return
         self._emit_line(f"[{_ts()} {name}] {text}")
 
-    def typing(self, sender: str = "") -> None:
-        name = sender or _friend_name()
+    def typing(self) -> None:
+        name = _friend_name()
         if not self._interactive:
             print(f"\n[{_ts()} {name}] 正在输入…", end="", flush=True)
             return
