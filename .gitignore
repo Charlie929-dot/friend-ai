@@ -12,6 +12,10 @@ archive.log
 outbox.log
 *.log
 
+# 常驻守护的运行时产物（PID / 停止标志）
+*.pid
+web.stop
+
 # Python
 __pycache__/
 *.pyc

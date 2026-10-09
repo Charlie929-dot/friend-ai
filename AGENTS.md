@@ -32,6 +32,8 @@
 | 新增行为接口（MCP/工具）   | 遵守**工具拟人化** + **两层分离**（见下）；并在需求池 F 自主模块更新状态                                              |
 | `channels/*`     | 通道层是适配器，新通道要对齐 base；当前自用阶段主载体是**网页端 Web UI**，CLI 保留调试                                     |
 | `webui.py` / `web/` | 网页端（自用阶段主载体）。**与 CLI 同一份 db**，别另起一套存储；HUD 数据源是 `work.status()`，不是前端自己算；命令输出经 `/api/send` 回给浏览器（普通消息的回复由引擎后台线程写库、前端轮询拿到） |
+| `daemon.py`      | 常驻守护：拉 `main.py web`，退了隔 5 秒重拉，`web.stop` 存在才真停。改这里要确认：用 `pythonw.exe` 跑（无窗口）、子进程带 `CREATE_NO_WINDOW`（不闪黑框）、日志追写到 `logs/web.log` |
+| `autostart.py`   | 开机自启：计划任务（PowerShell ScheduledTasks cmdlet）优先，兜底「启动」文件夹。**不要用 `schtasks.exe`**（部分终端里不可用）；**不要用 `os.kill(pid, 0)` 探活**（Windows 上等于 `TerminateProcess`） |
 
 ---
 
@@ -44,6 +46,8 @@
 4. **称呼不写死** —— 每个朋友有自己 profile 里的"称呼"字段（事实便签"叫我X" > profile 称呼 > `config.USER_NAME` 兜底），不同朋友可以有个性称呼。
 5. **代价只呈现、不归因** —— costly 状态只说自己的状态（"今天读得晚"），**禁止"你打断我/因为你/又被你/我为了你"** 这类把代价指向对方的表达。这是硬红线。
 6. **内部 LLM 调用不拼完整人设** —— 记忆提取、素材生成这类"后台"调用一律用 `persona.core_identity_prompt()`，**不要用 `build_system_prompt()`**。完整人设里塞的动态段（时间/状态/手头的事）只要有一个会触发新的 LLM 调用就成环递归爆栈（实测 #17 已踩）。
+7. **Windows 上别用 `os.kill(pid, 0)` 探活** —— 它不等于 POSIX 的信号 0，CPython 会直接 `TerminateProcess`，**是杀人不是探活**。查进程活着用 `autostart._pid_alive()`（`OpenProcess` + `GetExitCodeProcess`）。
+8. **注册计划任务别用 `schtasks.exe`** —— 部分终端（含受限会话）里它连 `/query` 都返回 "The system cannot find the path specified"。统一走 `autostart._ps()`（PowerShell 的 `ScheduledTasks` cmdlet）。
 
 ---
 

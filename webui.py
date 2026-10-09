@@ -10,6 +10,7 @@
 - 服务端只依赖标准库，不引第三方 Web 框架（自用阶段少一个依赖少一件事）。
 """
 import json
+import os
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,8 +47,14 @@ class WebChannel(Channel):
         """启动 HTTP 服务并阻塞（调度器已在 run 之前启动）。
 
         on_message 的返回值是斜杠命令的输出（普通消息返回 None）。"""
-        server = ThreadingHTTPServer((config.WEB_HOST, config.WEB_PORT),
-                                     _make_handler(self, on_message))
+        try:
+            server = ThreadingHTTPServer((config.WEB_HOST, config.WEB_PORT),
+                                         _make_handler(self, on_message))
+        except OSError as e:
+            print(f"[网页端] 起不来：{config.WEB_HOST}:{config.WEB_PORT} —— {e}\n"
+                  f"          多半是已经有一个在跑了（python main.py autostart status）")
+            return
+        _write_pid()      # 让 autostart 能查到/停掉这个进程
         print(f"[网页端] http://{config.WEB_HOST}:{config.WEB_PORT}  "
               f"（Ctrl+C 退出；CLI 调试用 python main.py cli）")
         try:
@@ -55,7 +62,26 @@ class WebChannel(Channel):
         except KeyboardInterrupt:
             print("\n[网页端] 已停止")
         finally:
+            _clear_pid()
             server.server_close()
+
+
+# --- PID 文件：给 autostart 用（查进程 / 停服务） ---
+def _write_pid() -> None:
+    try:
+        import autostart
+        autostart.PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except (ImportError, OSError):
+        pass
+
+
+def _clear_pid() -> None:
+    try:
+        import autostart
+        if autostart.PID_FILE.exists():
+            autostart.PID_FILE.unlink()
+    except (ImportError, OSError):
+        pass
 
 
 # --- 状态快照：HUD + 朋友档案 ---

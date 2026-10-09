@@ -7,6 +7,8 @@
   cli      命令行调试通道；与网页端同一份 db，改配置/查记忆/跑回填用它顺手
   server   企业微信通道（备用，不再是自用阶段主载体——见待确认 #1）
   telegram Telegram 通道（备用，无需域名/公网 IP 的兜底方案）
+
+  autostart [on|off|status|start|stop]   网页端的开机自启与常驻（见 autostart.py）
 """
 import sys
 
@@ -34,6 +36,11 @@ def make_channel(name: str):
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "cli"
+    if mode == "autostart":
+        # 开机自启不碰 db，先于 init 处理（装/卸/查都不需要起引擎）
+        import autostart
+        print(autostart.cli(sys.argv[2] if len(sys.argv) > 2 else "status"))
+        return
     db.init()
     if mode == "cli":
         # 启动先选聊天对象（在引擎/调度器创建前，选完作息按选中朋友排）

@@ -1449,6 +1449,42 @@ def test_webui():
         _db.init()
 
 
+def test_autostart():
+    """开机自启与常驻（G 模块）。
+
+    只测不碰系统的部分：装/卸/启/停会真的去注册计划任务、拉进程，
+    那种副作用留给手工验证（python main.py autostart on 看一眼）。
+    """
+    import autostart as _as
+    import daemon as _dm
+
+    # 两边各自定义了守护 PID 的路径，一旦写歪就互相找不到对方
+    assert Path(_as.DAEMON_PID) == Path(_dm.DAEMON_PID), \
+        f"autostart 与 daemon 的 DAEMON_PID 不一致：{_as.DAEMON_PID} vs {_dm.DAEMON_PID}"
+
+    # 解释器必须指向仓库里的虚拟环境，不能是随便哪个 python
+    assert ".venv" in _as._python(), f"python 路径没走虚拟环境：{_as._python()}"
+    assert Path(_as._pythonw()).exists(), f"pythonw 不存在：{_as._pythonw()}"
+
+    # 启动文件夹那个 vbs：必须拉起 daemon.py，且路径带引号（路径有空格也不会散）
+    vbs = _as._startup_vbs()
+    assert "daemon.py" in vbs and "pythonw.exe" in vbs, f"启动器内容不对：{vbs}"
+    assert '"""' in vbs, f"vbs 里路径没加引号，路径有空格会散：{vbs}"
+
+    # status 不能崩，且三块信息都得在（装没装 / 网页端 / 守护）
+    s = _as.status()
+    for key in ("开机自启", "网页端进程", "守护进程"):
+        assert key in s, f"status 少了 {key}：{s}"
+
+    # cli 分发：未知参数当 status 处理，别默默什么都不做
+    assert "开机自启" in _as.cli("")
+    assert "开机自启" in _as.cli("乱写的参数")
+
+    # 探活函数不能把活进程杀掉（Windows 上 os.kill(pid,0) 是 TerminateProcess！）
+    assert _as._pid_alive(os.getpid()) is True, "连自己都判成死了"
+    assert _as._pid_alive(999999) is False, "不存在的 PID 判成活着"
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -1478,4 +1514,5 @@ if __name__ == "__main__":
     test_work_system()
     test_urgent_channel()
     test_webui()
+    test_autostart()
     print("\n全部通过")
