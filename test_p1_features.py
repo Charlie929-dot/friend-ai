@@ -1250,6 +1250,34 @@ def test_cost_blame_redline():
     print("ok 反愧疚措辞红线（归因命中 / 呈现不命中 / 人设有约束）")
 
 
+def test_conversation_continuation():
+    """C 模块「对话中的主动延续」：人设引导 AI 追问/延伸，别一问一答即止。"""
+    import tempfile
+    import db as _db
+    import persona as _persona
+
+    rules = _persona.COMMON_RULES
+    # 延续动作：追问 / 延伸，让对话有来有回（别把天聊死）
+    assert "来有回" in rules, "人设缺「对话要有来有回」的延续引导"
+    assert "追问" in rules and "延伸" in rules, "人设缺追问/延伸的延续动作"
+    # 分寸约束：别连环追问、别查户口、对方收尾别硬续
+    assert "别连环追问" in rules, "延续引导缺「别连环追问」分寸"
+    assert "别查户口" in rules, "延续引导缺「别查户口」分寸"
+    assert "别硬续" in rules, "延续引导缺「收尾别硬续」分寸"
+    # 延续引导要真的进到完整 system prompt（core_identity_prompt 是它的底层）
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        assert "来有回" in _persona.core_identity_prompt(), \
+            "延续引导没进 system prompt"
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+    print("ok 对话延续引导（追问/延伸 + 分寸约束 + 进 system prompt）")
+
+
 def test_busy_signals_not_merged():
     """回归：BUSY_SIGNALS 曾漏一个逗号，Python 隐式拼接把"不要说""安静"粘成一个词。"""
     import corpus
@@ -1718,6 +1746,7 @@ if __name__ == "__main__":
     test_diary_purge_reviewed_messages()
     test_no_groupchat_leftovers()
     test_cost_blame_redline()
+    test_conversation_continuation()
     test_busy_signals_not_merged()
     test_random_chat_hours_follow_persona()
     test_work_system()
