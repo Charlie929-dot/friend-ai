@@ -1605,6 +1605,11 @@ def test_user_library():
         fourth = _lib.next_passage()
         assert fourth["title"] == "背影" and fourth["source"] == "朱自清", fourth
 
+        # 英文句号摘抄（用户可能导入英文书），小数点不误切
+        assert _lib._pick_quote("This is a good sentence. Next one here.") == \
+            "This is a good sentence.", _lib._pick_quote("This is a good sentence. Next one here.")
+        assert "3.14" in _lib._pick_quote("圆周率是 3.14 左右的常数。这是一句完整的话。")
+
         # 书架空 → None（work 层回退内置书摘）
         config.BOOKS_DIR = tmp / "empty"
         assert _lib.next_passage() is None, "空书架应返回 None"

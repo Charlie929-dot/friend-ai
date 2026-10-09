@@ -157,9 +157,14 @@ def progress() -> dict:
 
 
 def _pick_quote(passage: str) -> str:
-    """从段落里摘一句当"金句"：找第一个 8~40 字的完整句；摘不出就取前 40 字。"""
-    for m in re.finditer(r"[^。！？!?…]+[。！？!?…]", passage):
-        s = m.group(0).strip()
+    """从段落里摘一句当"金句"：中英文句末标点都算，取第一个 8~40 字的完整句。
+
+    英文句末标点（字母后的 .!? 后跟空白）也切句，保留原文标点；小数点 "3.14"
+    不会误切（前面是数字不是字母）。
+    """
+    sentences = re.split(r"(?<=[。！？!?…])|(?<=[A-Za-z][.!?])\s+", passage)
+    for s in sentences:
+        s = s.strip()
         if 8 <= len(s) <= 40:
             return s
     return passage[:40]
