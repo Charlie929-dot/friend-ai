@@ -47,6 +47,7 @@ HELP = """可用命令：
   /guard           查看防打扰开关状态
   /guard on|off    开/关防打扰（默认关；睡觉拦截是作息，不受影响）
   /refresh         重新加载所有文件（.env/配置/人设/prompt/语料），不用重启
+  /restart         重启网页服务（改了后端代码后点；CLI 里无效，Ctrl+C 重开即可）
 """
 
 
@@ -99,6 +100,19 @@ def _friend_name_in(path) -> str:
         except (ValueError, KeyError):
             pass
     return kv.get("alias") or "老朋友"
+
+
+def list_friends() -> list[dict]:
+    """归档朋友的结构化列表（网页端 `/api/friends` 用，`/friends` 也复用它）。
+
+    排序和编号必须跟 `/friend <编号>` 对得上——唯一真相是 `_archives()`，
+    别在别处再排一遍序，否则点列表第 2 个切到的可能是第 3 个。
+    """
+    out = []
+    for i, p in enumerate(_archives()):
+        name, at = _archive_display(p)
+        out.append({"idx": i + 1, "name": name, "at": at, "file": p.name})
+    return out
 
 
 def _archive_display(p) -> tuple[str, str]:
@@ -299,14 +313,11 @@ def handle(cmd_line: str) -> str:
                 f"  相识于：{card['drawn_at']}")
 
     if cmd == "/friends":
-        archives = _archives()
-        if not archives:
+        friends = list_friends()
+        if not friends:
             return "还没有归档的老朋友。/new-friend 之后这里就会有啦。"
-        lines = []
-        for i, p in enumerate(archives):
-            name, at = _archive_display(p)
-            lines.append(f"  [{i + 1}] {name}（最后归档 {at}）" if at
-                         else f"  [{i + 1}] {name}")
+        lines = [f"  [{f['idx']}] {f['name']}（最后归档 {f['at']}）" if f["at"]
+                 else f"  [{f['idx']}] {f['name']}" for f in friends]
         return ("归档的老朋友们：\n" + "\n".join(lines) +
                 "\n用 /friend <编号> 换回TA继续聊，/alias <编号> <别名> 给TA改名")
 
@@ -470,6 +481,10 @@ def handle(cmd_line: str) -> str:
         for m in (_corpus, _pool, _persona, _llm, _memory, _diary, _guard, _game, _context):
             importlib.reload(m)
         return "刷新成功"
+
+    if cmd == "/restart":
+        # 真正的退出逻辑在 webui 里拦（有守护才敢退）；CLI 走到这里只给个说明
+        return "重启是网页端的行为：改完后端点一下，守护会自动拉起新进程。\nCLI 请直接 Ctrl+C 退出后重跑。"
 
     if cmd == "/guard":
         import guard as g

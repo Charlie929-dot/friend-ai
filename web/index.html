@@ -54,6 +54,40 @@
   .legend{font-size:11.5px;color:#8a8fc0;line-height:1.65}
   .legend b{color:#c0c4e8}
   .legend code{background:#1a1c28;border-radius:4px;padding:1px 5px;color:#c0a8ff}
+
+  /* --- 按钮：常用的事不用再手敲命令 --- */
+  .btn { background:#33374f; border:1px solid #3e4361; color:#d8dcf5; border-radius:10px;
+    padding:7px 10px; font-size:12px; cursor:pointer; }
+  .btn:hover { background:#3b4062; }
+  .btn.on { background:#3a6df0; border-color:#3a6df0; color:#fff; }
+  .btn.warn { color:#ffb3b3; border-color:#5a3540; }
+  .btn[disabled] { opacity:.55; cursor:default; }
+  .btnrow { display:flex; gap:8px; margin-top:10px; }
+  .btnrow .btn { flex:1; text-align:center; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px; }
+
+  /* --- 朋友列表 --- */
+  .flist { margin-top:10px; display:none; }
+  .flist.open { display:block; }
+  .fitem { display:flex; align-items:center; justify-content:space-between; gap:8px;
+    background:#1a1c28; border-radius:10px; padding:8px 10px; margin-top:6px; }
+  .fitem .fname { font-size:12.5px; cursor:pointer; flex:1; }
+  .fitem .fname:hover { color:#9aa0ff; }
+  .fitem .fat { font-size:10.5px; color:#7e84a8; }
+  .fitem .fop { font-size:11px; color:#8a8fc0; cursor:pointer; }
+  .fitem .fop:hover { color:#c0a8ff; }
+  .fitem.cur { border:1px solid #3a6df0; }
+  .empty { font-size:11.5px; color:#7e84a8; margin-top:8px; }
+
+  /* --- 命令输出面板：不塞进对话流，聊天区留给聊天 --- */
+  .panel { background:#1a1c28; border-radius:10px; padding:10px; margin-top:10px;
+    max-height:280px; overflow:auto; }
+  .panel pre { font-family:ui-monospace,Consolas,monospace; font-size:11.5px;
+    color:#c8ccf0; white-space:pre-wrap; line-height:1.6; }
+  .panel .ph { display:flex; justify-content:space-between; align-items:center;
+    font-size:11px; color:#7e84a8; margin-bottom:6px; }
+  .panel .ph span.clr { cursor:pointer; }
+  .busy { color:#ffcf6b; }
 </style>
 </head>
 <body>
@@ -81,7 +115,7 @@
       <label for="urgent">紧急 / 我需要陪伴（它先放下手头的事）</label>
     </div>
     <div class="inputbar">
-      <input autocomplete="off" id="txt" placeholder="对它说点什么…（/work 看它今天忙到哪了）">
+      <input autocomplete="off" id="txt" placeholder="对它说点什么…（调试命令仍在这里输，如 /refresh）">
       <button id="send">发送</button>
     </div>
   </div>
@@ -97,7 +131,31 @@
         <div class="row"><span>关系阶段</span><span id="pStage"></span></div>
         <div class="row"><span>连接</span><span id="pLink">—</span></div>
       </div>
+      <div class="btnrow">
+        <button class="btn" id="btnSwitch">换朋友</button>
+        <button class="btn warn" id="btnNew">抽新朋友</button>
+      </div>
+      <div class="flist" id="flist"></div>
     </div>
+
+    <div class="card">
+      <h3>常用</h3>
+      <div class="grid">
+        <button class="btn" data-cmd="/work">手头的事</button>
+        <button class="btn" data-cmd="/diary">今天的日记</button>
+        <button class="btn" data-cmd="/diaries">日记目录</button>
+        <button class="btn" data-cmd="/memories">TA 记住的事</button>
+        <button class="btn" data-cmd="/notes">事实便签</button>
+        <button class="btn" data-cmd="/profile">TA 知道的你</button>
+        <button class="btn" data-cmd="/review">现在就复盘</button>
+        <button class="btn" id="btnGuard">防打扰</button>
+      </div>
+      <div class="panel" id="panel">
+        <div class="ph"><span id="pTitle">输出</span><span class="clr" id="pClear">清空</span></div>
+        <pre id="pOut">点上面任意一项，结果会显示在这里（不占聊天区）。</pre>
+      </div>
+    </div>
+
     <div class="card">
       <h3>说明</h3>
       <div class="legend">
@@ -106,8 +164,13 @@
         <b>HUD</b>：它此刻在忙什么。看得到它的日子，才知道什么时候找它会打扰它。<br>
         <b>紧急</b>：勾上就开紧急窗口（也可直接说"有急事"，它自己认），
         窗口内它随叫随到，10 分钟后自动恢复。<br>
-        <b>命令</b>：输入框里可直接用 <code>/work</code> <code>/memories</code>
-        <code>/diary</code> <code>/status</code> 等斜杠命令，输出会显示在聊天里。
+        <b>换朋友 / 抽新朋友</b>：换人前当前这位会自动归档，随时能换回来。<br>
+        <b>命令</b>：常用的都在上面这些按钮里；剩下要带参数的、调试用的，
+        在输入框里直接敲，比如 <code>/note 叫我小徐</code> <code>/delmem 3</code>
+        <code>/model deepseek-reasoner</code> <code>/refresh</code>。
+      </div>
+      <div class="btnrow">
+        <button class="btn" id="btnRestart">重启服务（改了后端代码后点）</button>
       </div>
     </div>
   </div>
@@ -161,6 +224,9 @@ function renderState(s){
   $('pSch').textContent = s.schedule || '';
   $('pStage').textContent = s.stage || '';
   $('pLink').textContent = s.urgent ? '紧急窗口中' : (s.state || '—');
+  const g = $('btnGuard');
+  g.textContent = s.guard ? '防打扰：开' : '防打扰：关';
+  g.classList.toggle('on', !!s.guard);
 }
 
 async function poll(){
@@ -184,10 +250,121 @@ async function send(){
     })).json();
     $('urgent').checked = false;
     if (r.echo !== false) addMsg({role:'user', content:t, ts:r.ts});
-    if (r.reply) addSys(r.reply);          // 斜杠命令的输出
+    if (r.reply) addSys(r.reply);          // 输入框里敲的命令，输出照旧走聊天区
     poll();
   }catch(e){ addSys('⚠ 发送失败：' + e.message); }
 }
+
+// --- 命令输出面板：按钮触发的结果放这儿，别污染对话流 ---
+function panelBusy(title){ $('pTitle').textContent = title + '…'; $('pOut').textContent = '稍等一下'; $('pOut').className='busy'; }
+function panelDone(title, text){
+  $('pTitle').textContent = title; $('pOut').className=''; $('pOut').textContent = text || '(没有输出)';
+}
+
+async function runCmd(cmd, title){
+  panelBusy(title);
+  try{
+    const r = await (await fetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text: cmd})
+    })).json();
+    panelDone(title, r.reply || r.error);
+  }catch(e){ panelDone(title, '⚠ ' + e.message); }
+  poll();
+}
+
+// 换人之后整个库都换了：聊天区必须清掉重来，不然两条时间线会串在一起
+function resetChat(){ chat().innerHTML = ''; lastId = 0; }
+
+document.querySelectorAll('.btn[data-cmd]').forEach(b => {
+  b.onclick = () => runCmd(b.dataset.cmd, b.textContent);
+});
+$('btnGuard').onclick = () => {
+  const on = $('btnGuard').classList.contains('on');
+  runCmd(on ? '/guard off' : '/guard on', '防打扰');
+};
+
+// --- 朋友列表：点一下就换，不用记编号 ---
+async function loadFriends(){
+  try{
+    const d = await (await fetch('/api/friends')).json();
+    const box = $('flist'); box.innerHTML = '';
+    if (!d.friends.length){
+      box.innerHTML = '<div class="empty">还没有归档的老朋友。抽个新朋友之后，'
+                    + '当前这位会出现在这里。</div>';
+    } else {
+      d.friends.forEach(f => {
+        const row = document.createElement('div');
+        row.className = 'fitem' + (f.name === d.current ? ' cur' : '');
+        row.innerHTML = '<span class="fname">' + esc(f.name)
+          + (f.at ? ' <span class="fat">· ' + esc(f.at) + '</span>' : '') + '</span>'
+          + '<span class="fop" data-rename="' + f.idx + '">改名</span>';
+        row.querySelector('.fname').onclick = () => switchFriend(f.idx, f.name);
+        row.querySelector('.fop').onclick = (e) => {
+          e.stopPropagation(); renameFriend(f.idx, f.name);
+        };
+        box.appendChild(row);
+      });
+    }
+    box.classList.add('open');
+  }catch(e){ panelDone('朋友列表', '⚠ ' + e.message); }
+}
+
+async function switchFriend(idx, name){
+  if (!confirm('切换到 ' + name + '？当前这位会先自动归档，随时能换回来。')) return;
+  panelBusy('换朋友');
+  const r = await (await fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: '/friend ' + idx})
+  })).json();
+  resetChat();                    // 库换了，旧消息不该再显示
+  panelDone('换朋友', r.reply || r.error);
+  $('flist').classList.remove('open');
+  await loadFriends();            // 归档时间变了，列表要重取
+  poll();
+}
+
+async function renameFriend(idx, name){
+  const v = prompt('给「' + name + '」改个称呼（只改显示名，不动数据文件）：', name);
+  if (!v || !v.trim() || v.trim() === name) return;
+  await runCmd('/alias ' + idx + ' ' + v.trim(), '改名');
+  await loadFriends();
+  poll();
+}
+
+$('btnSwitch').onclick = () => {
+  const box = $('flist');
+  if (box.classList.contains('open')) { box.classList.remove('open'); return; }
+  loadFriends();
+};
+
+$('btnNew').onclick = async () => {
+  if (!confirm('抽一位新朋友：当前这位会先归档（随时能换回来），然后从零开始认识。确定？')) return;
+  panelBusy('抽新朋友');
+  const r = await (await fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: '/new-friend'})
+  })).json();
+  resetChat();
+  panelDone('抽新朋友', r.reply || r.error);
+  $('flist').classList.remove('open');
+  await loadFriends();
+  poll();
+};
+
+$('pClear').onclick = () => panelDone('输出', '点上面任意一项，结果会显示在这里（不占聊天区）。');
+
+$('btnRestart').onclick = async () => {
+  if (!confirm('重启服务？守护会自动拉起新进程，几秒后回来。')) return;
+  panelBusy('重启');
+  try {
+    const r = await (await fetch('/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text: '/restart'})
+    })).json();
+    panelDone('重启', r.reply || r.error);
+  } catch(e) { panelDone('重启', '⚠ ' + e.message); }
+};
 
 $('send').onclick = send;
 $('txt').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });

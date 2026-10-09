@@ -1440,6 +1440,22 @@ def test_webui():
             # 手动安全阀：页面上勾"紧急"要能开窗口
             c.post(base + "/api/send", json={"text": "在吗", "urgent": True})
             assert _guard.in_urgent_window(), "网页端勾了紧急却没开窗口"
+
+            # 朋友列表：网页上的「换朋友」靠它渲染，编号必须能直接喂给 /friend
+            fr = c.get(base + "/api/friends").json()
+            assert "current" in fr and isinstance(fr["friends"], list), \
+                f"/api/friends 结构不对：{fr}"
+            for f in fr["friends"]:
+                assert set(("idx", "name", "at", "file")) <= set(f), \
+                    f"朋友项字段不全：{f}"
+            assert [f["idx"] for f in fr["friends"]] == list(
+                range(1, len(fr["friends"]) + 1)), "编号必须从 1 连续"
+
+            # 页面上做成按钮的那些命令：任何一条挂了，点下去就是没反应
+            for cmd in ("/work", "/diaries", "/notes", "/profile", "/guard on"):
+                r3 = c.post(base + "/api/send", json={"text": cmd}).json()
+                assert r3.get("reply") and "⚠" not in r3["reply"], \
+                    f"按钮命令 {cmd} 没正常返回：{r3}"
             print("ok 网页端 Web UI（HUD 页面 + 消息/命令 API + 紧急通道）")
         finally:
             srv.shutdown()

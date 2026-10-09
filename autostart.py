@@ -266,14 +266,20 @@ def stop() -> str:
     for p in (_running_pid(), _daemon_pid()):
         if p:
             _kill(p)
-            parts.append(str(p))
+            parts.append(p)
     for f in (PID_FILE, DAEMON_PID):
         try:
             if f.exists():
                 f.unlink()
         except OSError:
             pass
-    killed = f"（已结束 PID {'、'.join(parts)}）" if parts else ""
+    # 校验：真杀掉了才算数——taskkill 可能因权限静默失败，别谎报"已停止"
+    alive = [p for p in parts if _pid_alive(p)]
+    if alive:
+        return (f"⚠ 停止失败：PID {'、'.join(map(str, alive))} 还活着（多半是权限不足）。\n"
+                f"   守护已被 stop 标志拦住、不会重拉，但旧进程没退——\n"
+                f"   请在任务管理器结束它们，或重启电脑；之后 autostart start 恢复。")
+    killed = f"（已结束 PID {'、'.join(map(str, parts))}）" if parts else ""
     return f"⏹ 已停止{killed}\n守护也不会重拉了。要恢复：python main.py autostart start"
 
 

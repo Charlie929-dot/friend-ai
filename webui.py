@@ -11,6 +11,7 @@
 """
 import json
 import os
+import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -96,6 +97,7 @@ def _state_payload(channel: WebChannel) -> dict:
         "clock": datetime.now().strftime("%H:%M"),
         "state": db.get_state(),
         "urgent": guard.in_urgent_window(),
+        "guard": guard.guard_enabled(),
         "typing": channel.typing_now(),
         "work": {k: s[k] for k in ("phase", "energy", "money", "done", "quota")},
         "materials": fresh,
@@ -134,6 +136,12 @@ def _make_handler(channel: WebChannel, on_message):
                 self._send_body(html.encode("utf-8"), "text/html; charset=utf-8")
             elif u.path == "/api/state":
                 self._json(_state_payload(channel))
+            elif u.path == "/api/friends":
+                # 网页端不做"输 /friend 3"这种事：列表点一下就换人。
+                # 编号必须跟 /friend <编号> 一致（唯一真相是 commands.list_friends）
+                import commands as _cmd
+                self._json({"current": persona.friend_name(),
+                            "friends": _cmd.list_friends()})
             elif u.path == "/api/messages":
                 try:
                     after = int(parse_qs(u.query).get("after", ["0"])[0])
@@ -166,6 +174,10 @@ def _make_handler(channel: WebChannel, on_message):
             # 手动安全阀：勾选"紧急"直接开窗口（也可以直接说"有急事"，它自己认）
             if data.get("urgent"):
                 guard.open_urgent_window()
+            # 重启服务：改了后端代码后点一下，守护会自动拉起新进程，不用手动去终端
+            if text == "/restart":
+                self._restart()
+                return
             with db.PATH_LOCK:      # 与切换朋友/回复流程互斥，别写错库
                 out = on_message(text)
             self._json({
@@ -173,5 +185,18 @@ def _make_handler(channel: WebChannel, on_message):
                 "reply": out or "",
                 "ts": datetime.now().isoformat(timespec="seconds"),
             })
+
+        def _restart(self):
+            import autostart
+            if not autostart._daemon_pid():
+                self._json({"echo": False, "reply":
+                            "没有守护在跑，重启就再也起不来了。请先在终端 "
+                            "python main.py autostart start。", "ts": ""})
+                return
+            # 先回浏览器，稍等再退出——守护看到进程退出、5 秒后重拉新代码
+            self._json({"echo": False, "reply": "正在重启，几秒后回来…", "ts": ""})
+            t = threading.Timer(0.4, lambda: os._exit(0))
+            t.daemon = True
+            t.start()
 
     return Handler
