@@ -196,6 +196,20 @@
   </div>
 
 <script>
+// 会话过期时后端返回 401（只有服务器开了登录验证才会有），统一跳登录页。
+// 静态托管（GitHub Pages）下接口根本不存在，不会走到这里。
+(function(){
+  const raw = window.fetch.bind(window);
+  window.fetch = async function(){
+    const r = await raw.apply(null, arguments);
+    if (r.status === 401) {
+      const u = new URL(r.url, location.href);
+      if (u.pathname !== '/login') location.href = '/login';
+    }
+    return r;
+  };
+})();
+
 let lastId = 0;
 const $ = id => document.getElementById(id);
 const chat = () => $('chat');

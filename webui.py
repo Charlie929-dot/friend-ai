@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 import commands
 import config
+import auth      # 必须放在 config 之后：config 导入时才会把 .env 读进环境变量
 import db
 import guard
 import persona
@@ -159,9 +160,70 @@ def _make_handler(channel: WebChannel, on_message):
             self._send_body(json.dumps(data, ensure_ascii=False).encode("utf-8"),
                             "application/json; charset=utf-8", code)
 
+        def _redirect(self, to: str):
+            self.send_response(302)
+            self.send_header("Location", to)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        # --- 登录（公网部署时才启用；本机 WEB_AUTH_ENABLED 默认 off，不受影响）---
+        def _do_login(self):
+            ip = self.client_address[0]
+            if auth.locked(ip):
+                self._json({"error": "试错太多次，10 分钟后再来"}, 429)
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            raw = self.rfile.read(n) if n > 0 else b""
+            ctype = self.headers.get("Content-Type") or ""
+            data = {}
+            if "json" in ctype:
+                try:
+                    data = json.loads(raw or b"{}")
+                except ValueError:
+                    data = {}
+            else:   # 登录页用的是普通表单
+                data = {k: v[0] for k, v in
+                        parse_qs(raw.decode("utf-8", "replace")).items()}
+            ok = auth.verify_password(data.get("password", ""))
+            if ok and auth.totp_enabled():
+                ok = auth.verify_totp(data.get("totp", ""))
+            if not ok:
+                auth.note_failure(ip)
+                self._json({"error": "密码或动态口令不对"}, 401)
+                return
+            auth.note_success(ip)
+            remember = str(data.get("remember", "")).lower() in ("1", "on", "true")
+            days = 30 if remember else 1
+            body = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Set-Cookie", auth.cookie_header(days))
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         # --- 页面 ---
         def do_GET(self):
             u = urlparse(self.path)
+            if auth.enabled():
+                ok = auth.check_cookie(self.headers.get("Cookie", ""))
+                if u.path == "/login":
+                    if ok:
+                        self._redirect("/")
+                    else:
+                        self._send_body(auth.login_page().encode("utf-8"),
+                                        "text/html; charset=utf-8")
+                    return
+                if not ok:
+                    # 接口返回 401（前端会跳登录页），页面直接 302 过去
+                    if u.path.startswith("/api/"):
+                        self._json({"error": "未登录"}, 401)
+                    else:
+                        self._redirect("/login")
+                    return
             if u.path in ("/", "/index.html"):
                 try:
                     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
@@ -190,7 +252,14 @@ def _make_handler(channel: WebChannel, on_message):
 
         # --- 发消息 / 执行命令 ---
         def do_POST(self):
-            if urlparse(self.path).path != "/api/send":
+            u = urlparse(self.path)
+            if auth.enabled() and u.path == "/api/login":
+                self._do_login()
+                return
+            if auth.enabled() and not auth.check_cookie(self.headers.get("Cookie", "")):
+                self._json({"error": "未登录"}, 401)
+                return
+            if u.path != "/api/send":
                 self._json({"error": "not found"}, 404)
                 return
             try:
