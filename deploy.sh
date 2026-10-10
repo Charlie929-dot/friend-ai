@@ -10,7 +10,8 @@ if [ -f friend.db ]; then
 fi
 
 echo "== 2/5 拉取代码 =="
-if ! git pull --ff-only 2>&1 | tail -3; then
+# 显式从 gitee 拉：服务器（腾讯云）直连 GitHub 经常超时，Gitee 国内秒连
+if ! git pull --ff-only gitee main 2>&1 | tail -3; then
   echo "拉取失败：服务器本地有改动。"
   echo "确认这些改动不重要，可执行：cd /opt/friend-ai && git checkout -- . && git pull"
   exit 1
