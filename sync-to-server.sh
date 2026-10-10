@@ -48,7 +48,7 @@ fi
 
 echo "== 3/5 服务器从 Gitee 拉取 =="
 PULL_OK=1
-ssh $SSHOPT "$HOST" "cd $REMOTE_DIR && git checkout -- . 2>/dev/null; git pull --ff-only gitee main 2>&1 | tail -3" || PULL_OK=0
+ssh $SSHOPT "$HOST" "cd $REMOTE_DIR && git checkout -- . 2>/dev/null; git pull --ff-only gitee main >/tmp/pull.out 2>&1; rc=\$?; tail -3 /tmp/pull.out; exit \$rc" || PULL_OK=0
 
 if [ "$PULL_OK" != "1" ]; then
   echo "Gitee 拉取失败，退回 SSH 直传 bundle"
