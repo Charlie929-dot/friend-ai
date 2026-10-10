@@ -16,6 +16,7 @@ import llm
 import memory
 import offline
 import persona
+import selfmem
 from channels.base import Channel
 
 
@@ -161,12 +162,21 @@ class Engine:
         # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
         messages = context.build_chat_messages(state, batch, game.prompt_injection(),
                                                inbox=from_inbox)
+        # 双层生成（人格优化）：先把不可见的内心独白跑出来——立场在这一层定住，
+        # 第 2 层只负责"怎么说"，改不了"说什么"。独白拿不到就原样单层生成。
+        messages = self._with_inner_monologue(messages, batch)
         reply = self._generate_reply_text(messages, batch)
         # 措辞红线（H 模块·反愧疚）：代价只呈现不归因。prompt 已约束，这里是兜底改写——
         # 归因措辞任何状态都不该出现，命中就换成"只说自己的状态"的安全句（不归因）。
         if persona.has_cost_blame(reply):
             print(f"[红线] 回复把代价归因到对方，已兜底改写：{reply[:40]}")
             reply = corpus.pick(corpus.COST_SAFE_LINES, "cost_safe")
+
+        # 人格红线体检（只告警、不改写）：反谄媚五条靠 prompt 约束，这里留证据——
+        # 部署之后想知道"人格有没有被磨平"，看有没有这几条告警就行。
+        warns = persona.redline_report(" ".join(batch), reply)
+        if warns:
+            print(f"[红线] {'／'.join(warns)}：{reply[:50]}")
 
         # 分段连发：按换行拆成几条消息，像真人连着发
         segments = [s.strip() for s in reply.split("\n") if s.strip()]
@@ -207,6 +217,59 @@ class Engine:
 
         memory.extract_async()  # 后台提取这段对话里值得记住的事
         self.check_auto_familiar()
+
+    # --- 双层生成（人格优化 v0.54）：内心独白 → 说出的话 ---
+    def _with_inner_monologue(self, messages: list[dict], batch: list[str]) -> list[dict]:
+        """在系统 prompt 之后、生成之前，先跑一层看不见的内心独白把立场定住。
+
+        为什么这样改能治"谁跟它说话它就变成谁的形状"：
+        - 独白层里用户的话只是输入之一，人格内核是主导（用户看不到 → 不必讨好）
+        - 第 2 层看到的已经是"我不同意"，它只能决定怎么说
+        - "不想聊/没感觉"在独白里是合法输出 → 敷衍、短回、转移话题自然长出来
+
+        独白失败（LLM 不可用/超时）不影响主流程：返回原 messages 退化成单层。
+        """
+        if not config.INNER_MONOLOGUE_ENABLED:
+            return messages
+        text = self._inner_monologue(messages, batch)
+        if not text:
+            return messages
+        return list(messages) + [
+            {"role": "system", "content": persona.utterance_instruction(text)}]
+
+    def _inner_monologue(self, messages: list[dict], batch: list[str]) -> str:
+        """第 1 次调用：结构化内心独白（不发给对方）。失败返回空串由上层兜底。"""
+        system = persona.monologue_prompt()
+        # 独白层要看到的三样东西：①最近在说什么 ②关于我自己的记忆（一致性检查）
+        # ③ 我上次的内部状态。省掉"对方的 profile/便签"，那会让判断偏向对方。
+        parts = []
+        if config.SELF_MEMORY_ENABLED:
+            hint = selfmem.prompt_hint(" ".join(batch))
+            if hint:
+                parts.append(hint)
+            shint = selfmem.state_hint()
+            if shint:
+                parts.append(shint)
+        recent = db.recent_context(config.CONTEXT_TURNS)
+        if parts:
+            system = system + "\n\n" + "\n".join(parts)
+        try:
+            raw = llm.chat(
+                [{"role": "system", "content": system}]
+                + recent
+                + [{"role": "user", "content": persona.MONOLOGUE_FORMAT + "\n\n"
+                    + f"【TA刚才说的】\n{' '.join(batch)}"}],
+                temperature=config.INNER_MONOLOGUE_TEMPERATURE,
+                max_tokens=config.INNER_MONOLOGUE_MAX_TOKENS,
+            )
+        except llm.LLMUnavailable as e:
+            print(f"[独白] 跳过（LLM 不可用：{e}）")
+            return ""
+        raw = (raw or "").strip()
+        if len(raw) < 8:     # 空转/ stub 文案都视为没读到人
+            return ""
+        print(f"[独白] {raw[:120].replace(chr(10), ' / ')}…")
+        return raw
 
     def _generate_reply_text(self, messages: list[dict], batch: list[str]) -> str:
         """生成回复：回忆/追问信号下让 AI 主动调记忆检索工具，否则走普通快速路径。

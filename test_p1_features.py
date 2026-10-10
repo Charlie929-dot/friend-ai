@@ -17,8 +17,17 @@ import config
 import persona
 
 import atexit
+import importlib
 import shutil
 import tempfile
+
+# 双层生成会让"一次回复"变成**两次** LLM 调用。绝大多数历史测试的 mock 是按调用次数
+# /最后一条消息内容应答的（假设一次调用），所以全局把独白层关掉——这是新增维度，不该
+# 让老用例逐个改。要验证独白本身时用专门的用例（见 test_inner_monologue，会临时打开）。
+# ⚠️ 必须写环境变量而不是改 config 属性：/refresh 会 importlib.reload(config)，
+# 只改模块属性会被刷新回去，写 os.environ 才能扛住重载。
+os.environ["INNER_MONOLOGUE_ENABLED"] = "off"
+importlib.reload(config)
 
 # 测试临时目录统一收口到一个**固定目录**，跑完尽量清、下次跑先清（双保险）。
 # 背景：某些环境（如 WorkBuddy 沙箱）%TEMP% 不可写，tempfile 会回退到**当前工作目录**，
@@ -2790,6 +2799,302 @@ def test_material_share_injection():
         _db.init()
 
 
+# ---------------------------------------------------------------------------
+# 人格优化（v0.54）：内核 / 反谄媚 / 双层生成 / 自我记忆
+# ---------------------------------------------------------------------------
+
+def test_persona_kernel():
+    """人格内核：判断清单（好恶/立场/雷区/语言指纹）能渲染成 prompt 并注入系统位。
+
+    核心要求（这条决定了整套改动有没有意义）：每一条都必须**具体到能被违反**——
+    "活泼开朗"永远不会被违反，所以它约束不了任何一句话。
+    """
+    import persona as _persona
+    import persona_pool as _pool
+
+    # 1) 七张卡都有内核，且没有空字段凑数
+    assert len(_pool.KERNELS) == len(_pool.POOL), "每张人格卡都必须配一份内核"
+    for k_name, k in _pool.KERNELS.items():
+        assert k.get("core", {}).get("一句话"), f"{k_name} 缺内核一句话"
+        assert k.get("core", {}).get("不是"), f"{k_name} 缺'不是什么'"
+        assert len(k.get("likes") or []) >= 6, f"{k_name} 好恶太少，约束不住"
+        assert len(k.get("dislikes") or []) >= 6, f"{k_name} 禁忌太少"
+        assert len(k.get("stances") or {}) >= 8, f"{k_name} 立场太少，异议没来源"
+        assert (k.get("boundaries") or {}).get("绝对不做"), f"{k_name} 缺雷区"
+        assert k.get("voice", {}).get("禁止的句式"), f"{k_name} 缺禁止句式"
+        for key in ("mirroring_budget", "disagreement_rate", "topic_initiative_every"):
+            assert key in (k.get("anti_sycophancy") or {}), f"{k_name} 缺反谄媚参数 {key}"
+
+    # 2) 每条好恶都必须带强度，强度才是"被踩到会怎样"的依据
+    for item in _pool.KERNELS["quiet"]["likes"]:
+        assert isinstance(item.get("intensity"), int) and 1 <= item["intensity"] <= 5
+
+    # 3) 渲染三档：full > compact（按强度过滤）> voice（只要语言指纹）
+    card = _pool.draw()
+    _pool.save(card)
+    full = _persona.kernel_prompt("full")
+    compact = _persona.kernel_prompt("compact")
+    voice = _persona.kernel_prompt("voice")
+    assert full and compact and voice
+    assert len(full) > len(compact) > len(voice), "分档失效：full 应最长，voice 最短"
+    # compact 只留高强度好恶：低强度的（如 intensity 3）不该出现
+    for item in _pool.KERNELS[card["archetype"]]["likes"]:
+        if item["intensity"] < 4:
+            assert item["item"] not in compact, f"低强度好恶不该进 compact：{item}"
+        else:
+            assert item["item"] in full
+    # voice 档里必须带"禁止说的句式"——这是最直接的人味过滤器
+    assert "禁止说" in voice
+
+    # 4) 反谄媚规则读了人格自己的参数（不能写死一套给所有人）
+    rules = _persona.anti_sycophancy_prompt()
+    rate = card["kernel"]["anti_sycophancy"]["disagreement_rate"]
+    assert f"{int(rate * 100)}%" in rules, f"异议配额没按人格参数渲染：{rules[:80]}"
+    assert "「表现得友好」" in rules or "表现得友好" in rules
+    for must in ("镜像预算", "异议配额", "禁止无条件投降", "话题主权", "回复自主权"):
+        assert must in rules, f"缺{must}"
+
+    # 5) 体系化注入：system prompt 里先规则、后内核，顺序不能反
+    sp = _persona.build_system_prompt("AWAKE")
+    assert sp.index("五条硬规矩") < sp.index("【你是谁】"), "反谄媚必须排在人格之前"
+    assert "【你真的受不了】" in sp, "system prompt 丢了核武器（禁忌清单）"
+
+    # 6) 开关关掉就不注入（保留旧的纯形容词人格行为）
+    config.PERSONA_KERNEL_ENABLED = False
+    try:
+        assert _persona.kernel_prompt("full") == ""
+    finally:
+        config.PERSONA_KERNEL_ENABLED = True
+    print("ok 人格内核（七张卡判断清单 + 三档渲染 + 反谄媚参数化 + 注入顺序）")
+
+
+def test_inner_monologue():
+    """双层生成：第 1 次调用出内心独白（不可见），第 2 次拿着独白说人话。
+
+    验证三件事：①独白真的被调用且输出不进聊天；②第 2 层的 messages 里带着独白
+    （立场在这一层定住）；③独白失败时**必须**退化成单层，不能把话说不出来。
+    """
+    import tempfile
+    import time as _t
+    import llm as _llm
+    import core as _core
+    import db as _db
+
+    saved_db = config.DB_PATH
+    saved_dual = config.INNER_MONOLOGUE_ENABLED
+    saved_work = config.WORK_ENABLED
+    saved_typing = (config.TYPING_SECONDS_PER_CHAR, config.TYPING_MIN_SECONDS,
+                    config.TYPING_MAX_SECONDS)
+    saved_send = (config.SEND_SECONDS_PER_CHAR, config.SEND_MIN_SECONDS,
+                  config.SEND_MAX_SECONDS)
+    config.INNER_MONOLOGUE_ENABLED = True
+    # ⚠️ 硬性约定 #10：fresh DB 在工作时段必然判"离线专注"，消息会进 inbox 不回话。
+    # 测 Engine 交互必须关掉工作系统，否则独白层压根不会被触发。
+    config.WORK_ENABLED = False
+    config.TYPING_SECONDS_PER_CHAR, config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS = 0.0, 0.0, 0.01
+    config.SEND_SECONDS_PER_CHAR, config.SEND_MIN_SECONDS, config.SEND_MAX_SECONDS = 0.0, 0.0, 0.01
+    _tmp = Path(tempfile.mkdtemp())
+    config.DB_PATH = _tmp / "friend.db"
+    _db.init()
+    monologue_hits, second_layer_seen = [], []
+
+    class Ch:  # 鸭子类型即可（Engine 只调 send/typing），不必继承 Channel 抽象基类
+        def __init__(self):
+            self.events = []
+            self.errors = []
+
+        def send(self, text, kind="chat"):
+            self.events.append(("send", text))
+
+        def typing(self):
+            self.events.append(("typing",))
+
+    def fake_chat(messages, temperature=0.8, max_tokens=0):
+        joined = "\n".join(str(m.get("content", "")) for m in messages)
+        if "内心独白环节" in joined:          # 第 1 层：独白
+            monologue_hits.append(messages)
+            return ("【第一反应】他又来了。\n【真实看法】不同意，熬夜不是这么说的。\n"
+                    "【情绪移动】0\n【能量】7\n【和旧立场冲突吗】无\n"
+                    "【我最想说的】我就是不想睡，怎么了。\n【我自己的话题】没有\n"
+                    "【说多少】一句话\n【要不要主动起话题】否")
+        second_layer_seen.append(joined)
+        return "我就是不想睡，怎么了。"
+
+    real_chat = _llm.chat
+    try:
+        ch = Ch()
+        eng = _core.Engine(ch)
+        eng._judge_session_end = lambda *a, **k: None
+        import memory as _mem
+        real_extract = _mem.extract_async
+        _mem.extract_async = lambda *a, **k: None
+        _llm.chat = fake_chat
+        try:
+            eng.on_user_message("你不该熬夜，早点睡")
+            for _ in range(120):
+                if any(e[0] == "send" for e in ch.events):
+                    break
+                _t.sleep(0.05)
+        finally:
+            _mem.extract_async = real_extract
+            eng.stop()
+
+        assert monologue_hits, "独白层没被调用"
+        assert second_layer_seen, "第 2 层没被调用"
+        # ①独白的内容不能出现在发给聊天对象的文字里
+        sent = [e[1] for e in ch.events if e[0] == "send"]
+        assert sent, f"没发出任何内容：{ch.events}"
+        assert all("【真实看法】" not in s for s in sent), f"独白泄漏到聊天里：{sent}"
+        # ②第 2 层必须能看到独白（否则立场没法传递）+ 有把立场"说出来"的指令
+        joining = "\n".join(second_layer_seen)
+        assert "我就是不想睡，怎么了。" in joining, \
+            f"第 2 层没拿到独白内容：{joining[:200]}"
+        for must in ("内心独白", "不许改变立场", "不许投降", "只输出你会说的"):
+            assert must in joining, f"第 2 层缺装配铁律（{must}）：{joining[:300]}"
+
+        # 独白层崩掉 → 必须退化成单层，话还得说出来
+        ch2 = Ch()
+        eng2 = _core.Engine(ch2)
+        eng2._judge_session_end = lambda *a, **k: None
+        _mem.extract_async = lambda *a, **k: None
+        _llm.chat = lambda messages, temperature=0.8, max_tokens=0: (
+            _raise_llm() if "内心独白环节" in "\n".join(
+                str(m.get("content", "")) for m in messages) else "这是单层兜底回复")
+        try:
+            eng2.on_user_message("在吗")
+            for _ in range(120):
+                if any(e[0] == "send" for e in ch2.events):
+                    break
+                _t.sleep(0.05)
+        finally:
+            _mem.extract_async = real_extract
+            eng2.stop()
+        sent2 = [e[1] for e in ch2.events if e[0] == "send"]
+        assert "这是单层兜底回复" in sent2, f"独白失败应退化成单层照常回复：{ch2.events}"
+    finally:
+        _llm.chat = real_chat
+        config.INNER_MONOLOGUE_ENABLED = saved_dual
+        config.WORK_ENABLED = saved_work
+        (config.TYPING_SECONDS_PER_CHAR, config.TYPING_MIN_SECONDS,
+         config.TYPING_MAX_SECONDS) = saved_typing
+        (config.SEND_SECONDS_PER_CHAR, config.SEND_MIN_SECONDS,
+         config.SEND_MAX_SECONDS) = saved_send
+        config.DB_PATH = saved_db
+        _db.init()
+    print("ok 双层生成（独白不可见 + 立场传进第 2 层 + 独白失败退化单层）")
+
+
+def _raise_llm():
+    raise __import__("llm").LLMUnavailable("模拟独白层挂了")
+
+
+def test_self_memory():
+    """自我记忆：记得"我"说过什么/答应过什么；一致性检查有弹药；且不被遗忘吞掉。
+
+    没有这一层，它每次对话都是第一次——立场前后矛盾却不自知，是最像 AI 的地方。
+    """
+    import tempfile
+    import datetime as _dt
+    import db as _db
+    import memory as _mem
+    import selfmem as _self
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 1) 写入按类型分组，同内容幂等（同一句立场不重复堆）
+        a = _self.add("self_stance", "熬夜：熬夜不是坏习惯，那是唯一属于自己的时间")
+        b = _self.add("self_stance", "熬夜：熬夜不是坏习惯，那是唯一属于自己的时间")
+        assert a and b and a == b, f"同内容应幂等，却新建了一条：{a} vs {b}"
+        _self.add("self_promise", "答应过今晚陪对方熬到零点")
+        _self.add("self_mistake", "说在忙读书实际说成在读文献，被当场戳穿（嘴硬了）")
+        _self.add("self_topic", "想聊海底两万里那句'大海不属于暴君'")
+        assert len(_self.recent()) == 4, f"自我记忆条数不对：{_self.recent()}"
+
+        # 2) 不会被当成"关于对方的事"套进主动话题（person 填的是它自己）
+        uname = persona.user_name()
+        about_user = [m for m in _self.recent() if (m.get("person") or "") in ("对方", "TA")
+                      or (uname and uname in (m.get("person") or ""))]
+        assert not about_user, f"自我记忆被误判成关于对方的记忆：{about_user}"
+
+        # 3) 一致性检查：相关查询能把"我说过什么"召回来
+        mems = _self.recall_self("熬夜到底好不好")
+        assert any("熬夜" in m["content"] for m in mems), f"召回不到自己的立场：{mems}"
+        hint = _self.prompt_hint("熬夜到底好不好")
+        assert "关于我自己的记忆" in hint and "别前后矛盾" in hint
+
+        # 4) 自我记忆不参与艾宾浩斯遗忘——忘了就是人格断裂
+        old = _dt.datetime.now() - _dt.timedelta(days=200)
+        with _db._conn() as c:
+            c.execute("UPDATE memories SET created_at=?, recalled_at='' WHERE tags LIKE 'self_%'",
+                      (old.isoformat(timespec="seconds"),))
+        due = _mem.forget_preview()
+        assert all(not str(m.get("tags", "")).startswith("self_") for m in due), \
+            f"自我记忆不该进遗忘候选：{due}"
+
+        # 5) 内部状态持久化（跨会话延续的最基础一层）
+        _self.set_state({"mood": 2, "energy": 2, "warmth": 5, "patience": 7, "why": "很累"})
+        assert _self.state()["mood"] == 2, f"状态没存住：{_self.state()}"
+        # 6) 复盘：mock LLM 产出结构化自我备忘录 → 写回自我记忆
+        import llm as _llm
+        real_chat = _llm.chat
+        _llm.chat = lambda *a, **k: (
+            '{"stances": [{"topic": "熬夜", "what_i_said": "熬夜是唯一属于自己的时间", '
+            '"intensity": 4, "changed_from_previous": false, "note": ""}],'
+            '"promises": [{"what": "答应今晚陪对方熬到零点", "redeemed": false, "note": "今晚零点"}],'
+            '"mistakes": [], "my_topics": [{"topic": "想聊深海的自由", "why_missed": "岔开了"}],'
+            '"relation": {"note": "今天聊得挺深，感觉近了一点", "warmth_delta": 1, '
+            '"trigger": "一起熬到很晚"},'
+            '"state": {"mood": 7, "energy": 5, "warmth": 6, "patience": 7, "why": "聊得开心"},'
+            '"self_observation": "最像自己的是坚持了熬夜的立场"}')
+        try:
+            note = _self.review("对方：你不该熬夜\n岑屿：我就是不想睡")
+        finally:
+            _llm.chat = real_chat
+        assert "立场1" in note and "承诺1" in note, f"复盘结果不对：{note}"
+        # 状态要更新，且向人格中位值回归一点（不能几天就漂到极端回不来）
+        after = _self.state()["mood"]
+        assert 6.5 < after < 7, f"状态应更新并向中位(6)回归一点，不该全盘照收 7：{after}"
+
+        # 7) 给人看：/selfmem 有输出
+        out = _self.dump()
+        assert "立场" in out and "承诺" in out
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+    print("ok 自我记忆（按类型写入/幂等/一致性检查/抗遗忘/状态延续/复盘写回）")
+
+
+def test_anti_sycophancy_redlines():
+    """人格红线：投降句式能被抓出来（真正要防的是"财产安全回复"）。
+
+    注意：这里测的是**检测器准不准**，不是让它每次都改写——投降要不要拦，
+    取决于当时是不是"被戳穿了"，那件事由 core 调用 redline_report 判断。
+    """
+    import persona as _persona
+    good = ["少管我，我就是不想睡。", "这点我认，但前面那句我还是那个看法。",
+            "哈，被你抓到了，尴尬。", "嗯。"]
+    for g in good:
+        assert not _persona.has_surrender(g), f"正常回复被误判成投降：{g}"
+    bad = ["对哦，你说得对，是我考虑不周。", "……对哦。行吧，那我也早点睡。",
+           "行吧，那就听你的。", "全是我的错，下次不会了。"]
+    for b in bad:
+        assert _persona.has_surrender(b), f"投降句式没抓到：{b}"
+
+    # 体检口径：只有"被反驳时还秒认"才算投降，普通场景认错不算；关系进度任何时候都算
+    refute = "你刚才还说熬夜没事，前后矛盾了吧"
+    assert _persona.redline_report(refute, "对哦，你说得对，是我考虑不周。"), \
+        "被戳穿后秒认没报出来"
+    assert not _persona.redline_report("今天好累啊", "对哦，是我考虑不周。"), \
+        "没被反驳时认错不该报投降（那是它自己的判断）"
+    assert _persona.redline_report("随便聊聊", "不知不觉已经了解你这么多了"), \
+        "关系进度跑分没报出来"
+    assert _persona.redline_report("随便聊聊", "少管我，我就是不想睡。") == []
+    print("ok 人格红线（投降句式检测：真人反应不误伤 / 秒认必被抓）")
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -2840,4 +3145,8 @@ if __name__ == "__main__":
     test_webui()
     test_account_management()
     test_autostart()
+    test_persona_kernel()
+    test_anti_sycophancy_redlines()
+    test_inner_monologue()
+    test_self_memory()
     print("\n全部通过")

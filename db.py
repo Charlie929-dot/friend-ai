@@ -455,11 +455,16 @@ def memories_for_decay(now: datetime, idle_days: int, recall_bonus: float,
 
     有效期 = idle_days × (1 + recall_count × recall_bonus)——被想起得越多撑得越久；
     recall_count ≥ pin_recalls 的会先被标 pinned（永久），不再进这个列表。
+    ⚠️ 自我记忆（tags 以 `self_` 开头，见 selfmem.py）**不参与遗忘**——
+    它们是人格连续性的锚（"我说过什么立场/我答应过什么"），淡忘了等于人格断裂。
     """
     with _conn() as c:
         rows = [dict(r) for r in c.execute(
             "SELECT * FROM memories WHERE status='ok' AND pinned=0 "
-            "AND decay_level < ? ORDER BY id", (max_level,)).fetchall()]
+            # 排除自我记忆：不用 LIKE（SQLite 里 `_` 是通配符、也没有默认转义符），
+            # 直接取前 5 个字符比 'self_' 更不容易写错。
+            "AND decay_level < ? AND (tags IS NULL OR substr(tags,1,5) <> 'self_') "
+            "ORDER BY id", (max_level,)).fetchall()]
     out = []
     for m in rows:
         base = m.get("recalled_at") or m.get("created_at") or ""

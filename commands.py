@@ -46,6 +46,8 @@ HELP = """可用命令：
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
   /decay           手动跑一轮遗忘（艾宾浩斯：很久没想起的记忆压短一级，压够就忘掉）
   /decay dry       只看哪些记忆该淡忘了，不动手
+  /selfmem         看TA记下的关于**它自己**的事（我说过的立场/答应过的事/出过的糗）
+  /selfreview      现在复盘一次"今天的我"（睡前会自动跑，写回自我记忆）
   /work            看它今天手头的事（进度/精力/余额/攒了多少素材）
   /books           看我书架上的书（导入的 txt/epub 真书）
   /autostart       查开机自启状态；/autostart on|off 开/关（网页端开机自己回来）
@@ -547,6 +549,28 @@ def handle(cmd_line: str) -> str:
         # 艾宾浩斯遗忘（S4）：平时挂睡前复盘一天一次，这里可手动跑/预览
         import memory as _memory
         return _memory.forget_pass(dry=(arg.strip().lower() == "dry"))
+
+    if cmd == "/selfmem":
+        # 自我记忆（人格连续性）：它记下的关于**它自己**的事——说完才前后一致
+        import selfmem as _self
+        if not config.SELF_MEMORY_ENABLED:
+            return "自我记忆关着（SELF_MEMORY_ENABLED=off）。"
+        lines = [_self.dump()]
+        s = _self.state()
+        if s:
+            lines.append(f"\n内部状态：心情 {s.get('mood')} / 能量 {s.get('energy')} "
+                         f"/ 亲近 {s.get('warmth')} / 耐心 {s.get('patience')}"
+                         + (f"（{s['why']}）" if s.get("why") else ""))
+        return "\n".join(lines)
+
+    if cmd == "/selfreview":
+        # 手动跑一次自我复盘（平时挂睡前一天一次）
+        import diary as _diary
+        import selfmem as _self
+        convo = _diary.today_transcript()
+        if not convo.strip():
+            return "今天还没聊过，没什么可复盘的。"
+        return _self.review(convo) or "这次没什么要记的。"
 
     if cmd == "/work":
         # 工作系统（S3）：它今天手头的事。看得见它的日子，才知道什么时候找它会打扰

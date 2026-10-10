@@ -125,6 +125,15 @@ def daily_review(force: bool = False) -> str:
         cutoff = (datetime.now() + timedelta(seconds=1)).isoformat(timespec="seconds")
         purged = db.purge_messages_before(cutoff)
 
+    # 自我复盘（人格连续性，S4）：把"我今天说过什么立场/答应过什么/出过什么糗"
+    # 写回自我记忆。一天一次、一次 LLM 调用，失败不连累日记本身。
+    import selfmem
+    review_note = ""
+    try:
+        review_note = selfmem.review(convo)
+    except Exception as e:      # 复盘失败不能连累日记本身
+        print(f"[diary] 自我复盘跳过：{e}")
+
     # 艾宾浩斯遗忘（S4）：写完日记顺手跑一轮——一天一次、一次批量 LLM 调用。
     # 遗忘 = 把很久没想起的记忆压成更短的一句，压够了就彻底忘掉。
     import memory
@@ -138,6 +147,8 @@ def daily_review(force: bool = False) -> str:
     parts = [f"日记写好啦（{day}）"]
     if mood:
         parts.append(f"心情：{mood}")
+    if review_note:
+        parts.append(review_note)
     if forget_note:
         parts.append(f"遗忘：{forget_note}")
     if added or deleted:

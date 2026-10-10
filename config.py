@@ -155,6 +155,19 @@ REST_WAKE_EARLY_MAX = int(os.environ.get("REST_WAKE_EARLY_MAX", "30"))       # �
 # --- 关怀事件（S4「事件记忆与关怀触发」：记住对朋友的承诺/约定，到点提醒） ---
 CARE_ENABLED = os.environ.get("CARE_ENABLED", "on").lower() == "on"   # 承诺提醒总开关（关了就不记承诺、不提醒）
 
+# --- 人格内核（S4「人格才有重量」：结构化人格 + 反谄媚 + 双层生成 + 自我记忆） ---
+# 背景：旧人格卡只是一段形容词（"活泼、喜欢科幻"），在注意力竞争里永远赢不过用户刚说出口的话，
+# 再叠上模型自带的讨好先验 → 谁在跟它说话它就变成谁的形状（实测肖像画像）。
+PERSONA_KERNEL_ENABLED = os.environ.get("PERSONA_KERNEL_ENABLED", "on").lower() == "on"   # 结构化人格内核注入（好恶/立场/雷区/语言指纹）
+ANTI_SYCOPHANCY_ENABLED = os.environ.get("ANTI_SYCOPHANCY_ENABLED", "on").lower() == "on" # 反谄媚硬约束（镜像预算/异议配额/禁投降/话题主权）
+INNER_MONOLOGUE_ENABLED = os.environ.get("INNER_MONOLOGUE_ENABLED", "on").lower() == "on" # 双层生成：先出内心独白（不可见）再翻译成说出的话
+INNER_MONOLOGUE_TEMPERATURE = float(os.environ.get("INNER_MONOLOGUE_TEMPERATURE", "0.75"))  # 独白层温度（比说话层低，要判断不要表演）
+INNER_MONOLOGUE_MAX_TOKENS = int(os.environ.get("INNER_MONOLOGUE_MAX_TOKENS", "400"))       # 独白输出上限（很短，额外成本有限）
+UTTERANCE_TEMPERATURE = float(os.environ.get("UTTERANCE_TEMPERATURE", "0.95"))              # 说话层温度（要高，口语的随机性）
+SELF_MEMORY_ENABLED = os.environ.get("SELF_MEMORY_ENABLED", "on").lower() == "on"   # 自我记忆（我说的立场/我答应的事/我出过的糗）
+SELF_MEMORY_MAX = int(os.environ.get("SELF_MEMORY_MAX", "5"))                       # 每轮最多注入几条关于我自己的记忆
+SELF_REVIEW_ENABLED = os.environ.get("SELF_REVIEW_ENABLED", "on").lower() == "on"   # 睡前自我复盘（挂每天一次的日记复盘，写回自我记忆）
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

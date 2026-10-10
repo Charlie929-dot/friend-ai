@@ -13,6 +13,7 @@ import db
 import llm
 import memory
 import persona
+import selfmem
 
 # 记忆注入的统一文案
 _MEMORY_HINT = "自然使用，别生硬复述；同主题多条按时间先后排列，靠后的是最新进展"
@@ -79,6 +80,10 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
         mhint = mood.prompt_hint()
         if mhint:
             messages.append({"role": "system", "content": f"【此刻的心情】{mhint}"})
+    if config.SELF_MEMORY_ENABLED:
+        self_hint = selfmem.prompt_hint(" ".join(batch))
+        if self_hint:
+            messages.append({"role": "system", "content": self_hint})
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
     # 今天做过/读到的事（B 库，跨天自动不再注入）：TA 才知道自己这一天是怎么过的
@@ -121,9 +126,17 @@ def build_proactive_messages(state: str, scenario: str) -> list[dict]:
     if scenario == "random":
         _inject_random_topic(prompt)
     recent = db.recent_context(config.PROACTIVE_CONTEXT_TURNS)
-    if recent:
-        # 顺序：system（人设）→ 最近聊天（事实）→ 指令（内心活动）最后说
-        return [prompt[0]] + recent + [prompt[-1]]
+    # 自我记忆：主动开口最该兑现的是"我答应过的事"——那是它自己的承诺，比寒暄有分量
+    extra = []
+    if config.SELF_MEMORY_ENABLED:
+        hint = selfmem.prompt_hint()
+        if hint:
+            extra.append({"role": "system", "content": hint})
+            prompt[-1]["content"] += (
+                "\n（上面有你答应过却还没兑现的事的话，现在提它正合适。）")
+    if recent or extra:
+        # 顺序：system（人设）→ 关于我自己的记忆 → 最近聊天（事实）→ 指令（内心活动）最后说
+        return [prompt[0]] + extra + recent + [prompt[-1]]
     return prompt
 
 

@@ -9,21 +9,30 @@ class LLMUnavailable(Exception):
     pass
 
 
-def chat(messages: list[dict], temperature: float = 0.8) -> str:
-    """messages: OpenAI 格式 [{"role": ..., "content": ...}]，返回回复文本。"""
+def _current_model() -> str:
+    """当前模型：/model 命令的运行时覆盖优先于 .env。"""
+    import db  # 延迟导入，避免循环依赖
+    return db.get_kv("model_override", config.DEEPSEEK_MODEL)
+
+
+def chat(messages: list[dict], temperature: float = 0.8, max_tokens: int = 0) -> str:
+    """messages: OpenAI 格式 [{"role": ..., "content": ...}]，返回回复文本。
+
+    max_tokens > 0 时限制输出长度（给内心独白这种"很短的结构化输出"省 token 用）。"""
     if not config.DEEPSEEK_API_KEY:
         return corpus.LLM_STUB
-    import db  # 延迟导入，/model 命令的运行时覆盖
-    model = db.get_kv("model_override", config.DEEPSEEK_MODEL)
+    payload: dict = {
+        "model": _current_model(),
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if max_tokens > 0:
+        payload["max_tokens"] = max_tokens
     try:
         resp = httpx.post(
             f"{config.DEEPSEEK_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"},
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-            },
+            json=payload,
             timeout=60,
         )
         resp.raise_for_status()
@@ -40,18 +49,17 @@ def chat_with_tools(messages: list[dict], tools: list[dict],
     无 API key 时降级为普通 stub 回复（tool_calls 空），保证本地可调。"""
     if not config.DEEPSEEK_API_KEY:
         return {"content": corpus.LLM_STUB, "tool_calls": []}
-    import db  # 延迟导入，/model 命令的运行时覆盖
-    model = db.get_kv("model_override", config.DEEPSEEK_MODEL)
+    payload: dict = {
+        "model": _current_model(),
+        "messages": messages,
+        "temperature": temperature,
+        "tools": tools,
+    }
     try:
         resp = httpx.post(
             f"{config.DEEPSEEK_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {config.DEEPSEEK_API_KEY}"},
-            json={
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "tools": tools,
-            },
+            json=payload,
             timeout=60,
         )
         resp.raise_for_status()
