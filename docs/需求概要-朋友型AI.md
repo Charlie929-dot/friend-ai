@@ -270,22 +270,33 @@
 
 **数据隐私是差异化**：所有聊天记录存本地 SQLite，不上传任何东西。AI companion 用户对"对话记录去哪了"极度敏感，README 里值得专门写一节「数据永远只在你自己机器上」。
 
-### 7.4 Gitee 双仓库方案（10-10 决策）
+### 7.4 Gitee 双仓库方案（10-10 已落地 ✅）
 
 - **动机**：服务器（腾讯云，150.158.147.51）直连 GitHub 极不稳定（实测连续超时 134s），拉不动代码
-- **方案**：同时维护 GitHub + Gitee 两个 remote；**服务器从 Gitee pull**（国内秒连），GitHub 作为对外展示/备份
-- **本机 push 时双推**：`git push origin main && git push gitee main`，或配置 push 到所有 remote
-- **Gitee 不需要服务器直连 GitHub** —— 这是此方案的核心收益
-- 实施步骤（待做，见 7.5）：建 Gitee 仓库 → 加 remote → 改 sync 脚本支持双推 → 服务器 remote 换 Gitee
+- **方案**：同时维护 GitHub + Gitee 两个 remote；**服务器从 Gitee pull**（实测 0.5 秒），GitHub 作为对外展示/备份
+- **落地结果**：
+  - Gitee 仓库：`https://gitee.com/Charlie929-dot/friend-ai`（**私有**，与 GitHub 对齐）
+  - 本机 remote：`origin`=GitHub，`gitee`=Gitee
+  - 服务器 `/opt/friend-ai` 的 remote `gitee` 已配好（含 token），`main` upstream 指向 `gitee/main`
+  - **实测数据**：GitHub pull 超时 134s ❌ ↔ Gitee pull **511ms** ✅
+- **日常同步**：本机 Git Bash 执行 `bash sync-to-server.sh`
+  - 自动双推 GitHub + Gitee → 服务器从 Gitee 拉 → 装依赖 → 重启 → 自检
+  - Gitee 拉失败时自动退回 git bundle 走 SSH 直传（彻底不依赖外网）
+  - 令牌从环境变量 `GH_TOKEN` / `GITEE_TOKEN` 读，**不写进脚本**（已加到 `~/.bash_profile`）
+- **注意**：Gitee 免费版单仓库限 500MB，本仓库很小（几百 KB）无压力
 
-### 7.5 待办（公开化实施清单）
+### 7.5 已完成 / 待办
 
-- [ ] Gitee 建仓库 + 配置双 remote
-- [ ] 服务器 remote 切换为 Gitee
-- [ ] sync-to-server.sh 支持双推
+已完成（10-10）：
+- [x] Gitee 建仓库 + 本机配置双 remote
+- [x] 服务器 remote 切换为 Gitee
+- [x] `sync-to-server.sh` 支持双推（+ bundle 兜底）
+- [x] `deploy.sh` 改为显式从 gitee 拉
+- [x] `.env.example` 补全公网部署配置（WEB_AUTH_*）
+
+待办：
 - [ ] LICENSE
 - [ ] README 重写（保留原文档为 docs/design.md）
-- [ ] .env.example 补全
 - [ ] 截图
 - [ ] profile 抽示例配置
 
