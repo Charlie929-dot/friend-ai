@@ -1272,6 +1272,52 @@ def test_memory_decay():
         _db.init()
 
 
+def test_friend_switch_no_deadlock():
+    """换朋友不能卡死（实测 #33）：网页端 /api/send 外面握着 SEND_LOCK，
+    而 /friend /new-friend 内部切库还要再拿一次 → 同一线程重入。
+    SEND_LOCK 必须是可重入锁，否则「换朋友」永远停在"稍等一下"。"""
+    import tempfile
+    import threading as _th
+    import db as _db
+    import commands as _cmd
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        _db.add_message("user", "你好呀")
+        # 造两个归档朋友（/friend 编号指向它们）
+        _db.set_kv("friend_id", "aaa11111")
+        _cmd._archive_current()
+        _db.set_kv("friend_id", "bbb22222")
+        _cmd._archive_current()
+        assert len(_cmd._archives()) == 2, "应有两个归档朋友"
+
+        # 1) 可重入：同一线程连拿两次不能自锁
+        with _db.SEND_LOCK:
+            assert _db.SEND_LOCK.acquire(timeout=2), "SEND_LOCK 必须是可重入锁"
+            _db.SEND_LOCK.release()
+
+        # 2) 完整走一遍网页端的调用链（外面握 SEND_LOCK → 内部切库）
+        box = {}
+
+        def _switch():
+            with _db.SEND_LOCK:
+                box["out"] = _cmd.handle("/friend 1")
+
+        t = _th.Thread(target=_switch, daemon=True)
+        t.start()
+        t.join(8)
+        assert not t.is_alive(), "换朋友卡死了（SEND_LOCK 重入死锁）"
+        assert "欢迎回来" in box.get("out", ""), f"切换结果：{box.get('out')}"
+        print("ok 换朋友不卡死（SEND_LOCK 可重入）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_long_memory():
     """A/B 两级库：长文存 B 库（全文+摘要）、A 库挂 long_id 伪链接；追问细节时展开。"""
     import tempfile
@@ -2709,6 +2755,7 @@ if __name__ == "__main__":
     test_semantic_recall()
     test_today_notes_injection()
     test_memory_decay()
+    test_friend_switch_no_deadlock()
     test_long_memory()
     test_memory_tool_calling()
     test_diary_daily_review()

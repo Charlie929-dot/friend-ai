@@ -16,7 +16,10 @@ PATH_LOCK = threading.RLock()
 # 有确定的先后序），但**不与回复生成互斥**——回复生成全程握 PATH_LOCK（含 LLM
 # 调用和打字 sleep，可达几十秒），普通消息若也等它，就会出现"TA 回复完
 # 你发的消息才发出去"的排队假象（实测 #30）。收发接收只做落库+入队，毫秒级。
-SEND_LOCK = threading.Lock()
+# ⚠️ **必须是可重入锁（RLock）**：网页端 /api/send 外面已经握着它，斜杠命令
+# （/friend /new-friend）内部切库时还要再拿一次，同一线程重入——用普通 Lock
+# 会**自锁死**，表现就是网页端「换朋友」永远卡在"稍等一下"（实测 #33）。
+SEND_LOCK = threading.RLock()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
