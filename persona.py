@@ -78,9 +78,22 @@ def user_name() -> str:
 
 STATE_HINTS = {
     "AWAKE": "你现在醒着，状态正常。",
-    "SLEEPY": "你快睡了，有点困，回复可以带一点困意。",
+    "SLEEPY": "你快睡了，有点困，回复可以带一点困意。",  # 仅 stay_up（晚上撑着）时用，见 _sleepy_hint
     "SLEEPING": "你在睡觉。",  # SLEEPING 状态不调 LLM，此条仅兜底
 }
+
+
+def _sleepy_hint() -> str:
+    """SLEEPY 有两个来路，语义完全相反：早上赖床（还没醒透）vs 晚上快睡（困）。
+    注入错了就是"大白天满嘴要睡觉"（实测 #26）。reason 缺失时按时段猜。"""
+    import db
+    reason = db.get_kv("sleepy_reason")
+    if reason == "lie_in":
+        return "你还没完全睡醒，赖床赖到一半，脑子迷迷糊糊的。"
+    if reason == "stay_up":
+        return STATE_HINTS["SLEEPY"]
+    return ("你还没完全睡醒，脑子迷迷糊糊的。" if datetime.now().hour < 14
+            else STATE_HINTS["SLEEPY"])
 
 PROACTIVE_SCENARIOS = {
     "morning": "现在是早上，你刚醒，主动跟TA道早安。可以提提今天的天气/日期/一件小事，别每次都是同一句话。",
@@ -174,9 +187,12 @@ def build_system_prompt(state: str) -> str:
     stage = db.get_kv("relationship_stage", "new")
     stage_hint = NEW_STAGE_HINT if stage == "new" else FAMILIAR_STAGE_HINT
 
+    state_hint = _sleepy_hint() if state == "SLEEPY" else \
+        STATE_HINTS.get(state, STATE_HINTS["AWAKE"])
+
     parts = [core_identity_prompt(),
              f"【当前时间】{time_info}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
-             f"【当前状态】{STATE_HINTS.get(state, STATE_HINTS['AWAKE'])}",
+             f"【当前状态】{state_hint}",
              stage_hint]
     # 手头的事（S3 工作系统）：它得知道自己正在忙什么，才谈得上"什么时候找它会打扰"
     import work

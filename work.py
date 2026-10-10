@@ -76,9 +76,24 @@ def _life_day_str(now: datetime) -> str:
 
 
 # --- 排班 ---
-def _make_plan(now: datetime, quota: int) -> list[dict]:
-    """排今天的工作单元：起床后磨蹭一会儿开工，做一件歇一会儿，排不下就到点收工。"""
+def _wake_point(now: datetime) -> datetime:
+    """实际起床点：作息系统的"今天该几点起"（人格锚点 + 赖床浮动）。
+    作息模块不可用时退回人格锚点。排班从这里起——她睡懒觉 = 今天开工晚。"""
+    try:
+        import offline
+        return offline.today_wake_at(now)
+    except Exception:
+        anchor, _ = _anchor(now)
+        return anchor
+
+
+def _make_plan(now: datetime, quota: int, wake: datetime | None = None) -> list[dict]:
+    """排今天的工作单元：醒来后磨蹭一会儿开工，做一件歇一会儿，排不下就到点收工。
+    wake 传实际起床点（比锚点晚就是睡懒觉了）——今天的可用时间变短，排不满
+    配额就是"少做几件"，而不是把班硬排在被窝里（实测 #26：人没醒、进度在涨）。"""
     anchor, sleep_hour = _anchor(now)
+    if wake is not None and wake > anchor:
+        anchor = wake
     bed = _bedtime(anchor, sleep_hour)
     units = []
     t = anchor + timedelta(minutes=random.randint(15, 90))   # 起床后先磨蹭
@@ -93,16 +108,8 @@ def _make_plan(now: datetime, quota: int) -> list[dict]:
 
 
 def plan(now: datetime | None = None, quota: int | None = None) -> list[dict]:
-    """取今日排班（同一天幂等：已排过就不重排，否则每次读到的计划都在变）。"""
-    now = now or datetime.now()
-    quota = quota if quota is not None else config.WORK_DAILY_QUOTA
-    state = _load()
-    if state and state.get("day") == _life_day_str(now) and state.get("units"):
-        return state["units"]
-    units = _make_plan(now, quota)
-    _save({"day": _life_day_str(now), "quota": quota, "units": units,
-           "settled": 0, "energy": config.WORK_ENERGY_MAX, "money": 0})
-    return units
+    """取今日排班（醒来才排：没醒/还在睡 → 空列表；同一天幂等）。"""
+    return _state(now)["units"]
 
 
 # --- 存取 ---
@@ -122,14 +129,24 @@ def _save(state: dict):
 
 
 def _state(now: datetime) -> dict:
-    """当前状态（跨天自动重排）。"""
+    """当前状态（跨天自动重排）。
+    **醒来才排班**：过了今天的实际起床点、且不在睡觉状态，才把今天的班排出来
+    （排班起点=实际醒来 + 磨蹭）。没醒 → planned=0、units 空、HUD 显示"睡着"——
+    人还没起，进度条就不能涨。"""
     state = _load()
-    if not state or state.get("day") != _life_day_str(now):
-        units = _make_plan(now, config.WORK_DAILY_QUOTA)
-        state = {"day": _life_day_str(now), "quota": config.WORK_DAILY_QUOTA,
-                 "units": units, "settled": 0,
+    day = _life_day_str(now)
+    if state.get("day") != day:
+        state = {"day": day, "planned": 0, "quota": config.WORK_DAILY_QUOTA,
+                 "units": [], "settled": 0,
                  "energy": config.WORK_ENERGY_MAX, "money": 0}
         _save(state)
+    if not state.get("planned"):
+        wake = _wake_point(now)
+        if now >= wake and db.get_state() != "SLEEPING":
+            state["units"] = _make_plan(now, config.WORK_DAILY_QUOTA, wake)
+            state["quota"] = config.WORK_DAILY_QUOTA
+            state["planned"] = 1
+            _save(state)
     return state
 
 
@@ -268,7 +285,10 @@ def status(now: datetime | None = None) -> dict:
     state = _state(now)
     _settle(state, now)
 
-    if db.get_state() == "SLEEPING":
+    if not state.get("planned"):
+        # 今天还没醒（睡着 / 赖床没到点）→ 没开工；进度条不涨，别"人没醒进度在涨"
+        phase = "sleep"
+    elif db.get_state() == "SLEEPING":
         phase = "sleep"
     elif not state["units"] or state["settled"] >= len(state["units"]):
         phase = "off"

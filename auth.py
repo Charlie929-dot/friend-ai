@@ -84,14 +84,16 @@ def totp_code(secret: str, at: int = None) -> str:
     return str(val % (10 ** TOTP_DIGITS)).zfill(TOTP_DIGITS)
 
 
-def verify_totp(code: str) -> bool:
-    """校验动态码，容忍前后各一个时间窗（±30s），抵消手机和服务器的时间差。"""
+def verify_totp(code: str, secret: str | None = None) -> bool:
+    """校验动态码，容忍前后各一个时间窗（±30s），抵消手机和服务器的时间差。
+    secret 缺省用当前已启用的密钥；传参 = 校验"还没启用"的新密钥（绑定确认流程）。"""
+    s = TOTP_SECRET if secret is None else secret
     code = (code or "").strip().replace(" ", "")
-    if not code.isdigit() or len(code) != TOTP_DIGITS:
+    if not s or not code.isdigit() or len(code) != TOTP_DIGITS:
         return False
     now = int(time.time())
     for delta in (-TOTP_STEP, 0, TOTP_STEP):
-        if hmac.compare_digest(totp_code(TOTP_SECRET, now + delta), code):
+        if hmac.compare_digest(totp_code(s, now + delta), code):
             return True
     return False
 
@@ -157,6 +159,83 @@ def note_success(ip: str):
     _FAILED.pop(ip, None)
 
 
+# ---------- 运行时更新（网页账号管理用） ----------
+# 凭据仍以 .env 为唯一真相；这里做的是"验证 + 写回 .env + 热生效"，
+# 改密码/重绑 TOTP 不用再上服务器跑脚本、不用重启服务。
+
+ISSUER = "friend-ai"
+ACCOUNT_LABEL = "有生活的朋友"
+
+
+def write_env(updates: dict) -> None:
+    """把 WEB_AUTH_* 的更新写回 .env（其他行原样保留，别碰 API key）。"""
+    path = _env_path()
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out, seen = [], set()
+    for line in lines:
+        key = (line.split("=", 1)[0].strip()
+               if "=" in line and not line.lstrip().startswith("#") else None)
+        if key in updates:
+            out.append(f"{key}={updates[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    for k in sorted(set(updates) - seen):
+        out.append(f"{k}={updates[k]}")
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _env_path():
+    import config
+    return config.BASE_DIR / ".env"
+
+
+def _refresh() -> None:
+    """环境变量 → 本模块内存值（热生效）。"""
+    global ENABLED, PASS_HASH, TOTP_SECRET, SESSION_SECRET
+    ENABLED = os.environ.get("WEB_AUTH_ENABLED", "off").lower() == "on"
+    PASS_HASH = os.environ.get("WEB_AUTH_PASS_HASH", "")
+    TOTP_SECRET = os.environ.get("WEB_AUTH_TOTP_SECRET", "")
+    SESSION_SECRET = os.environ.get("WEB_AUTH_SESSION_SECRET", "")
+
+
+def _apply_env(updates: dict) -> None:
+    for k, v in updates.items():
+        os.environ[k] = v
+    write_env(updates)
+    _refresh()
+
+
+def change_password(new_pw: str) -> None:
+    _apply_env({"WEB_AUTH_PASS_HASH": hash_password(new_pw)})
+
+
+def rotate_session_secret() -> str:
+    """换会话签名密钥：改密码后调用，所有旧会话 cookie 立即失效（要重新登录）。"""
+    secret = base64.b32encode(os.urandom(24)).decode().rstrip("=")
+    _apply_env({"WEB_AUTH_SESSION_SECRET": secret})
+    return secret
+
+
+def new_totp_secret() -> str:
+    return base64.b32encode(os.urandom(20)).decode().rstrip("=")
+
+
+def otpauth_uri(secret: str) -> str:
+    """验证器扫码用的 otpauth:// 链接（Google Authenticator / 微软验证器兼容）。"""
+    from urllib.parse import quote
+    return (f"otpauth://totp/{quote(ACCOUNT_LABEL)}?secret={secret}"
+            f"&issuer={quote(ISSUER)}&digits=6&period=30")
+
+
+def activate_totp(secret: str) -> None:
+    _apply_env({"WEB_AUTH_TOTP_SECRET": secret.strip().replace(" ", "").upper()})
+
+
+def disable_totp() -> None:
+    _apply_env({"WEB_AUTH_TOTP_SECRET": ""})
+
+
 # ---------- 登录页 ----------
 LOGIN_PAGE = """<!doctype html>
 <html lang="zh-CN">
@@ -167,39 +246,68 @@ LOGIN_PAGE = """<!doctype html>
 <style>
   * { box-sizing: border-box; }
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         background:#12141a; color:#e8e6e3;
+         background:#0e1016;
+         background-image:radial-gradient(60% 50% at 50% 0%, #1a2233 0%, #0e1016 70%);
+         color:#e8e6e3;
          font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  .card { width:100%%; max-width:340px; padding:28px 24px; border-radius:14px;
-          background:#1b1e26; box-shadow:0 8px 32px rgba(0,0,0,.4); }
-  h1 { margin:0 0 4px; font-size:19px; font-weight:600; }
-  .sub { margin:0 0 22px; font-size:13px; color:#8b8f9a; }
+  .card { width:100%%; max-width:340px; padding:32px 26px 26px; border-radius:16px;
+          background:#1b1e26; border:1px solid #2a2e39;
+          box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  .mark { width:40px; height:40px; margin:0 auto 14px; border-radius:12px;
+          background:linear-gradient(135deg,#4a6cf7,#7a5cff);
+          display:flex; align-items:center; justify-content:center;
+          font-size:20px; color:#fff; }
+  h1 { margin:0 0 4px; font-size:19px; font-weight:600; text-align:center; }
+  .sub { margin:0 0 24px; font-size:13px; color:#8b8f9a; text-align:center; }
   label { display:block; margin:0 0 6px; font-size:13px; color:#a8adb8; }
-  input[type=password], input[type=text] { width:100%%; padding:11px 12px; margin:0 0 16px;
-      border:1px solid #2e323d; border-radius:8px; background:#12141a; color:#e8e6e3;
-      font-size:15px; outline:none; }
-  input:focus { border-color:#4a6cf7; }
+  .field { position:relative; margin:0 0 16px; }
+  .field input { width:100%%; padding:11px 12px; border:1px solid #2e323d; border-radius:10px;
+      background:#12141a; color:#e8e6e3; font-size:15px; outline:none; transition:border-color .15s; }
+  .field input:focus { border-color:#4a6cf7; box-shadow:0 0 0 3px rgba(74,108,247,.18); }
   input[type=text] { letter-spacing:.35em; font-size:19px; text-align:center; }
+  .peek { position:absolute; right:6px; top:50%%; transform:translateY(-50%%);
+          background:none; border:0; color:#8b8f9a; font-size:12px; padding:6px;
+          cursor:pointer; user-select:none; }
+  .peek:hover { color:#c8ccd6; }
   .row { display:flex; align-items:center; gap:8px; margin:0 0 18px; font-size:13px; color:#a8adb8; }
-  button { width:100%%; padding:12px; border:0; border-radius:8px; background:#4a6cf7;
-           color:#fff; font-size:15px; font-weight:500; cursor:pointer; }
-  button:hover { background:#5b7bff; }
+  button[type=submit] { width:100%%; padding:12px; border:0; border-radius:10px;
+           background:linear-gradient(135deg,#4a6cf7,#5b7bff); color:#fff; font-size:15px;
+           font-weight:500; cursor:pointer; transition:filter .15s, transform .05s; }
+  button[type=submit]:hover { filter:brightness(1.1); }
+  button[type=submit]:active { transform:translateY(1px); }
   .err { margin:0 0 14px; padding:9px 12px; border-radius:8px; font-size:13px;
          background:rgba(255,86,86,.12); color:#ff8080; }
   .err:empty { display:none; }
+  .foot { margin:14px 0 0; text-align:center; font-size:12px; color:#5d616c; }
 </style>
 </head>
 <body>
   <form class="card" method="post" action="/api/login" id="f">
+    <div class="mark">🌙</div>
     <h1>有生活的朋友</h1>
     <p class="sub">验证身份后才能继续</p>
     <div class="err">%(err)s</div>
     <label for="p">密码</label>
-    <input type="password" id="p" name="password" autocomplete="current-password" autofocus>
+    <div class="field">
+      <input type="password" id="p" name="password" autocomplete="current-password" autofocus>
+      <span class="peek" data-for="p">显示</span>
+    </div>
     %(totp_field)s
     <div class="row"><input type="checkbox" id="r" name="remember" checked style="width:auto">
       <label for="r" style="margin:0">记住这台设备 30 天</label></div>
     <button type="submit">进 入</button>
+    <p class="foot">密码 + 动态口令双保险</p>
   </form>
+<script>
+  document.querySelectorAll('.peek').forEach(function(el){
+    el.addEventListener('click', function(){
+      var inp = document.getElementById(el.dataset.for);
+      var show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      el.textContent = show ? '隐藏' : '显示';
+    });
+  });
+</script>
 </body>
 </html>"""
 

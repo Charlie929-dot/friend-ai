@@ -94,14 +94,31 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
 
 # ---------- 主动消息 ----------
 
+# 主动消息必须知道"你们最近聊了什么"：刚聊过 2.5 小时又说"好久没听你唠了"
+# 就是瞎编（实测 #26）。注入最近聊天 + 这条规则。
+_PROACTIVE_CONTEXT_RULE = (
+    "发消息前先看一眼你们最近的聊天：如果不久前刚聊过，就顺着最近的话茬自然接下去，"
+    "千万别用「好久没聊」「最近在忙啥呀」这种跟事实对不上的开场。")
+
+
 def build_proactive_messages(state: str, scenario: str) -> list[dict]:
-    """主动消息的 messages；random 场景有一半概率翻一条旧记忆接着聊（话题弹药）。"""
+    """主动消息的 messages：最近聊天上下文 + 场景指令。
+    random 场景有一半概率翻一条**关于TA的**旧记忆接着聊（话题弹药）。"""
     prompt = persona.build_proactive_prompt(state, scenario)
+    prompt[-1]["content"] += f"\n{_PROACTIVE_CONTEXT_RULE}"
     if scenario == "random" and random.random() < 0.5:
         mem = memory.random_memory()
         if mem:
+            anchor = mem.get("time_label") or ""
+            if not anchor and mem.get("created_at"):
+                anchor = f"{mem['created_at'][5:10]}记的"
+            when = f"（{anchor}）" if anchor else ""
             prompt[-1]["content"] += (
-                f"\n（你忽然想起关于TA的一件事：「{mem['content']}」。"
+                f"\n（你忽然想起关于TA的一件事{when}：「{mem['content']}」。"
                 f"可以就着它聊，比如问问后续；想聊别的也行。）")
+    recent = db.recent_context(config.PROACTIVE_CONTEXT_TURNS)
+    if recent:
+        # 顺序：system（人设）→ 最近聊天（事实）→ 指令（内心活动）最后说
+        return [prompt[0]] + recent + [prompt[-1]]
     return prompt
 

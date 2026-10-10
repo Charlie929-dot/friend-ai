@@ -191,6 +191,7 @@
       </div>
       <div class="btnrow">
         <button class="btn" id="btnRestart">重启服务（改了后端代码后点）</button>
+        <a class="btn" href="/account" style="text-align:center;text-decoration:none">账号管理（密码/动态口令）</a>
       </div>
     </div>
   </div>
@@ -332,7 +333,10 @@ async function send(){
       body: JSON.stringify({text: t, urgent: $('urgent').checked})
     })).json();
     $('urgent').checked = false;
-    if (r.echo !== false) addMsg({role:'user', content:t, ts:r.ts});
+    if (r.echo !== false){
+      addMsg({role:'user', content:t, ts:r.ts});
+      if (r.id) lastId = Math.max(lastId, r.id);  // 回显过就把游标推上去，轮询不再渲染第二遍
+    }
     if (r.reply) addSys(r.reply);          // 输入框里敲的命令，输出照旧走聊天区
     poll();
   }catch(e){ addSys('⚠ 发送失败：' + e.message); }

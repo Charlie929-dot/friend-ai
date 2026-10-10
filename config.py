@@ -65,6 +65,7 @@ DAILY_PROACTIVE_LIMIT = int(os.environ.get("DAILY_PROACTIVE_LIMIT", "6"))   # �
 QUIET_AFTER_BUSY_HOURS = int(os.environ.get("QUIET_AFTER_BUSY_HOURS", "3")) # 用户说"在忙"后的静默时长
 MAX_UNANSWERED_PROACTIVE = int(os.environ.get("MAX_UNANSWERED_PROACTIVE", "2"))  # 连续未回复主动消息上限
 CONTEXT_TURNS = int(os.environ.get("CONTEXT_TURNS", "10"))                   # 对话上下文轮数
+PROACTIVE_CONTEXT_TURNS = int(os.environ.get("PROACTIVE_CONTEXT_TURNS", "6"))  # 主动消息带几条最近聊天（接得上话茬，别瞎编"好久没聊"）
 
 # 作息（24 小时制，实际触发时间会有随机抖动）
 WAKE_HOUR = int(os.environ.get("WAKE_HOUR", "8"))

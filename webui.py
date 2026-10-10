@@ -115,7 +115,8 @@ def _state_payload(channel: WebChannel) -> dict:
     if state == "SLEEPING":
         presence = "睡着"
     elif state == "SLEEPY":
-        presence = "快睡了"
+        # SLEEPY 两个来路：早上赖床 / 晚上快睡（实测 #26 之前不分，白天显示"快睡了"）
+        presence = "赖床中" if db.get_kv("sleepy_reason") == "lie_in" else "快睡了"
     elif off:
         presence = "专注中"
     else:
@@ -277,10 +278,26 @@ def _make_handler(channel: WebChannel, on_message):
                 rows = db.messages_page(after, 200)
                 self._json({"messages": rows,
                             "last_id": rows[-1]["id"] if rows else after})
+            elif u.path == "/account":
+                # 账号管理页（改密码 / 重绑 TOTP）
+                self._serve_web_file("account.html", "text/html; charset=utf-8")
+            elif u.path == "/qr.js":
+                # 二维码生成库（内嵌的开源 qrcode-generator，MIT；TOTP 绑定扫码用）
+                self._serve_web_file("qr.js", "application/javascript; charset=utf-8")
+            elif u.path == "/api/account/status":
+                self._json({"totp_enabled": auth.totp_enabled()})
             else:
                 self._json({"error": "not found"}, 404)
 
-        # --- 发消息 / 执行命令 ---
+        def _serve_web_file(self, name: str, ctype: str):
+            try:
+                body = (WEB_DIR / name).read_text(encoding="utf-8")
+            except OSError as e:
+                self._json({"error": f"读不到 web/{name}：{e}"}, 500)
+                return
+            self._send_body(body.encode("utf-8"), ctype)
+
+        # --- 发消息 / 执行命令 / 账号管理 ---
         def do_POST(self):
             u = urlparse(self.path)
             if auth.enabled() and u.path == "/api/login":
@@ -288,6 +305,9 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if auth.enabled() and not auth.check_cookie(self.headers.get("Cookie", "")):
                 self._json({"error": "未登录"}, 401)
+                return
+            if u.path.startswith("/api/account/"):
+                self._do_account(u.path)
                 return
             if u.path != "/api/send":
                 self._json({"error": "not found"}, 404)
@@ -314,11 +334,96 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             with db.PATH_LOCK:      # 与切换朋友/回复流程互斥，别写错库
                 out = on_message(text)
+            is_cmd = isinstance(out, str)   # 命令：输出走返回值；普通消息：out 是消息 id
             self._json({
-                "echo": out is None,   # 命令不回显用户输入，只把输出显示出来
-                "reply": out or "",
+                "echo": not is_cmd,   # 普通消息回显用户输入；命令只把输出显示出来
+                "reply": out if is_cmd else "",
+                # 回显这条消息的 id：前端把轮询游标 lastId 推上去，这条就不会被
+                # 轮询再渲染一遍（"发送出现两次"的老 bug，实测 #25）
+                "id": out if isinstance(out, int) else 0,
                 "ts": datetime.now().isoformat(timespec="seconds"),
             })
+
+        # --- 账号管理（改密码 / 重绑 TOTP）：改完写回 .env 并热生效，不用重启 ---
+        def _read_json(self) -> dict:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            try:
+                return json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                return {}
+
+        def _verify_credentials(self, data: dict) -> str:
+            """敏感操作前的身份复核：密码必验；开了 TOTP 还要当前动态码。
+            复用登录的限流（同一 IP 试错 5 次锁 10 分钟）。返回错误信息，空串=通过。"""
+            ip = self.client_address[0]
+            if auth.locked(ip):
+                return "试错太多次，10 分钟后再来"
+            pw = (data.get("password") or "").strip()
+            if not auth.verify_password(pw):
+                auth.note_failure(ip)
+                return "密码不对"
+            if auth.totp_enabled():
+                code = re.sub(r"\D", "", data.get("totp") or "")
+                if not auth.verify_totp(code):
+                    auth.note_failure(ip)
+                    return "动态口令不对（检查手机时间是否自动同步）"
+            auth.note_success(ip)
+            return ""
+
+        def _do_account(self, path: str):
+            data = self._read_json()
+            if path == "/api/account/password":
+                err = self._verify_credentials(data)
+                if err:
+                    self._json({"error": err}, 401)
+                    return
+                new = (data.get("new") or "").strip()
+                if len(new) < 8:
+                    self._json({"error": "新密码至少 8 位"})
+                    return
+                if new == (data.get("password") or "").strip():
+                    self._json({"error": "新密码不能和旧的一样"})
+                    return
+                auth.change_password(new)
+                auth.rotate_session_secret()   # 旧会话全部失效，需要重新登录
+                self._json({"ok": True, "relogin": True})
+            elif path == "/api/account/totp/setup":
+                # 生成新密钥（还没生效）：前端展示二维码 + 密钥，用户扫码后带码 confirm
+                err = self._verify_credentials(data)
+                if err:
+                    self._json({"error": err}, 401)
+                    return
+                secret = auth.new_totp_secret()
+                self._json({"ok": True, "secret": secret,
+                            "uri": auth.otpauth_uri(secret)})
+            elif path == "/api/account/totp/confirm":
+                # 用户已扫码、输对了新密钥的动态码 → 正式启用
+                err = self._verify_credentials(data)
+                if err:
+                    self._json({"error": err}, 401)
+                    return
+                secret = (data.get("secret") or "").strip().replace(" ", "").upper()
+                code = re.sub(r"\D", "", data.get("code") or "")
+                if not secret or not code:
+                    self._json({"error": "参数不全"})
+                    return
+                if not auth.verify_totp(code, secret):
+                    self._json({"error": "动态口令不对，确认手机时间自动同步后重试"})
+                    return
+                auth.activate_totp(secret)
+                self._json({"ok": True})
+            elif path == "/api/account/totp/disable":
+                err = self._verify_credentials(data)
+                if err:
+                    self._json({"error": err}, 401)
+                    return
+                auth.disable_totp()
+                self._json({"ok": True})
+            else:
+                self._json({"error": "not found"}, 404)
 
         def _restart(self):
             import autostart

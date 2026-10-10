@@ -58,7 +58,7 @@ def main():
         channel.send(pending)
 
     def handle_text(text: str):
-        """处理一条输入：斜杠命令返回输出文本，普通消息返回 None
+        """处理一条输入：斜杠命令返回输出文本（str）；普通消息返回它落库的 id（int）
         （普通消息的回复由引擎后台线程生成，不在这里等）。"""
         text = text.strip()
         if text.startswith("/"):
@@ -69,12 +69,11 @@ def main():
             elif cmd0 == "/refresh":
                 engine.on_config_reloaded()  # 热重载后定时任务按新配置重排
             return out
-        engine.on_user_message(text)
-        return None
+        return engine.on_user_message(text)
 
     def on_message(text: str):
         out = handle_text(text)
-        if out:
+        if isinstance(out, str) and out:
             channel.send(out)   # 网页端 send 是空操作，输出走 /api/send 的返回值
         return out              # 网页端要把命令输出回给浏览器
 

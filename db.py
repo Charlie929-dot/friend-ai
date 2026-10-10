@@ -130,12 +130,15 @@ def set_kv(key: str, value: str):
 
 
 # --- 消息记录 ---
-def add_message(role: str, content: str, kind: str = "chat"):
+def add_message(role: str, content: str, kind: str = "chat") -> int:
+    """落一条消息，返回它的 id（前端回显后靠它推进轮询游标——
+    不然手动回显的消息 900ms 后又被轮询渲染一遍，出现"发送两次"，实测 #25）。"""
     with _conn() as c:
-        c.execute(
+        cur = c.execute(
             "INSERT INTO messages(ts, role, kind, content) VALUES(?, ?, ?, ?)",
             (datetime.now().isoformat(timespec="seconds"), role, kind, content),
         )
+        return int(cur.lastrowid or 0)
 
 
 def recent_context(turns: int) -> list[dict]:

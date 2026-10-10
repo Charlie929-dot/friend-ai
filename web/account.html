@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>账号管理 · 有生活的朋友</title>
+<style>
+  * { box-sizing:border-box; }
+  body { margin:0; min-height:100vh; padding:32px 16px; background:#0e1016;
+         background-image:radial-gradient(60% 50% at 50% 0%, #1a2233 0%, #0e1016 70%);
+         color:#e8e6e3;
+         font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:420px; margin:0 auto; }
+  .top { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; }
+  .top h1 { margin:0; font-size:19px; font-weight:600; }
+  a.back { color:#8b8f9a; text-decoration:none; font-size:13px; }
+  a.back:hover { color:#c8ccd6; }
+  .card { background:#1b1e26; border:1px solid #2a2e39; border-radius:16px;
+          padding:22px 20px; margin-bottom:18px;
+          box-shadow:0 10px 32px rgba(0,0,0,.35); }
+  .card h2 { margin:0 0 4px; font-size:16px; font-weight:600; }
+  .card .desc { margin:0 0 16px; font-size:13px; color:#8b8f9a; }
+  label { display:block; margin:12px 0 6px; font-size:13px; color:#a8adb8; }
+  input { width:100%; padding:11px 12px; border:1px solid #2e323d; border-radius:10px;
+          background:#12141a; color:#e8e6e3; font-size:15px; outline:none; }
+  input:focus { border-color:#4a6cf7; box-shadow:0 0 0 3px rgba(74,108,247,.18); }
+  input[type=text].code { letter-spacing:.35em; font-size:19px; text-align:center; }
+  button { padding:10px 16px; border:0; border-radius:10px; cursor:pointer;
+           background:linear-gradient(135deg,#4a6cf7,#5b7bff); color:#fff;
+           font-size:14px; font-weight:500; transition:filter .15s; }
+  button:hover { filter:brightness(1.1); }
+  button.ghost { background:none; border:1px solid #3a3f4c; color:#a8adb8; }
+  button.ghost:hover { color:#e8e6e3; border-color:#4a4f5c; filter:none; }
+  button.danger { background:none; border:1px solid #5c3236; color:#e08a8a; }
+  button.danger:hover { border-color:#8a474c; filter:none; }
+  button:disabled { opacity:.45; cursor:not-allowed; filter:none; }
+  .msg { margin:12px 0 0; padding:9px 12px; border-radius:8px; font-size:13px; display:none; }
+  .msg.err { background:rgba(255,86,86,.12); color:#ff8080; }
+  .msg.ok { background:rgba(96,200,120,.12); color:#7fd694; }
+  .msg:empty { display:none; }
+  .status { display:inline-block; padding:2px 10px; border-radius:99px; font-size:12px; }
+  .status.on { background:rgba(96,200,120,.15); color:#7fd694; }
+  .status.off { background:rgba(139,143,154,.15); color:#8b8f9a; }
+  .row { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+  #qrBox { margin:16px 0 0; text-align:center; }
+  #qrBox svg, #qrBox img { background:#fff; padding:10px; border-radius:10px; }
+  .secret { margin:12px 0 4px; text-align:center; font-family:Consolas,monospace;
+            font-size:14px; letter-spacing:.12em; color:#c8ccd6;
+            word-break:break-all; user-select:all; }
+  .hint { margin:4px 0 0; text-align:center; font-size:12px; color:#5d616c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>账号管理</h1>
+    <a class="back" href="/">← 回聊天</a>
+  </div>
+
+  <!-- 修改密码 -->
+  <div class="card">
+    <h2>修改密码</h2>
+    <p class="desc">改完后所有已登录的设备都要重新登录。</p>
+    <form id="pwForm">
+      <label>当前密码</label>
+      <input type="password" id="pwOld" autocomplete="current-password" required>
+      <label id="pwTotpLabel" style="display:none">当前动态口令</label>
+      <input type="text" id="pwTotp" class="code" maxlength="6" inputmode="numeric"
+             style="display:none" placeholder="6 位" autocomplete="one-time-code">
+      <label>新密码（至少 8 位）</label>
+      <input type="password" id="pwNew" autocomplete="new-password" required minlength="8">
+      <label>确认新密码</label>
+      <input type="password" id="pwNew2" autocomplete="new-password" required minlength="8">
+      <div class="row"><button type="submit" id="pwBtn">改密码</button></div>
+      <div class="msg" id="pwMsg"></div>
+    </form>
+  </div>
+
+  <!-- 动态口令 TOTP -->
+  <div class="card">
+    <h2>动态口令 <span class="status off" id="totpStatus">未开启</span></h2>
+    <p class="desc">手机验证器 App（Google Authenticator / 微软验证器等）的 6 位动态码，
+       和密码组成双保险。换手机或怀疑泄露时重绑一个新密钥。</p>
+
+    <!-- 未开启 / 重绑入口 -->
+    <form id="setupForm">
+      <label>当前密码</label>
+      <input type="password" id="setupPw" autocomplete="current-password" required>
+      <label id="setupTotpLabel" style="display:none">当前动态口令</label>
+      <input type="text" id="setupTotp" class="code" maxlength="6" inputmode="numeric"
+             style="display:none" placeholder="6 位" autocomplete="one-time-code">
+      <div class="row">
+        <button type="submit" id="setupBtn">生成新密钥</button>
+        <button type="button" class="danger" id="disableBtn" style="display:none">关闭动态口令</button>
+      </div>
+      <div class="msg" id="setupMsg"></div>
+    </form>
+
+    <!-- 扫码确认（生成密钥后显示） -->
+    <div id="confirmBox" style="display:none">
+      <div id="qrBox"></div>
+      <div class="secret" id="newSecret"></div>
+      <p class="hint">扫不了码就选「手动输入密钥」，抄上面这串（类型：基于时间）</p>
+      <form id="confirmForm">
+        <label>输入验证器上显示的 6 位数字</label>
+        <input type="text" id="confirmCode" class="code" maxlength="6" inputmode="numeric"
+               placeholder="6 位" autocomplete="one-time-code" required>
+        <div class="row">
+          <button type="submit" id="confirmBtn">确认绑定</button>
+          <button type="button" class="ghost" id="cancelBtn">取消</button>
+        </div>
+        <div class="msg" id="confirmMsg"></div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="/qr.js"></script>
+<script>
+function $(id){ return document.getElementById(id); }
+function show(el, text, ok){
+  el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.style.display = text ? 'block' : 'none';
+}
+async function api(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'},
+                               body: JSON.stringify(body || {})});
+  const j = await r.json().catch(() => ({error:'响应不是 JSON'}));
+  if (r.status === 401 && j.error === '未登录') { location.href = '/login'; throw new Error('未登录'); }
+  return j;
+}
+
+var totpOn = false, pendingSecret = '';
+
+async function loadStatus(){
+  try{
+    const s = await (await fetch('/api/account/status')).json();
+    totpOn = !!s.totp_enabled;
+  }catch(e){ totpOn = false; }
+  var st = $('totpStatus');
+  st.textContent = totpOn ? '已开启' : '未开启';
+  st.className = 'status ' + (totpOn ? 'on' : 'off');
+  $('pwTotpLabel').style.display = totpOn ? 'block' : 'none';
+  $('pwTotp').style.display = totpOn ? 'block' : 'none';
+  $('setupTotpLabel').style.display = totpOn ? 'block' : 'none';
+  $('setupTotp').style.display = totpOn ? 'block' : 'none';
+  $('setupBtn').textContent = totpOn ? '重绑新密钥' : '开启动态口令';
+  $('disableBtn').style.display = totpOn ? '' : 'none';
+}
+
+// --- 修改密码 ---
+$('pwForm').addEventListener('submit', async function(ev){
+  ev.preventDefault();
+  if ($('pwNew').value !== $('pwNew2').value){
+    show($('pwMsg'), '两次输入的新密码不一样', false); return;
+  }
+  $('pwBtn').disabled = true;
+  try{
+    const j = await api('/api/account/password', {
+      password: $('pwOld').value, new: $('pwNew').value, totp: $('pwTotp').value
+    });
+    if (j.error){ show($('pwMsg'), j.error, false); }
+    else{
+      show($('pwMsg'), '改好了，跳去重新登录…', true);
+      setTimeout(function(){ location.href = '/login'; }, 900);
+    }
+  }catch(e){ show($('pwMsg'), '请求失败：' + e.message, false); }
+  $('pwBtn').disabled = false;
+});
+
+// --- 生成新 TOTP 密钥 ---
+$('setupForm').addEventListener('submit', async function(ev){
+  ev.preventDefault();
+  $('setupBtn').disabled = true;
+  try{
+    const j = await api('/api/account/totp/setup', {
+      password: $('setupPw').value, totp: $('setupTotp').value
+    });
+    if (j.error){ show($('setupMsg'), j.error, false); }
+    else{
+      pendingSecret = j.secret;
+      show($('setupMsg'), '', true);
+      $('confirmBox').style.display = 'block';
+      $('newSecret').textContent = j.secret;
+      try{
+        var qr = qrcode(0, 'M'); qr.addData(j.uri); qr.make();
+        $('qrBox').innerHTML = qr.createSvgTag(4, 8);
+      }catch(e){ $('qrBox').innerHTML = '<p class="hint">二维码生成失败，用手动输入密钥</p>'; }
+      $('confirmCode').focus();
+    }
+  }catch(e){ show($('setupMsg'), '请求失败：' + e.message, false); }
+  $('setupBtn').disabled = false;
+});
+
+// --- 确认绑定 ---
+$('confirmForm').addEventListener('submit', async function(ev){
+  ev.preventDefault();
+  $('confirmBtn').disabled = true;
+  try{
+    const j = await api('/api/account/totp/confirm', {
+      password: $('setupPw').value, totp: $('setupTotp').value,
+      secret: pendingSecret, code: $('confirmCode').value
+    });
+    if (j.error){ show($('confirmMsg'), j.error, false); }
+    else{
+      show($('confirmMsg'), '绑定成功，以后登录要输动态口令了', true);
+      setTimeout(function(){ location.reload(); }, 1100);
+    }
+  }catch(e){ show($('confirmMsg'), '请求失败：' + e.message, false); }
+  $('confirmBtn').disabled = false;
+});
+
+$('cancelBtn').addEventListener('click', function(){
+  pendingSecret = '';
+  $('confirmBox').style.display = 'none';
+});
+
+// --- 关闭 TOTP ---
+$('disableBtn').addEventListener('click', async function(){
+  $('disableBtn').disabled = true;
+  try{
+    const j = await api('/api/account/totp/disable', {
+      password: $('setupPw').value, totp: $('setupTotp').value
+    });
+    if (j.error){ show($('setupMsg'), j.error, false); }
+    else{ show($('setupMsg'), '已关闭动态口令，只凭密码登录', true); loadStatus(); }
+  }catch(e){ show($('setupMsg'), '请求失败：' + e.message, false); }
+  $('disableBtn').disabled = false;
+});
+
+loadStatus();
+</script>
+</body>
+</html>

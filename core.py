@@ -74,12 +74,14 @@ class Engine:
         self._stopped = True
 
     # --- 收到用户消息 ---
-    def on_user_message(self, text: str) -> None:
+    def on_user_message(self, text: str) -> int:
+        """处理一条用户消息，返回它落库后的 id（前端靠它推进轮询游标，
+        避免手动回显的消息又被轮询渲染一遍——实测 #25 发送出现两次）。"""
         text = text.strip()
         if not text:
-            return
+            return 0
         self._flush_outbox()  # 你回来了：先把离开期间 TA 的留言重放给你
-        db.add_message("user", text)
+        mid = db.add_message("user", text)
         # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
         if guard.is_urgent(text):
             guard.open_urgent_window()
@@ -95,7 +97,7 @@ class Engine:
         if offline.is_offline() and not guard.is_urgent(text):
             offline.push_inbox(text)
             self._send_offline_notice()
-            return
+            return mid
         # 在线但有积压留言（TA 刚转在线、tick 还没跑到）：先回留言再回这条新的
         if offline.pending_inbox_count():
             self.flush_inbox()
@@ -124,6 +126,7 @@ class Engine:
         else:
             db.set_kv("session_open", "1")      # 会话进行中，启动等待计时
             self._reset_nudge_timer()
+        return mid
 
     # --- 后台回复线程：读完才回，回完这段再处理新攒的消息 ---
     def _interrupted(self) -> bool:
@@ -434,9 +437,10 @@ class Engine:
 
     # --- 作息切换（调度器调用；自主作息说"还能撑/想赖床"就先进 SLEEPY 过渡） ---
     def go_sleep(self) -> None:
-        """锚点到点：自主作息说还能撑 → 进 SLEEPY 等 tick；撑不住 → 直接入睡。"""
+        """锚点到点：自主作息说还能撑 → 进 SLEEPY（stay_up）等 tick；撑不住 → 直接入睡。"""
         if datetime.now() < offline.tonight_sleep_at(datetime.now()):
             db.set_state("SLEEPY")
+            db.set_kv("sleepy_reason", "stay_up")
             return
         self._do_sleep()
 
@@ -448,17 +452,22 @@ class Engine:
         if config.DIARY_ENABLED:
             self.daily_review()
         db.set_state("SLEEPING")
+        db.set_kv("sleepy_reason", "")
 
     def wake_up(self) -> None:
-        """锚点到点：自主作息说还想赖床 → 进 SLEEPY 等 tick；睡饱了 → 直接醒。"""
-        if datetime.now() < offline.next_wake_at(datetime.now()):
+        """锚点到点：自主作息说还想赖床 → 进 SLEEPY（lie_in）等 tick；睡饱了 → 直接醒。
+        问的是 offline.today_wake_at——"今天该几点起"（老 bug：问成 next_wake_at，
+        早晨一触发就返回明天，于是永远赖床、一整天不醒，实测 #26）。"""
+        if datetime.now() < offline.today_wake_at(datetime.now()):
             db.set_state("SLEEPY")
+            db.set_kv("sleepy_reason", "lie_in")
             return
         self._do_wake()
 
     def _do_wake(self) -> None:
         """真正醒来：道早安 + 回离线留言 + 补昨晚错过的关怀提醒。"""
         db.set_state("AWAKE")
+        db.set_kv("sleepy_reason", "")
         self.proactive("morning")
         self.flush_inbox()
         events.flush_missed(self)  # 昨晚说好要提醒的，结果睡着了，现在补上

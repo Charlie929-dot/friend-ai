@@ -761,9 +761,23 @@ def run_memory_tool(name: str, args: dict) -> str:
 
 
 def random_memory(category: str | None = None) -> dict | None:
-    """给主动话题供弹药：随机抽一条（优先最近没被召回过的）。"""
+    """给主动话题供弹药：随机抽一条**关于对方**的记忆（优先最近没被召回过的）。
+
+    只抽 person 是"对方/用户称呼"的——关于自己或别人的旧账一旦套上"想起关于TA
+    的一件事"的模板，就成了把别人的事安到对方头上（实测 #26：把"小葵自己想
+    收拾桌子只削了个苹果"说成"你说要收拾桌子"）。"""
+    import persona
+    try:
+        uname = persona.user_name()
+    except Exception:
+        uname = ""
+
+    def _about_user(m: dict) -> bool:
+        p = (m.get("person") or "").strip()
+        return p in ("对方", "TA") or (bool(uname) and uname in p)
+
     mems = [m for m in db.all_memories(limit=200)
-            if m.get("status", "ok") == "ok"]
+            if m.get("status", "ok") == "ok" and _about_user(m)]
     if category:
         mems = [m for m in mems if m["category"] == category]
     if not mems:

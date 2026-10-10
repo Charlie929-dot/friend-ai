@@ -530,6 +530,9 @@ def test_typing_indicator():
     saved = (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
              config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
              config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR)
+    saved_work = config.WORK_ENABLED
+    config.WORK_ENABLED = False     # 只测打字节奏；工作时段 fresh DB 会判离线，
+    #   消息进 inbox 不回复（时间依赖 flaky，与本测试无关）
     config.TYPING_ENABLED = True
     config.TYPING_SECONDS_PER_CHAR = 0.001   # 把等待压到毫秒级
     config.TYPING_MIN_SECONDS = 0.01
@@ -577,6 +580,7 @@ def test_typing_indicator():
         (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
          config.TYPING_MIN_SECONDS, config.TYPING_MAX_SECONDS,
          config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR) = saved
+        config.WORK_ENABLED = saved_work
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
@@ -679,6 +683,9 @@ def test_interrupt_detection():
              config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR,
              config.SEND_MIN_SECONDS, config.SEND_MAX_SECONDS,
              config.SEND_SECONDS_PER_CHAR)
+    saved_work = config.WORK_ENABLED
+    config.WORK_ENABLED = False     # 本测试只测插话；开着工作系统会让"现在几点"
+    #   决定是否离线（fresh DB 在工作时段必然 offline → 消息进 inbox 不回话）
     config.TYPING_ENABLED = True
     config.READING_MAX_SECONDS = 0.05
     config.READING_SECONDS_PER_CHAR = 0.0
@@ -696,6 +703,7 @@ def test_interrupt_detection():
         real_chat = _mem.llm.chat
         real_extract = _mem.extract_async
         _mem.extract_async = lambda: None
+        eng = eng2 = None   # finally 里要 stop，先绑空值防场景一挂掉时 UnboundLocalError 掩盖断言
 
         def wait_for(pred, timeout=4):
             deadline = _t.time() + timeout
@@ -760,8 +768,9 @@ def test_interrupt_detection():
             f"缺让步语（{ _persona.INTERRUPT_ACKS }）：{sent2}"
         print("ok 插话检测（打字打断作废 + 中途停发让步）")
     finally:
-        eng.stop()
-        eng2.stop()
+        for _eng in (eng, eng2):
+            if _eng:
+                _eng.stop()
         _mem.llm.chat = real_chat
         _mem.extract_async = real_extract
         (config.TYPING_ENABLED, config.TYPING_SECONDS_PER_CHAR,
@@ -769,6 +778,7 @@ def test_interrupt_detection():
          config.READING_MAX_SECONDS, config.READING_SECONDS_PER_CHAR,
          config.SEND_MIN_SECONDS, config.SEND_MAX_SECONDS,
          config.SEND_SECONDS_PER_CHAR) = saved
+        config.WORK_ENABLED = saved_work
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
@@ -1354,6 +1364,10 @@ def test_work_system():
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
 
         morning = _dt(2026, 10, 9, 10, 0)
+        # 预置今天的起床点（锚点前 5 分钟）：新逻辑"醒来才排班"——不预置的话
+        # 赖床浮动可能让 10:00 整还没"醒"，排不出班（测试要与随机浮动解耦）
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
         units = _work.plan(morning)
         assert units, "今天没排出班"
         first_start = _dt.fromisoformat(units[0]["start"])
@@ -1430,6 +1444,9 @@ def test_offline_inbox_and_rhythm():
             "bubble_mult": 0.8, "drawn_at": "2026-10-09T00:00:00"}))
 
         morning = _dt(2026, 10, 9, 6, 0)
+        # 预置今天的起床点（锚点前 5 分钟）：醒来才排班，与赖床随机浮动解耦
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T05:55:00"}))
         _work.plan(morning)
         first_start = _dt.fromisoformat(_work.plan(morning)[0]["start"])
         # 工作单元进行中（flow / working）= 离线专注；开工前 = 在线
@@ -1785,6 +1802,9 @@ def test_interruption_cost():
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
 
         morning = _dt(2026, 10, 9, 10, 0)
+        # 预置今天的起床点（锚点前 5 分钟）：醒来才排班（与随机浮动解耦）
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
         units = _work.plan(morning)
         first_start = _dt.fromisoformat(units[0]["start"])
 
@@ -1811,7 +1831,7 @@ def test_interruption_cost():
 
         # 精力耗尽时，working 也应升到 costly（累 + 忙 = 双重代价）
         _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 6,
+            "day": "2026-10-09", "quota": 6, "planned": 1,
             "units": [{"start": first_start.isoformat(timespec="seconds"),
                        "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
             "settled": 0, "energy": 20, "money": 0}))
@@ -1909,6 +1929,9 @@ def test_mood():
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
 
         morning = _dt(2026, 10, 9, 10, 0)
+        # 预置今天的起床点（锚点前 5 分钟）：醒来才排班（与随机浮动解耦）
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
         units = _work.plan(morning)
         first_start = _dt.fromisoformat(units[0]["start"])
 
@@ -1924,7 +1947,7 @@ def test_mood():
 
         # 精力低 → 疲惫（累是最强烈的感受，盖过 phase）
         _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 1,
+            "day": "2026-10-09", "quota": 1, "planned": 1,
             "units": [{"start": first_start.isoformat(timespec="seconds"),
                        "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
             "settled": 0, "energy": 20, "money": 0}))
@@ -1933,7 +1956,7 @@ def test_mood():
 
         # 忙完（off）白天 → 轻松；夜里 → 平静（时段情绪，独立于 phase）
         _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 1,
+            "day": "2026-10-09", "quota": 1, "planned": 1,
             "units": [{"start": first_start.isoformat(timespec="seconds"),
                        "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
             "settled": 1, "energy": 100, "money": 20}))
@@ -1981,11 +2004,10 @@ def test_webui():
         _webui.WEB_DIR = Path(real_base) / "web"     # 页面文件仍留在项目里
 
         def fake_engine(text):
-            """替身引擎：命令返回输出，普通消息入库（真引擎会异步生成回复）。"""
+            """替身引擎：命令返回输出，普通消息入库并返回消息 id（真引擎同款契约）。"""
             if text.startswith("/"):
                 return _cmds.handle(text)
-            _db.add_message("user", text)
-            return None
+            return _db.add_message("user", text)
 
         ch = _webui.WebChannel()
         srv = ThreadingHTTPServer(("127.0.0.1", 0), _webui._make_handler(ch, fake_engine))
@@ -2006,8 +2028,15 @@ def test_webui():
 
             r = c.post(base + "/api/send", json={"text": "你好呀"}).json()
             assert r["echo"] is True, f"普通消息应回显用户输入：{r}"
+            # 回显消息 id（实测 #25 双发修复）：前端拿它推进轮询游标，
+            # 这条就不会被轮询再渲染一遍
+            assert isinstance(r["id"], int) and r["id"] > 0, f"普通消息该带回显 id：{r}"
+            after = c.get(base + f"/api/messages?after={r['id']}").json()
+            assert not any(m["id"] == r["id"] for m in after["messages"]), \
+                "游标推到 id 之后还拉回同一条（双发没修干净）"
             r2 = c.post(base + "/api/send", json={"text": "/work"}).json()
             assert r2["echo"] is False and r2["reply"], f"命令输出该回给浏览器：{r2}"
+            assert r2["id"] == 0, f"命令没有消息 id：{r2}"
 
             msgs = c.get(base + "/api/messages?after=0").json()["messages"]
             assert any(m["role"] == "user" and m["content"] == "你好呀" for m in msgs), \
@@ -2077,6 +2106,301 @@ def test_autostart():
     assert _as._pid_alive(999999) is False, "不存在的 PID 判成活着"
 
 
+def test_wake_semantics_and_tick():
+    """起床双语义（实测 #26）：today_wake_at=「今天该几点起」不 +1 天；
+    next_wake_at=夜里问「下次几点起」→ 明天，且 wake_days 按日缓存夜里反复问不抖动（#27）；
+    被旧 bug 污染的缓存（时刻落在别的日期）自愈；tick 处理赖床醒/熬夜睡/reason 缺失自愈。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt
+
+    import db as _db
+    import offline as _off
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "oldcadre", "label": "老干部", "name": "稳稳", "quirk": "",
+            "text": "你作息规律。", "wake_hour": 6, "sleep_hour": 22,
+            "bubble_mult": 0.8, "drawn_at": "2026-10-09T00:00:00"}))
+
+        # 早晨问"今天该几点起"：必须落在今天（老 bug：+1 天 → 永远赖床不醒）
+        morning = _dt(2026, 10, 10, 6, 30)
+        t = _off.today_wake_at(morning)
+        assert t.date() == morning.date(), f"今天的起床算到了 {t.date()}（老 bug 又犯了）"
+        assert _dt(2026, 10, 10, 5, 30) <= t <= _dt(2026, 10, 10, 7, 30), \
+            f"起床浮动越界：{t}"
+        assert _off.today_wake_at(morning) == t, "同一早晨的起床时刻应幂等"
+
+        # 夜里问"下次几点起" → 明天；反复问同一时刻（夜里 tick 每分钟都问）
+        evening = _dt(2026, 10, 10, 20, 0)
+        w = _off.next_wake_at(evening)
+        assert w.date() == _dt(2026, 10, 11).date(), f"夜里该问明天的：{w}"
+        assert _off.next_wake_at(evening) == w, "夜里反复问，起床点在抖（单槽缓存被翻转）"
+        # 且不破坏今天的缓存（wake_days 两天共存）
+        assert _off.today_wake_at(evening) == t, "问明天把今天的起床点弄丢了"
+
+        # 旧 bug 污染的缓存自愈：日期对但时刻落在明天 → 作废重算
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-12", "wake_at": "2026-10-13T06:10:00",
+             "wake_days": {"2026-10-12": "2026-10-13T06:10:00"}}))
+        m2 = _dt(2026, 10, 12, 6, 30)
+        t2 = _off.today_wake_at(m2)
+        assert t2.date() == m2.date(), f"被污染的缓存没自愈：{t2}"
+
+        # tick：SLEEPY 赖床（lie_in）早晨没到起床点不动、过点醒
+        class FakeEng:
+            def __init__(self):
+                self.calls = []
+            def _do_wake(self):
+                self.calls.append("wake")
+            def _do_sleep(self):
+                self.calls.append("sleep")
+            def flush_inbox(self):
+                self.calls.append("flush")
+
+        eng = FakeEng()
+        _db.set_state("SLEEPY")
+        _db.set_kv("sleepy_reason", "lie_in")
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_days": {"2026-10-10": "2026-10-10T06:30:00"}}))
+        _off.tick(eng, _dt(2026, 10, 10, 6, 10))
+        assert not eng.calls, f"没到起床点不该动：{eng.calls}"
+        _off.tick(eng, _dt(2026, 10, 10, 6, 45))
+        assert eng.calls == ["wake"], f"赖床到点没醒：{eng.calls}"
+
+        # SLEEPY 熬夜（stay_up）没到入睡点不动、过点睡
+        eng.calls.clear()
+        _db.set_kv("sleepy_reason", "stay_up")
+        _db.set_kv("rest_schedule", json.dumps(
+            {"day": "2026-10-10", "sleep_at": "2026-10-10T22:10:00",
+             "wake_days": {"2026-10-10": "2026-10-10T06:30:00"}}))
+        _off.tick(eng, _dt(2026, 10, 10, 22, 5))
+        assert not eng.calls, f"没到入睡点不该动：{eng.calls}"
+        _off.tick(eng, _dt(2026, 10, 10, 22, 30))
+        assert eng.calls == ["sleep"], f"熬夜到点没睡：{eng.calls}"
+
+        # 深夜保护：凌晨的 SLEEPY（reason 缺失的异常状态）睡回去，不能被叫醒
+        # （凌晨的生活日还是昨天，today_wake_at 查到的是昨天已过的点）
+        eng.calls.clear()
+        _db.set_state("SLEEPY")
+        _db.set_kv("sleepy_reason", "")
+        _db.set_kv("rest_schedule", json.dumps(
+            {"day": "2026-10-10", "sleep_at": "2026-10-10T22:10:00",
+             "wake_days": {"2026-10-10": "2026-10-10T06:30:00",
+                           "2026-10-11": "2026-10-11T06:30:00"}}))
+        _off.tick(eng, _dt(2026, 10, 11, 1, 0))
+        assert eng.calls == ["sleep"], f"深夜的 SLEEPY 被叫醒了（该睡回去）：{eng.calls}"
+
+        # 白天 reason 缺失（被旧 bug 卡死的状态）：过了今天的起床点 → 醒，自愈
+        eng.calls.clear()
+        _off.tick(eng, _dt(2026, 10, 11, 14, 0))
+        assert eng.calls == ["wake"], f"白天卡死的 SLEEPY 没自愈醒来：{eng.calls}"
+
+        # SLEEPING 睡过头兜底（错过 cron / 电脑睡到中午）：今天的起床点过了就醒
+        # （不能等 next_wake_at——早晨生活日翻篇后"下次"就是明天，会睡一整天）
+        eng.calls.clear()
+        _db.set_state("SLEEPING")
+        _off.tick(eng, _dt(2026, 10, 11, 2, 0))
+        assert not eng.calls, f"深夜的 SLEEPING 不该被叫醒：{eng.calls}"
+        _off.tick(eng, _dt(2026, 10, 11, 12, 0))
+        assert eng.calls == ["wake"], f"睡过头没兜底醒来：{eng.calls}"
+        print("ok 起床双语义（today/next 分开 + 按日缓存不抖 + 污染自愈 + tick 赖床/熬夜/深夜保护）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_lazy_work_plan():
+    """醒来才排班（实测 #26）：没醒 plan 空、进度条不涨；醒了从实际起床点后排；
+    起得太晚可用时间变短 → 少排几件，而不是把班排进被窝。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt
+
+    import config as _cfg
+    import db as _db
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+
+        # 今天睡懒觉：12 点才醒（锚点 10 点）
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_days": {"2026-10-09": "2026-10-09T12:00:00"}}))
+        now = _dt(2026, 10, 9, 10, 30)          # 锚点已过但还没醒
+        assert _work.plan(now) == [], "人没醒就排了班（班不能排进被窝）"
+        st = _work.status(now)
+        assert st["phase"] == "sleep" and st["quota"] == 0, \
+            f"人没醒进度条不该涨：{st}"
+        assert _work.hud(now) == "", "没醒不该显示进度条"
+
+        # 醒了（12:30）：排班，起点在实际起床点之后（磨蹭另算）
+        now2 = _dt(2026, 10, 9, 12, 30)
+        units = _work.plan(now2)
+        assert units, "醒了却没排班"
+        first_start = _dt.fromisoformat(units[0]["start"])
+        assert first_start >= _dt(2026, 10, 9, 12, 0), \
+            f"排班起点早于实际起床点（排进被窝了）：{first_start}"
+        assert _dt.fromisoformat(units[-1]["end"]) <= _dt(2026, 10, 10, 2, 0), \
+            "排班越过了睡觉时间"
+        assert _work.plan(now2) == units, "同一天重排出新计划"
+
+        # 起得太晚（20:00 才醒）→ 可用时间短 → 少排几件
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_days": {"2026-10-09": "2026-10-09T12:00:00",
+                           "2026-10-10": "2026-10-10T20:00:00"}}))
+        units2 = _work.plan(_dt(2026, 10, 10, 20, 30))
+        assert 0 < len(units2) < _cfg.WORK_DAILY_QUOTA, \
+            f"起太晚应该少做几件：{len(units2)} 件（配额 {_cfg.WORK_DAILY_QUOTA}）"
+        assert _dt.fromisoformat(units2[0]["start"]) >= _dt(2026, 10, 10, 20, 0), \
+            "晚起的班也不该排进被窝"
+        print("ok 惰性排班（没醒不排 + 进度条不涨 + 赖床从实际起床点起 + 少做几件）")
+    finally:
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_random_memory_about_user():
+    """random_memory 只抽关于用户的记忆（实测 #26：把别人的事安到对方头上）。"""
+    import json
+    import tempfile
+
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 当前朋友对用户的称呼是"小徐"（profile 清单）
+        _db.set_kv("profile_locked", "1")
+        _db.set_kv("profile_text", "称呼：小徐")
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+        _db.add_memory("小徐在写图像作业", category="事件", person="小徐")
+        _db.add_memory("小徐爱喝奶茶", category="画像", person="对方")
+        _db.add_memory("想收拾桌子只削了个苹果", category="事件", person="小葵")  # 自己的事
+        _db.add_memory("阿燃周末要去爬山", category="事件", person="阿燃")        # 别人的事
+
+        picked = set()
+        for _ in range(40):
+            m = _mem.random_memory()
+            assert m, "库里明明有关于用户的记忆却抽不到"
+            assert m["person"] in ("小徐", "对方"), \
+                f"抽到了不是关于用户的记忆：{m['person']} {m['content']}"
+            picked.add(m["content"])
+        assert "小徐在写图像作业" in picked and "小徐爱喝奶茶" in picked, \
+            "两类关于用户的记忆都该抽得到"
+        print("ok 主动话题弹药（random_memory 只抽关于用户的，别人的事不安头上）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_proactive_context_injection():
+    """主动消息带最近聊天 + 「别说好久没聊」规则（实测 #26：瞎编开场）。"""
+    import tempfile
+
+    import context as _ctx
+    import db as _db
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        # 两小时前刚聊过的话题
+        _db.add_message("user", "我在赶论文，头都大了")
+        _db.add_message("assistant", "那你先忙，写完这段再找我唠")
+
+        msgs = _ctx.build_proactive_messages("AWAKE", "random")
+        contents = [m["content"] for m in msgs]
+        assert any("论文" in c for c in contents), \
+            "最近聊天没进主动消息上下文（还会瞎编开场）"
+        assert any("好久没聊" in c for c in contents), "缺「别说好久没聊」的规则注入"
+        # 顺序：system（人设）在最前、指令（内心活动）在最后说
+        assert msgs[0]["role"] == "system", f"第一条应是 system：{msgs[0]['role']}"
+        assert "好久没聊" in msgs[-1]["content"], "规则应贴在最后的指令里"
+        print("ok 主动消息上下文（带最近聊天 + 别瞎编开场规则）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_account_management():
+    """账号管理（网页改密码/TOTP）：write_env 只动目标键、其他行原样保留；
+    改密码热生效；TOTP 绑定后动态码可验、解绑后关闭。"""
+    import os as _os
+    import tempfile
+
+    import auth as _auth
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    env_keys = ("WEB_AUTH_ENABLED", "WEB_AUTH_PASS_HASH", "WEB_AUTH_TOTP_SECRET",
+                "WEB_AUTH_SESSION_SECRET")
+    saved_env = {k: _os.environ.get(k) for k in env_keys}
+    try:
+        # .env 里有别的键（比如 API key）——写回时绝不能碰丢
+        (tmp / ".env").write_text(
+            "API_KEY=sk-test-别动我\nWEB_AUTH_ENABLED=on\n", encoding="utf-8")
+        _os.environ["WEB_AUTH_ENABLED"] = "on"
+        _auth.change_password("旧密码12345")
+        assert _auth.verify_password("旧密码12345"), "改密后旧密码该能过"
+        assert "API_KEY=sk-test-别动我" in (tmp / ".env").read_text(encoding="utf-8"), \
+            "write_env 把 .env 里其他行碰丢了"
+
+        # 改密码热生效（不用重启）
+        _auth.change_password("新密码67890")
+        assert _auth.verify_password("新密码67890"), "新密码没热生效"
+        assert not _auth.verify_password("旧密码12345"), "旧密码还能用"
+
+        # 会话密钥轮换：新旧密钥签出来的 cookie 不同（旧会话失效）
+        s1 = _auth.rotate_session_secret()
+        s2 = _auth.rotate_session_secret()
+        assert s1 and s2 and s1 != s2, "会话密钥没轮换出不同的值"
+
+        # TOTP：生成 → 绑定 → 当前动态码可验
+        secret = _auth.new_totp_secret()
+        assert secret and "=" not in secret, "密钥该是干净的 base32"
+        uri = _auth.otpauth_uri(secret)
+        assert uri.startswith("otpauth://totp/") and f"secret={secret}" in uri, \
+            f"otpauth 链接不对：{uri}"
+        _auth.activate_totp(secret)
+        assert _auth.totp_enabled(), "绑定后 TOTP 该生效"
+        assert _auth.verify_totp(_auth.totp_code(secret)), "绑定密钥的当前码验不过"
+        # 解绑
+        _auth.disable_totp()
+        assert not _auth.totp_enabled(), "解绑后 TOTP 该关闭"
+        print("ok 账号管理（改密热生效 + .env 保留他行 + 会话轮换 + TOTP 绑定/解绑）")
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+        _auth._refresh()
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -2105,7 +2429,9 @@ if __name__ == "__main__":
     test_busy_signals_not_merged()
     test_random_chat_hours_follow_persona()
     test_work_system()
+    test_lazy_work_plan()
     test_offline_inbox_and_rhythm()
+    test_wake_semantics_and_tick()
     test_reading_system()
     test_user_library()
     test_legacy_persona_card_compat()
@@ -2113,6 +2439,9 @@ if __name__ == "__main__":
     test_interruption_cost()
     test_urgent_channel()
     test_mood()
+    test_random_memory_about_user()
+    test_proactive_context_injection()
     test_webui()
+    test_account_management()
     test_autostart()
     print("\n全部通过")

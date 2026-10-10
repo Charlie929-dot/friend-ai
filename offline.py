@@ -10,7 +10,15 @@
 睡得晚 → 赖床）。惰性推算 + kv 幂等缓存——电脑关机重启也能接着算。
 
 配合 core 的 SLEEPY 过渡态：cron 在锚点触发 go_sleep/wake_up，但若自主作息说
-"还能撑/还想赖床"，先进入 SLEEPY，等 tick 到真正的入睡/起床点再切换。
+"还能撑/还想赖床"，先进入 SLEEPY（kv.sleepy_reason 记来路：stay_up=晚上撑着 /
+lie_in=早上赖床），等 tick 到真正的入睡/起床点再切换。
+
+⚠️ 实测 #26 踩过的坑（别再犯）：起床时刻有两个语义——
+  - wake_up 锚点触发（早晨）问的是"**今天**该几点起"（赖床浮动后，可能还没到）；
+  - tick 在 SLEEPING（夜里）问的是"**下次**几点起"（今天的已过 → 明天）。
+老实现不分这两个语义，`wake_base <= now 就 +1 天`，导致早晨 cron 一触发就把
+起床算成明天 → 永远进 SLEEPY 赖床、一整天不醒。today_wake_at / next_wake_at
+分开，且缓存按"早晨的日期"存、对不上就重算（能自愈被污染的旧缓存）。
 """
 import json
 import random
@@ -153,38 +161,100 @@ def tonight_sleep_at(now: datetime) -> datetime:
     return sleep_at
 
 
-def next_wake_at(now: datetime) -> datetime:
-    """下次起床时刻（锚点 + 自主浮动，同一生活日幂等）。"""
+def _wake_at_for(morning: datetime, now: datetime) -> datetime:
+    """某个早晨（morning 取当天 0 点）的起床时刻：人格锚点 + 赖床浮动。
+    按"早晨的日期"逐日缓存（wake_days dict）——**必须能同时存今天和明天两个**：
+    next_wake_at 在夜里要查"明天的"，单槽缓存会被今天/明天来回翻转、
+    每次翻转都随机重算 → 夜里 tick 每分钟一个新起床点（实测 #27 抓到的坑）。
+    缓存里的时刻不落在那个早晨（比如被旧 bug 写进去的明天时刻）就作废重算
+    ——部署修复后能自愈线上被污染的旧单槽缓存（wake_day/wake_at）。"""
     sched = _load_sched()
+    day_str = morning.strftime("%Y-%m-%d")
+    days = sched.get("wake_days")
+    days = days if isinstance(days, dict) else {}
+    cached = days.get(day_str) or _legacy_wake(sched, day_str)
+    if cached:
+        try:
+            t = datetime.fromisoformat(cached)
+            if t.date() == morning.date():
+                return t
+        except ValueError:
+            pass                       # 缓存坏了，重算
     import persona
-    day, _ = persona._life_day(now)
-    day_str = day.strftime("%Y-%m-%d")
-    if sched.get("wake_day") == day_str and sched.get("wake_at"):
-        return datetime.fromisoformat(sched["wake_at"])
     p = persona.behavior_params()
-    wh = p["wake_hour"] % 24
-    wake_base = datetime(day.year, day.month, day.day, wh, 0)
-    if wake_base <= now:
-        wake_base += timedelta(days=1)
+    base = datetime(morning.year, morning.month, morning.day, p["wake_hour"] % 24, 0)
     shift = _wake_shift(now)
-    wake_at = wake_base + timedelta(minutes=shift)
-    sched.update({"wake_day": day_str, "wake_at": wake_at.isoformat(timespec="seconds"),
-                  "wake_shift": shift})
+    wake_at = base + timedelta(minutes=shift)
+    days[day_str] = wake_at.isoformat(timespec="seconds")
+    if len(days) > 3:                  # 只留最近几个日期，防止无限增长
+        for k in sorted(days)[:-3]:
+            days.pop(k)
+    sched["wake_days"] = days
+    sched["wake_day"] = day_str        # 旧字段继续维护（老版本回滚也能读）
+    sched["wake_at"] = days[day_str]
     _save_sched(sched)
     return wake_at
 
 
+def _legacy_wake(sched: dict, day_str: str) -> str:
+    """旧单槽缓存（wake_day/wake_at）兼容读取：日期对得上才用。"""
+    if sched.get("wake_day") == day_str:
+        return sched.get("wake_at") or ""
+    return ""
+
+
+def today_wake_at(now: datetime) -> datetime:
+    """今天（生活日）的起床时刻。给 wake_up 锚点触发用：不管现在几点，
+    问的都是"今天该几点起"——赖床浮动后的时刻，可能还没到。"""
+    import persona
+    day, _ = persona._life_day(now)
+    return _wake_at_for(day, now)
+
+
+def next_wake_at(now: datetime) -> datetime:
+    """下次起床时刻。给夜里 SLEEPING 的 tick 用：今天的起床点已过 → 明天。"""
+    import persona
+    day, _ = persona._life_day(now)
+    t = _wake_at_for(day, now)
+    if t > now:
+        return t
+    return _wake_at_for(day + timedelta(days=1), now)
+
+
+def _in_morning(now: datetime) -> bool:
+    """现在处于"今天"的生活日吗（锚点之后到午夜）？凌晨深夜（0 点到锚点）
+    的生活日还是昨天——那段的 today_wake_at 查到的是昨天已过的点，
+    绝不能拿它当"该醒了"的依据（会把凌晨睡着的叫醒）。"""
+    import persona
+    return persona._life_day(now)[0].date() == now.date()
+
+
 # ---------- 节律 tick（调度器每分钟调） ----------
 
-def tick(engine) -> None:
-    """每分钟：作息过渡（SLEEPY 到点入睡 / 赖床到点起床）+ 上线 flush 离线留言。"""
-    now = datetime.now()
+def tick(engine, now: datetime | None = None) -> None:
+    """每分钟：作息过渡 + 上线 flush 离线留言。
+    SLEEPY 有两个来路（kv.sleepy_reason）：早上赖床（lie_in）到起床点要**醒**；
+    晚上撑着（stay_up）到入睡点要**睡**。老实现只处理了入睡——赖床永远等不到醒。
+    reason 缺失/出现在深夜：深夜一律按"过入睡点睡回去"处理（凌晨不能被叫醒），
+    白天过了起床点就直接醒，自愈被旧 bug 卡死的状态。"""
+    now = now or datetime.now()
     state = db.get_state()
     if state == "SLEEPY":
-        if now >= tonight_sleep_at(now):
+        reason = db.get_kv("sleepy_reason")
+        if reason == "stay_up":
+            if now >= tonight_sleep_at(now):
+                engine._do_sleep()
+        elif _in_morning(now):
+            # 早晨：lie_in 赖床到点醒；reason 缺失（被旧 bug 卡在白天）也醒，自愈
+            if now >= today_wake_at(now):
+                engine._do_wake()
+        elif now >= tonight_sleep_at(now):
+            # 深夜的 SLEEPY（异常状态）：过了入睡点睡回去，深夜不能被叫醒
             engine._do_sleep()
     elif state == "SLEEPING":
-        if now >= next_wake_at(now):
+        # 兜底（错过 wake_up cron / 电脑睡过头）：今天的起床点过了就醒。
+        # 不能用 next_wake_at——早晨生活日翻篇后"下次"就是明天，会睡一整天
+        if _in_morning(now) and now >= today_wake_at(now):
             engine._do_wake()
     elif state == "AWAKE" and not is_offline(now) and pending_inbox_count():
         engine.flush_inbox()
