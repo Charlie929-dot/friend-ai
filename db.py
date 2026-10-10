@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
     memory_id INTEGER PRIMARY KEY,     -- 对应 memories.id
     vec BLOB NOT NULL                  -- float32 向量（语义召回，本地 bge-small-zh-v1.5）
 );
+CREATE TABLE IF NOT EXISTS consciousness_stream (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,          -- ISO 时间
+    day TEXT NOT NULL,         -- 生活日 YYYY-MM-DD（跨天/睡前浓缩用）
+    kind TEXT NOT NULL,        -- 事件类型：wake/sleep/work/inbox/monologue/reply
+    text TEXT NOT NULL         -- 第一人称行（"我起床了 / 我在想：… / 我说：…"）
+);
 """
 
 
@@ -112,7 +119,8 @@ def init():
 def clear_all():
     """清空所有数据（/new-friend 用），保留表结构。"""
     with _conn() as c:
-        for table in ("kv", "messages", "counters", "memories", "long_memories", "memory_vectors"):
+        for table in ("kv", "messages", "counters", "memories", "long_memories",
+                      "memory_vectors", "consciousness_stream"):
             c.execute(f"DELETE FROM {table}")
 
 
@@ -536,4 +544,48 @@ def purge_messages_before(ts_cutoff: str) -> int:
     """回顾线彻底删除：清掉 ts_cutoff 之前的原始对话消息。返回删除条数。"""
     with _conn() as c:
         cur = c.execute("DELETE FROM messages WHERE ts < ?", (ts_cutoff,))
+        return cur.rowcount
+
+
+# --- 自我意识流（S4「完全自我意识」）：一条持续追加的第一人称自我叙事 ---
+# 事件驱动追加（作息切换 / 工作结算 / 收到留言 / 内心独白 / 回复），每轮注入
+# "当前状态行 + 最近几条流"。day = 生活日（由调用方按 persona._life_day 算好传入，
+# 避免 db 层 import persona 造成循环依赖）。
+def add_stream(kind: str, text: str, day: str) -> int:
+    """追加一条意识流，返回 id。text 是第一人称行（"我起床了 / 我在想：…"）。"""
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO consciousness_stream(ts, day, kind, text) VALUES(?, ?, ?, ?)",
+            (datetime.now().isoformat(timespec="seconds"), day, kind, text),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def recent_stream(limit: int, day: str | None = None) -> list[dict]:
+    """最近 N 条意识流（新的在前）。day 限定只看某个生活日。"""
+    with _conn() as c:
+        if day:
+            rows = c.execute(
+                "SELECT * FROM consciousness_stream WHERE day=? "
+                "ORDER BY id DESC LIMIT ?", (day, limit)).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM consciousness_stream "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def stream_for_day(day: str) -> list[dict]:
+    """某生活日的全部意识流（按时间正序），睡前浓缩成 self_* 用。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM consciousness_stream WHERE day=? ORDER BY id", (day,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def purge_stream_before(day: str) -> int:
+    """删除某生活日之前的意识流（睡前浓缩后清理旧流，防止无限增长）。"""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM consciousness_stream WHERE day < ?", (day,))
         return cur.rowcount

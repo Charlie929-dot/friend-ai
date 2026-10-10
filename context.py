@@ -14,6 +14,7 @@ import llm
 import memory
 import persona
 import selfmem
+import stream
 
 # 记忆注入的统一文案
 _MEMORY_HINT = "自然使用，别生硬复述；同主题多条按时间先后排列，靠后的是最新进展"
@@ -76,6 +77,11 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
         thint = tone.voice_hint()
         if thint:
             messages.append({"role": "system", "content": thint})
+    # 自我意识流（S4）：此刻的我（攒了多少/精力/心情）+ 最近发生的事——补 money/energy
+    # 进 prompt（原来钱只在 HUD 给你看、TA 自己不知道，实测 #36）。紧急窗口也注入。
+    shint = stream.prompt_hint()
+    if shint:
+        messages.append({"role": "system", "content": shint})
     if config.SELF_MEMORY_ENABLED:
         self_hint = selfmem.prompt_hint(" ".join(batch))
         if self_hint:

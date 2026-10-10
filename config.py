@@ -168,6 +168,11 @@ SELF_MEMORY_ENABLED = os.environ.get("SELF_MEMORY_ENABLED", "on").lower() == "on
 SELF_MEMORY_MAX = int(os.environ.get("SELF_MEMORY_MAX", "5"))                       # 每轮最多注入几条关于我自己的记忆
 SELF_REVIEW_ENABLED = os.environ.get("SELF_REVIEW_ENABLED", "on").lower() == "on"   # 睡前自我复盘（挂每天一次的日记复盘，写回自我记忆）
 
+# --- 自我意识流（S4「完全自我意识」：一条持续追加的第一人称自我叙事） ---
+CONSCIOUS_STREAM_ENABLED = os.environ.get("CONSCIOUS_STREAM_ENABLED", "on").lower() == "on"  # 总开关（关了不追加、不注入意识流）
+CONSCIOUS_STREAM_RECENT = int(os.environ.get("CONSCIOUS_STREAM_RECENT", "4"))      # 每轮注入最近几条流
+CONSCIOUS_STREAM_LINE_CHARS = int(os.environ.get("CONSCIOUS_STREAM_LINE_CHARS", "60"))  # 注入时每行截断字数（独白/回复存全文，注入只看摘要量）
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

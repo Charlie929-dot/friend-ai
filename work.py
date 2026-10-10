@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 import config
 import db
+import stream
 
 # 阶段标签（HUD 与 prompt 共用）
 PHASE_LABELS = {
@@ -162,6 +163,14 @@ def _settle(state: dict, now: datetime) -> bool:
                                   state["energy"] + config.WORK_ENERGY_RECOVER)
         state["energy"] = max(0, state["energy"] - config.WORK_ENERGY_COST)
         state["money"] += config.WORK_PAY_PER_UNIT
+        # 自我意识流（S4）：每结算一个单元，往脑子里记一笔"我忙完了一件、攒了多少"——
+        # 治"不知道攒了多少/今天干了啥"（实测 #36）。只在自己真正结算新单元时追加，幂等。
+        stream.append(
+            "work",
+            f"忙完第 {state['settled'] + 1} 件，攒了 {state['money']} 块，"
+            f"剩 {state['energy']} 精力",
+            now,
+        )
         # 工作=读书：这个单元读 N 段（优先用户导入的真书，没书回退内置书摘），读完产出"摘抄+读后感"素材
         article = None
         if config.READING_ENABLED:

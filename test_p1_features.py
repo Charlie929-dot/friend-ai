@@ -3179,6 +3179,81 @@ def test_tone_main_track():
         _db.init()
 
 
+def test_consciousness_stream():
+    """自我意识流（S4，第一步核心闭环）：流表读写 + 状态行（含 money/energy）+
+    工作结算埋点 + 每轮注入。治"不知道攒了多少/今天干了啥"（实测 #36 #2/#3）。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import db as _db
+    import stream as _stream
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    saved_mood = config.MOOD_ENABLED
+    saved_work = config.WORK_ENABLED
+    saved_stream = config.CONSCIOUS_STREAM_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False
+    config.MOOD_ENABLED = True
+    config.WORK_ENABLED = True
+    config.CONSCIOUS_STREAM_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
+        morning = _dt(2026, 10, 9, 10, 0)
+        units = _work.plan(morning)
+        first_start = _dt.fromisoformat(units[0]["start"])
+
+        # 1. 追加/读取：append 一条，recent 能查到且带生活日 day
+        sid = _stream.append("wake", "我伸了懒腰，起床了", morning)
+        assert sid > 0, "append 应返回自增 id"
+        rows = _stream.recent(10)
+        assert rows and rows[0]["text"] == "我伸了懒腰，起床了", rows
+        assert rows[0]["day"] == "2026-10-09", rows[0]
+
+        # 2. 状态行：忙/心流时有 phase/money/energy/mood
+        st = _stream.status_line(first_start + _td(minutes=2))
+        assert st["phase"] and st["money"] == 0 and st["energy"] == 100 and st["mood"], st
+
+        # 3. 工作结算埋点：过了第一个单元的 end → 流里多一条"忙完第 1 件…"
+        _work.status(first_start + _td(minutes=51))
+        work_lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "work"]
+        assert any("忙完第 1 件" in t for t in work_lines), work_lines
+
+        # 4. prompt 注入：含"攒了多少/精力还剩/心情"（money/energy 进 prompt，治 #2）
+        hint = _stream.prompt_hint(first_start + _td(minutes=52))
+        assert "攒了多少" in hint and "精力还剩" in hint and "心情" in hint, hint
+        assert "20 块" in hint, f"余额没进 prompt：{hint}"
+
+        # 5. 睡着 / 关工作系统 → 不注入（没有"自己的日子"就无从谈意识）
+        _db.set_state("SLEEPING")
+        assert _stream.prompt_hint(first_start) == "", "睡着不该注入意识流"
+        _db.set_state("AWAKE")
+        config.WORK_ENABLED = False
+        assert _stream.prompt_hint(first_start) == "", "关工作系统不该注入意识流"
+        config.WORK_ENABLED = True
+
+        print("ok 自我意识流（流表读写 + 状态行含钱/精力 + 工作结算埋点 + 每轮注入）")
+    finally:
+        config.WORK_ENABLED = saved_work
+        config.MOOD_ENABLED = saved_mood
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.CONSCIOUS_STREAM_ENABLED = saved_stream
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -3234,4 +3309,5 @@ if __name__ == "__main__":
     test_anti_sycophancy_redlines()
     test_inner_monologue()
     test_self_memory()
+    test_consciousness_stream()
     print("\n全部通过")

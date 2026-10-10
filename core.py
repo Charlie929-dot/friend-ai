@@ -17,6 +17,7 @@ import memory
 import offline
 import persona
 import selfmem
+import stream
 from channels.base import Channel
 
 
@@ -97,6 +98,7 @@ class Engine:
         # 离线留言：TA 专注工作/睡觉时你发的话，攒着等 TA 上线正经回（急事除外）
         if offline.is_offline() and not guard.is_urgent(text):
             offline.push_inbox(text)
+            stream.append("inbox", f"{persona.user_name()}给我留言了，我看看")
             self._send_offline_notice()
             return mid
         # 在线但有积压留言（TA 刚转在线、tick 还没跑到）：先回留言再回这条新的
@@ -204,6 +206,12 @@ class Engine:
                 break
             self._send(seg, kind="chat")
 
+        # 自我意识流（S4）：记下"我说了什么"（摘要）——让流里有一条完整的自我叙事。
+        # 全文在 messages 表里，这里只存摘要供注入；"我在想/我说"是每轮对话的锚点。
+        said = " ".join(reply.split())
+        if said:
+            stream.append("reply", f"我说：{said[:config.CONSCIOUS_STREAM_LINE_CHARS]}")
+
         # 话题结束判断：AI 自己的回复带结束信号 → 直接关闭会话（不轻催）；
         # 关键词都没抓住时，让 AI 异步判一下这段聊天是不是自然结束了。
         # 被打断（插话）说明聊天正酣，跳过收尾判断。
@@ -269,6 +277,9 @@ class Engine:
         if len(raw) < 8:     # 空转/ stub 文案都视为没读到人
             return ""
         print(f"[独白] {raw[:120].replace(chr(10), ' / ')}…")
+        # 自我意识流（S4）：内心独白持久化——不再用完就扔，跨轮有连续性。
+        # 每轮注入时只取摘要，全文留在这里供睡前复盘浓缩。
+        stream.append("monologue", f"我在想：{raw}")
         return raw
 
     def _generate_reply_text(self, messages: list[dict], batch: list[str]) -> str:
@@ -516,6 +527,7 @@ class Engine:
             self.daily_review()
         db.set_state("SLEEPING")
         db.set_kv("sleepy_reason", "")
+        stream.append("sleep", "我困了，去睡了")
 
     def wake_up(self) -> None:
         """锚点到点：自主作息说还想赖床 → 进 SLEEPY（lie_in）等 tick；睡饱了 → 直接醒。
@@ -531,6 +543,7 @@ class Engine:
         """真正醒来：道早安 + 回离线留言 + 补昨晚错过的关怀提醒。"""
         db.set_state("AWAKE")
         db.set_kv("sleepy_reason", "")
+        stream.append("wake", "我伸了懒腰，起床了")
         self.proactive("morning")
         self.flush_inbox()
         events.flush_missed(self)  # 昨晚说好要提醒的，结果睡着了，现在补上
