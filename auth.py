@@ -312,8 +312,10 @@ LOGIN_PAGE = """<!doctype html>
 </html>"""
 
 TOTP_FIELD = """<label for="t">动态口令</label>
-    <input type="text" id="t" name="totp" inputmode="numeric" pattern="[0-9]*"
-           maxlength="6" placeholder="6 位" autocomplete="one-time-code">"""
+    <div class="field">
+      <input type="text" id="t" name="totp" inputmode="numeric" pattern="[0-9]*"
+             maxlength="6" placeholder="6 位" autocomplete="one-time-code">
+    </div>"""
 
 
 def login_page(err: str = "") -> str:

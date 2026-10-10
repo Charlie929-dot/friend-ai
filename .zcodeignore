@@ -7,6 +7,7 @@ profile.md
 *.db-journal
 # 测试跑出来的临时目录（里面是临时 friend.db 等产物）
 tmp*/
+.test-tmp/
 backups/
 archive.log
 outbox.log

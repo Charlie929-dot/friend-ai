@@ -6,21 +6,21 @@
 
 ---
 
-## 一、改完代码必做（按顺序，缺一不可）
+## 一、改完并测试完代码必做（按顺序，缺一不可）
 
-| # | 做什么        | 具体位置                                               | 完成标准                              |
-| - | ---------- | -------------------------------------------------- | --------------------------------- |
-| 1 | **更新需求文档** | `docs/需求概要-朋友型AI.md`                               | 顶部加一条版本记录（v0.x 递增）+ 需求池对应条目状态变了要改 |
-| 2 | **补实测反馈**  | append 到 `docs/历史归档-版本与实测.md`，并在主文档「附：实测反馈索引」加一行   | 有实测发现/踩坑才写，纯重构可跳过                 |
-| 3 | **跑测试**    | `.venv/Scripts/python.exe test_p1_features.py`     | 全过，不允许留失败                         |
-| 4 | **提交推送**   | `git add -A && git commit && git push origin main` | commit message 用中文，一句说清改了什么       |
-| 5 | **同步服务器**  | `bash sync-to-server.sh`（见下方「服务器同步工作流」）        | 自检输出 HEAD=本机 commit、`GET /login -> 200` |
+| # | 做什么              | 具体位置                                               | 完成标准                                                          |
+| - | ---------------- | -------------------------------------------------- | ------------------------------------------------------------- |
+| 1 | **提交推送**         | `git add -A && git commit && git push origin main` | commit message 用中文，一句说清改了什么                                   |
+| 2 | **同步服务器**        | `bash sync-to-server.sh`（见下方「服务器同步工作流」）            | 自检输出 HEAD=本机 commit、`GET /login -> 200`                       |
+| 3 | **更新需求文档**       | `docs/需求概要-朋友型AI.md`                               | 顶部加一条版本记录（v0.x 递增）+ 需求池对应条目状态变了要改                             |
+| 4 | **补实测反馈**        | append 到 `docs/历史归档-版本与实测.md`，并在主文档「附：实测反馈索引」加一行   | 有实测发现/踩坑才写，纯重构可跳过                                             |
+| 5 | **更新 AGENTS.md** | 根目录 `AGENTS.md`                                    | 项目推进 → 同步「当前进度速查」；工作流变更 → 同步「改完并测试完代码必做」；新增/修改文件 → 同步「改了哪个文件」 |
 
 ---
 
 ## 〇、服务器同步工作流（自用阶段服务端跑服务器）
 
-用户已把服务端部署到自己的服务器（腾讯云 ubuntu@150.158.147.51，密钥 `~/.ssh/tunnel_key`，代码目录 `/opt/friend-ai`，systemd 服务 `friend-ai`，网页 https://derp.charlie2kabu.xyz:8443/）。**改完代码必须同步到服务器**，本机只留开发副本。
+用户已把服务端部署到自己的服务器（腾讯云 ubuntu@150.158.147.51，密钥 `~/.ssh/tunnel_key`，代码目录 `/opt/friend-ai`，systemd 服务 `friend-ai`，网页 <https://derp.charlie2kabu.xyz:8443/）。\\\*\\\*改完代码必须同步到服务器\\\*\\\*，本机只留开发副本。>
 
 - **同步命令**：`bash sync-to-server.sh`。流程 = ①检查未提交改动 → ②双推 GitHub+Gitee → ③服务器从 Gitee 拉 → ④装依赖+重启 → ⑤自检（HEAD + `GET /login`）。
 - ⚠️ **必须先加载令牌**：脚本要 `GH_TOKEN` / `GITEE_TOKEN`（在 `~/.bash_profile`）。非交互 shell 不自动 source，直接跑会「跳过双推」、服务器拉不到代码。所以完整命令是：
@@ -37,28 +37,39 @@
 
 ---
 
+
 ## 二、改了哪个文件 → 要同步哪里
 
-| 你改了                 | 必须同步                                                                                                                                                                                          |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `corpus.py`         | 只装**会扩充**的两类：①固定回复语 ②匹配用的关键词/正则。新增语料先写这里，再在业务模块 `from corpus import ...` 引用                                                                                                                   |
-| `memory.py`         | 工具描述/返回文案**就近在这里维护**，保持拟人化；**不进 corpus**（它不会扩充）。改工具文案时注意别动契约内核。`random_memory()` 只抽**关于用户**的记忆（person 含称呼/"对方"/"TA"）——别人的事不能安到用户头上（实测 #26），改过滤跑 `test_random_memory_about_user` |
-| `offline.py`        | 作息双语义别混（实测 #26/#27）：`today_wake_at`=「今天该几点起」（wake_up cron 用）、`next_wake_at`=「下次几点起」（UI 显示用）；起床缓存是 **`wake_days` 按日 dict**（不能改回单槽——夜里今天/明天会互相翻转抖动）；`tick` 语义：lie_in 过点醒 / stay_up 过点睡 / 深夜一律睡回去不被叫醒 / SLEEPING 按「今天起床点已过」兜底醒（错过 cron 别睡一整天）。改这里跑 `test_wake_semantics_and_tick` |
+| 你改了                 | 必须同步                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `corpus.py`         | 只装**会扩充**的两类：①固定回复语 ②匹配用的关键词/正则。新增语料先写这里，再在业务模块 `from corpus import ...` 引用                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `memory.py`         | 工具描述/返回文案**就近在这里维护**，保持拟人化；**不进 corpus**（它不会扩充）。改工具文案时注意别动契约内核。`random_memory()` 只抽**关于用户**的记忆（person 含称呼/"对方"/"TA"）——别人的事不能安到用户头上（实测 #26），改过滤跑 `test_random_memory_about_user`                                                                                                                                                                                                                                                                                                                                                    |
+| `offline.py`        | 作息双语义别混（实测 #26/#27）：`today_wake_at`=「今天该几点起」（wake_up cron 用）、`next_wake_at`=「下次几点起」（UI 显示用）；起床缓存是 **`wake_days` 按日 dict**（不能改回单槽——夜里今天/明天会互相翻转抖动）；`tick` 语义：lie_in 过点醒 / stay_up 过点睡 / 深夜一律睡回去不被叫醒 / SLEEPING 按「今天起床点已过」兜底醒（错过 cron 别睡一整天）。改这里跑 `test_wake_semantics_and_tick`                                                                                                                                                                                                                                                     |
 | `work.py`           | 工作状态是**打断成本 / HUD 的数据源**（`status()/hud()`）。**醒来才排班**（实测 #26）：`_state` 只在"过了实际起床点且非 SLEEPING"才排，没醒 plan 空、进度不涨；赖床晚起 = 少做几件（班不排进被窝）。**工作=读书**：每单元结算时调 `reading.next_article()` 读一篇、产出"摘抄+读后感"素材。**工作内容要注入 prompt**（实测 #28）：`prompt_hint` 在忙/心流相位追加 `_current_reading()`（优先用户书库、退回内置书摘）——不注入 TA 就不知道在读什么书、被问只会含糊回避瞎编"文献"。改排班/结算/素材生成跑 `test_work_system` + `test_lazy_work_plan` + `test_work_content_injection`；状态文案遵守「代价只呈现不归因」红线；**内部 prompt 一律用 `persona.core_identity_prompt()`**，别调 `build_system_prompt`（会与状态注入互相递归爆栈，见实测 #17） |
-| `reading.py`        | **工作=读书的内置内容源**：内置真实书摘/短文（公版经典，6 大阅读偏好分类），`next_article()` 按人格 `reading_pref` 优先、顺序推进、进度持久化（kv）、一轮读完循环。加素材往里加 dict 即可（`genre/title/source/text/quote`）；改偏好字段去 `persona_pool.py` 的人格卡。**`library.py`（用户书库）优先于它**：work._settle 先 `library.next_passage()`、返回 None 才回退这里 |
-| `library.py`        | **用户书库（真实电子书）**：扫 `books/` 目录解析 txt（多编码）/ epub（标准库 zipfile 剥 HTML），第一层子目录名=genre；`next_passage(n)` 一次读 n 段（`WORK_READ_PER_UNIT` 控制每单元读几段，默认 50），返回与 `reading.next_article` 同构的 `{genre,title,source,quote,text}`，段级进度持久化。纯本地、不联网、合规。改解析/提速逻辑跑 `test_user_library`；加书直接丢文件 + `/refresh` |
-| `events.py`         | 关怀事件（S4）：承诺/约定 → 到点提醒（醒着发、睡着醒来补、过期 >24h 错过）。数据在 `kv.care_events`（按朋友隔离）；提取入口在 `memory.py` 的 `care` 字段 → `_apply` 里转交 `events.add_care`。改触发/状态逻辑跑 `test_care_events`；提醒话术走 `core.care_remind`（单次 LLM 调用，用 `build_system_prompt` 不会递归） |
-| `cost.py`           | 打断成本（S3 招牌）：`costIndex = R×(1+F)` 三态。R 来自 phase/flow 阻力、F 来自精力疲劳；改公式/阈值跑 `test_interruption_cost`；语态文案（`LEVEL_HINTS`/`LEVEL_BADGE`）不能踩「代价只呈现不归因」红线 |
-| `mood.py`           | 情绪状态（10-09 解冻）：心情由它自己的生活推（工作状态+精力+时段），**≠ phase、≠ 打断成本**。改映射跑 `test_mood`；三条红线照做——不围绕任何人转、不改稳定人格、语态只描述自己（不归因） |
-| `config.py`         | 新增行为参数必须有默认值 + `.env` 可覆盖（`/refresh` 热重载生效）；`.env.example` 同步                                                                                                                                 |
-| `persona.py`        | 对用户的称呼一律走 `persona.user_name()`，**不要写死任何用户名**                                                                                                                                                 |
-| `context.py`        | 上下文组装的优先级是**便签 > profile > 记忆 > 聊天上下文**，别打乱。主动消息（`build_proactive_messages`）必须注入最近聊天 + 「别说好久没聊」规则（实测 #26 瞎编开场）；random 场景**翻素材当话题**（`_inject_random_topic` → `work.take_shareable()`，实测 #28 素材攒着不聊）。改这里跑 `test_proactive_context_injection` + `test_material_share_injection` |
-| `db.py`             | 每个朋友一份独立 `friend-<id>.db`，配置/记忆天然隔离；加表要考虑旧库迁移                                                                                                                                                 |
-| 新增行为接口（MCP/工具）      | 遵守**工具拟人化** + **两层分离**（见下）；并在需求池 F 自主模块更新状态                                                                                                                                                   |
-| `channels/*`        | 通道层是适配器，新通道要对齐 base；当前自用阶段主载体是**网页端 Web UI**，CLI 保留调试                                                                                                                                         |
-| `webui.py` / `web/` | 网页端（自用阶段主载体）。**与 CLI 同一份 db**，别另起一套存储；HUD 数据源是 `work.status()`，不是前端自己算；命令输出经 `/api/send` 回给浏览器（普通消息的回复由引擎后台线程写库、前端轮询拿到）。**`/api/send` 必须返回消息 id**（前端回显后推进轮询游标，否则发送双发，实测 #25）。账号管理：`/account` 改密码/TOTP，凭据以 `.env` 为唯一真相（`auth.write_env` 写回 + `_refresh` 热生效，别另起存储）；改密后必轮换 `WEB_AUTH_SESSION_SECRET`。⚠️ **`/api/state` 返回的 `materials` 是顶层字段**，前端 `renderState` 要读 `s.materials`（不是 `s.work.materials`）——读错层级 HUD 素材数永远 0（实测 #28）。改账号逻辑跑 `test_account_management` |
-| `daemon.py`         | 常驻守护：拉 `main.py web`，退了隔 5 秒重拉，`web.stop` 存在才真停。改这里要确认：用 `pythonw.exe` 跑（无窗口）、子进程带 `CREATE_NO_WINDOW`（不闪黑框）、日志追写到 `logs/web.log`                                                              |
-| `autostart.py`      | 开机自启：计划任务（PowerShell ScheduledTasks cmdlet）优先，兜底「启动」文件夹。**不要用 `schtasks.exe`**（部分终端里不可用）；**不要用 `os.kill(pid, 0)` 探活**（Windows 上等于 `TerminateProcess`）                                         |
+| `reading.py`        | **工作=读书的内置内容源**：内置真实书摘/短文（公版经典，6 大阅读偏好分类），`next_article()` 按人格 `reading_pref` 优先、顺序推进、进度持久化（kv）、一轮读完循环。加素材往里加 dict 即可（`genre/title/source/text/quote`）；改偏好字段去 `persona_pool.py` 的人格卡。**`library.py`（用户书库）优先于它**：work.\_settle 先 `library.next_passage()`、返回 None 才回退这里                                                                                                                                                                                                                                                             |
+| `library.py`        | **用户书库（真实电子书）**：扫 `books/` 目录解析 txt（多编码）/ epub（标准库 zipfile 剥 HTML），第一层子目录名=genre；`next_passage(n)` 一次读 n 段（`WORK_READ_PER_UNIT` 控制每单元读几段，默认 50），返回与 `reading.next_article` 同构的 `{genre,title,source,quote,text}`，段级进度持久化。纯本地、不联网、合规。改解析/提速逻辑跑 `test_user_library`；加书直接丢文件 + `/refresh`                                                                                                                                                                                                                                             |
+| `events.py`         | 关怀事件（S4）：承诺/约定 → 到点提醒（醒着发、睡着醒来补、过期 >24h 错过）。数据在 `kv.care_events`（按朋友隔离）；提取入口在 `memory.py` 的 `care` 字段 → `_apply` 里转交 `events.add_care`。改触发/状态逻辑跑 `test_care_events`；提醒话术走 `core.care_remind`（单次 LLM 调用，用 `build_system_prompt` 不会递归）                                                                                                                                                                                                                                                                                               |
+| `cost.py`           | 打断成本（S3 招牌）：`costIndex = R×(1+F)` 三态。R 来自 phase/flow 阻力、F 来自精力疲劳；改公式/阈值跑 `test_interruption_cost`；语态文案（`LEVEL_HINTS`/`LEVEL_BADGE`）不能踩「代价只呈现不归因」红线                                                                                                                                                                                                                                                                                                                                                                                 |
+| `mood.py`           | 情绪状态（10-09 解冻）：心情由它自己的生活推（工作状态+精力+时段），**≠ phase、≠ 打断成本**。改映射跑 `test_mood`；三条红线照做——不围绕任何人转、不改稳定人格、语态只描述自己（不归因）                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `config.py`         | 新增行为参数必须有默认值 + `.env` 可覆盖（`/refresh` 热重载生效）；`.env.example` 同步                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `persona.py`        | 对用户的称呼一律走 `persona.user_name()`，**不要写死任何用户名**                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `context.py`        | 上下文组装的优先级是**便签 > profile > 记忆 > 聊天上下文**，别打乱。主动消息（`build_proactive_messages`）必须注入最近聊天 + 「别说好久没聊」规则（实测 #26 瞎编开场）；random 场景**翻素材当话题**（`_inject_random_topic` → `work.take_shareable()`，实测 #28 素材攒着不聊）。改这里跑 `test_proactive_context_injection` + `test_material_share_injection`                                                                                                                                                                                                                                                       |
+| `db.py`             | 每个朋友一份独立 `friend-<id>.db`，配置/记忆天然隔离；加表要考虑旧库迁移                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 新增行为接口（MCP/工具）      | 遵守**工具拟人化** + **两层分离**（见下）；并在需求池 F 自主模块更新状态                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `channels/*`        | 通道层是适配器，新通道要对齐 base；当前自用阶段主载体是**网页端 Web UI**，CLI 保留调试                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `webui.py` / `web/` | 网页端（自用阶段主载体）。文件：`web/index.html`（聊天页）、`web/account.html`（账号管理页）、`web/qr.js`（内嵌开源 QR 生成库，MIT）。**与 CLI 同一份 db**，别另起一套存储；HUD 数据源是 `work.status()`，不是前端自己算；命令输出经 `/api/send` 回给浏览器（普通消息的回复由引擎后台线程写库、前端轮询拿到）。**`/api/send` 必须返回消息 id**（前端回显后推进轮询游标，否则发送双发，实测 #25）。账号管理：`/account` 改密码/TOTP，凭据以 `.env` 为唯一真相（`auth.write_env` 写回 + `_refresh` 热生效，别另起存储）；改密后必轮换 `WEB_AUTH_SESSION_SECRET`。⚠️ **`/api/state` 返回的 `materials` 是顶层字段**，前端 `renderState` 要读 `s.materials`（不是 `s.work.materials`）——读错层级 HUD 素材数永远 0（实测 #28）。改账号逻辑跑 `test_account_management`                                                                  |
+| `daemon.py`         | 常驻守护：拉 `main.py web`，退了隔 5 秒重拉，`web.stop` 存在才真停。改这里要确认：用 `pythonw.exe` 跑（无窗口）、子进程带 `CREATE_NO_WINDOW`（不闪黑框）、日志追写到 `logs/web.log`                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `autostart.py`      | 开机自启：计划任务（PowerShell ScheduledTasks cmdlet）优先，兜底「启动」文件夹。**不要用 `schtasks.exe`**（部分终端里不可用）；**不要用 `os.kill(pid, 0)` 探活**（Windows 上等于 `TerminateProcess`）                                                                                                                                                                                                                                                                                                                                                                              |
+| `auth.py` / `auth_setup.py` / `reset_auth.py` | **登录与账号凭据**（密码 + TOTP 动态口令，标准库实现 RFC 6238）。凭据唯一真相是 `.env`（`WEB_AUTH_*`）：网页改密码/重绑 TOTP 走 `auth.write_env` 写回 + `_refresh()` **热生效**（不重启）；改密后必 `rotate_session_secret()` 让旧 cookie 全失效。⚠️ 登录页 `LOGIN_PAGE` 是 **`%` 格式化字符串**——CSS/内联里的裸 `%`（如 `width:100%`）**必须写成 `%%`**，否则 `/login` 渲染崩 502（实测 #26 后续坑）。`auth_setup.py`=首次配置向导、`reset_auth.py`=服务器改密/全换凭据。改账号逻辑跑 `test_account_management` |
+| `main.py` / `core.py` | `main.py`=入口（`web`/`cli`/`server`/`telegram`/`autostart`）；`core.py`=**核心引擎**（收发消息业务逻辑，与通道解耦；消息落库、状态机、主动消息调度都在这）。⚠️ `on_user_message` **必须返回消息落库 id**（网页端靠它推进轮询游标，实测 #25）；状态注入别与 `build_system_prompt` 成环（硬性约定 #6）。改消息流跑相关测试 |
+| `scheduler.py` | **定时调度**（apscheduler）：问候 / 随机话题 / 作息切换 cron，醒着时段**跟随人格作息**（夜猫子别在它睡觉时发）。改触发时刻注意与 `offline.py` 作息语义保持一致 |
+| `commands.py` | **斜杠命令**（`/help /status /friend /persona ...`）+ **归档**（`_archives()` 是"第几位朋友"编号的唯一真相；归档写根目录 `archive.log`）。加/改命令要同步 `/help` 文案；归档文件用稳定 `friend_id` 命名，别再带时间戳（V2） |
+| `persona_pool.py` | **人格池**：`/new-friend` 随机抽一张人格卡（预设骨架 + 随机细节），含作息/冒泡倍率/**阅读偏好**等行为参数，存各库 `kv.persona_json`。加/改人格只动这里，通用相处规则在 `persona.COMMON_RULES` |
+| `diary.py` | **日记 + 每日回顾**（睡前一次）：读当日对话 → LLM 复盘 → 写第一人称日记 → 补记/提议删记忆。回顾线默认不删（开关 `PURGE_REVIEWED_MESSAGES`）。日记是 TA 自己的生活，**不围绕用户特殊化**（宗旨） |
+| `guard.py` | **主动消息刹车**：紧急信号识别（`is_urgent`，词表在 `corpus.URGENT_QUERY`）+ 打断/连续未回复抑制。紧急通道是打断成本的安全阀，别削弱 |
+| `game.py` | **娱乐模式**（成语接龙/海龟汤）：轻量状态机（只记"在玩啥/何时开始"，存 kv）+ 规则写进 prompt 由 LLM 陪玩；游戏进行中 `guard` 拦一切主动消息。加游戏 = 加状态机分支 + prompt 规则 |
+| `llm.py` | **DeepSeek 对话引擎**（无 key 降级 stub）。改请求/模型/温度只动这里；后台调用一律用 `persona.core_identity_prompt()`（硬性约定 #6） |
+| 运维脚本 / 配置文件 | `sync-to-server.sh`（同步服务器，用法见「〇」节）、`deploy.sh`（服务器一键拉代码+重启+自检）、`migrate_archives.py`（一次性归档迁移，删文件前先验证+备份）、`reset_auth.py`（服务器改密，见 auth 行）。⚠️ **shell 脚本必须 LF 换行**（`.gitattributes` 已锁定；CRLF 会让 Git Bash 报 bad interpreter）。`.zcodeignore`=隐私忽略规则，与 `.gitignore` 对齐维护 |
 
 ---
 
@@ -75,17 +86,18 @@
 8. **注册计划任务别用 `schtasks.exe`** —— 部分终端（含受限会话）里它连 `/query` 都返回 "The system cannot find the path specified"。统一走 `autostart._ps()`（PowerShell 的 `ScheduledTasks` cmdlet）。
 9. **profile 自动填写要留痕、稳定字段不静默覆盖** —— AI 自动填 profile 字段时，上下文证据存 **B 库**（`long_memories`），**A 库记忆挂 `long_id` 链接**；`/profile why <字段>` 看证据原文。**稳定字段**（`memory.STABLE_PROFILE_FIELDS`：作息/生日/城市/称呼等身份级）遇到与旧值冲突的新说法**不静默覆盖**，标 `pending` 待用户确认（`/profile pending/accept/reject`），并由 `persona._pending_profile_hint()` 注入提示让 AI 主动跟用户核实（实测 #21）。可变字段（在忙的事等）可照旧更新。
 10. **测试必须与"现在几点"解耦**（实测 #27 的教训）—— fresh DB 在工作时段必然判"离线专注"（消息进 inbox 不回话），所以：测 Engine 交互（打字/插话）的用例先 `config.WORK_ENABLED = False`（finally 恢复）；用锚点时刻断言排班的用例预置 `rest_schedule`（wake 早于锚点）与随机浮动解耦；手工构造 `work_state` fixture 必须带 `"planned": 1`（缺了会被新逻辑当"没排过班"重排覆盖）。
+11. **测试临时产物不许落项目根** —— 测试统一走 `test_p1_features.py` 顶部的 `_TEST_TMP_ROOT`（固定目录 `.test-tmp/`，已 gitignore、**启动即清 + 退出清**双保险）；**别再裸用 `tempfile.mkdtemp()` 当根目录**——某些环境 `%TEMP%` 不可写会回退到**当前工作目录**，跑几次就在项目根撒一地 `tmpXXXX`（历史债：曾攒到 1100+ 个 / 56MB）。
 
 ---
 
 ## 五、当前进度速查
 
-| 阶段            | 主题        | 状态          |
-| ------------- | --------- | ----------- |
-| S1 能聊         | 先跑起来      | ✅ 已收官       |
-| S2 像人         | 说话像、记得住   | ✅ 已收官       |
-| **S3 有自己的生活** | 它有边界、有日子过 | ✅ 已收尾 |
+| 阶段            | 主题        | 状态              |
+| ------------- | --------- | --------------- |
+| S1 能聊         | 先跑起来      | ✅ 已收官           |
+| S2 像人         | 说话像、记得住   | ✅ 已收官           |
+| **S3 有自己的生活** | 它有边界、有日子过 | ✅ 已收尾           |
 | S4 越来越懂你      | 召回准、会关心   | 🔵 进行中（先做了承诺提醒） |
-| S5 底线与边界      | 合规护栏      | ⏸ 自用阶段暂缓    |
+| S5 底线与边界      | 合规护栏      | ⏸ 自用阶段暂缓        |
 
 **S3 建议顺序**：①✅ 紧急联系触发语义 → ②✅ 工作系统（阅读系统，`reading.py` 素材库 + `work.py` 读一篇产素材）→ ③✅ 打断成本 + HUD（含心情维度）→ ④✅ 对话中主动延续（人设 prompt 引导）→ ⑤✅ 休眠完整版（离线留言 inbox + 离线=工作专注 + 作息自主，`offline.py`）。**S3 主线收尾**。S4 已先做「承诺/约定记忆 + 关怀提醒」（`events.py`，源自 bug 反馈），下一步 **S4 首位：语义化召回**（本地向量）；并与**网页端 Web UI** 并行推进。

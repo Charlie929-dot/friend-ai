@@ -16,6 +16,21 @@ import commands
 import config
 import persona
 
+import atexit
+import shutil
+import tempfile
+
+# 测试临时目录统一收口到一个**固定目录**，跑完尽量清、下次跑先清（双保险）。
+# 背景：某些环境（如 WorkBuddy 沙箱）%TEMP% 不可写，tempfile 会回退到**当前工作目录**，
+# 于是一次测试跑完就在项目根撒一堆 tmpXXXX（历史债：曾攒到 1100+ 个、56MB）。
+# 之所以不用 mkdtemp 做根目录：Windows 上 sqlite 文件句柄在解释器退出时可能还没释放，
+# atexit 的 rmtree 会因文件锁清不干净；固定目录 + "启动即清"能自愈上次残留。
+_TEST_TMP_ROOT = Path(__file__).resolve().parent / ".test-tmp"
+shutil.rmtree(_TEST_TMP_ROOT, ignore_errors=True)
+_TEST_TMP_ROOT.mkdir(parents=True, exist_ok=True)
+tempfile.tempdir = str(_TEST_TMP_ROOT)
+atexit.register(lambda: shutil.rmtree(_TEST_TMP_ROOT, ignore_errors=True))
+
 TS_RE = re.compile(r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
 
 # 时间模拟（阅读/打字/发送间隔）的测试用快档：压到毫秒级，别把测试拖慢
