@@ -243,6 +243,54 @@
 
 ---
 
+## 七、公开化注意事项（后续推广前必读，2026-10-10 整理）
+
+### 7.0 仓库现状（已知悉，不做处理）
+
+- **git 历史所有 commit 的作者邮箱是 `3507064161@qq.com`（QQ 邮箱）**。公开仓库的 commit 邮箱任何人可见，理论上可通过 QQ 号关联真实身份。
+- **已评估，决定不隐藏**（10-10）：QQ 基本停用、好友验证严格（仅二维码/名片可加）、主要用途是学校群聊，风险可控。不强制改写历史。
+- 若未来改变主意：用 `git filter-repo` 把全历史邮箱重写为 GitHub noreply 邮箱，再 force push。改完记得 `git config user.email` 设置 noreply。
+
+### 7.1 推广前必须做（硬性）
+
+1. **加 LICENSE**——没有协议法律上别人不敢用。个人项目推荐 **MIT**（最宽松）或 **GPL-3.0**（要求衍生品也开源）
+2. **README 重写**：现在是 24KB 需求文档，推广版应该是「是什么 → 为什么特别 → 截图 → 快速上手 → 架构 → License」。**第一行放核心卖点：AI 有精力值、会困、会自己睡觉、不是被动应答的客服**。原需求文档移到 `docs/design.md` 保留
+3. **补 `.env.example`**：WEB_AUTH_PASS_HASH / WEB_AUTH_TOTP_SECRET / WEB_AUTH_SESSION_SECRET / WEB_AUTH_COOKIE_SECURE 等公网部署配置没补，别人照配会踩坑
+4. **截图**：网页端 + CLI 各一张放 README
+5. **`profile.md` 抽成示例配置**：人格描述里若硬编码"小葵"细节，别人想自定义不方便 → 抽 `profile.example.md`
+
+### 7.2 加分项（有精力再做）
+
+- CONTRIBUTING.md + issue/PR 模板
+- pytest 测试（`auth.py` 的 TOTP 已有验证思路可正式化）
+- GitHub Actions CI（跑测试 + lint）
+- 英文 README
+
+### 7.3 卖点提醒
+
+**数据隐私是差异化**：所有聊天记录存本地 SQLite，不上传任何东西。AI companion 用户对"对话记录去哪了"极度敏感，README 里值得专门写一节「数据永远只在你自己机器上」。
+
+### 7.4 Gitee 双仓库方案（10-10 决策）
+
+- **动机**：服务器（腾讯云，150.158.147.51）直连 GitHub 极不稳定（实测连续超时 134s），拉不动代码
+- **方案**：同时维护 GitHub + Gitee 两个 remote；**服务器从 Gitee pull**（国内秒连），GitHub 作为对外展示/备份
+- **本机 push 时双推**：`git push origin main && git push gitee main`，或配置 push 到所有 remote
+- **Gitee 不需要服务器直连 GitHub** —— 这是此方案的核心收益
+- 实施步骤（待做，见 7.5）：建 Gitee 仓库 → 加 remote → 改 sync 脚本支持双推 → 服务器 remote 换 Gitee
+
+### 7.5 待办（公开化实施清单）
+
+- [ ] Gitee 建仓库 + 配置双 remote
+- [ ] 服务器 remote 切换为 Gitee
+- [ ] sync-to-server.sh 支持双推
+- [ ] LICENSE
+- [ ] README 重写（保留原文档为 docs/design.md）
+- [ ] .env.example 补全
+- [ ] 截图
+- [ ] profile 抽示例配置
+
+---
+
 ## 附：实测反馈索引
 
 | # | 日期 | 主题 |
