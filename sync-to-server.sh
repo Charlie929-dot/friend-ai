@@ -1,6 +1,9 @@
 #!/bin/bash
 # 把本机已提交的代码同步到公网服务器。
-# 走 SSH 直传 git bundle，不依赖服务器访问 GitHub（服务器直连 GitHub 经常超时）。
+#
+# 两条路径，自动选：
+#   A. 服务器从 Gitee 拉（国内秒连，首选）—— 所以要先双推到 GitHub + Gitee
+#   B. Gitee 拉失败时，退回 SSH 直传 git bundle（完全不依赖外网）
 #
 # 用法：在本机 Git Bash 里执行   bash sync-to-server.sh
 # 前提：改动已经 commit 到 main 分支（未提交的改动不会被同步）
@@ -13,9 +16,13 @@ REMOTE_DIR="/opt/friend-ai"
 BUNDLE="/tmp/friend-ai.bundle"
 SSHOPT="-i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
+# 凭据从环境变量读，避免写死在脚本里（被公开就麻烦了）
+GH_TOKEN="${GH_TOKEN:-}"
+GITEE_TOKEN="${GITEE_TOKEN:-}"
+
 cd "$REPO"
 
-echo "== 1/4 检查未提交的改动 =="
+echo "== 1/5 检查未提交的改动 =="
 DIRTY="$(git status --porcelain)"
 if [ -n "$DIRTY" ]; then
   echo "以下改动还没提交，不会被同步："
@@ -24,23 +31,46 @@ if [ -n "$DIRTY" ]; then
 fi
 echo "本机 HEAD: $(git log --oneline -1)"
 
-echo "== 2/4 打包 =="
-rm -f "$BUNDLE"
-git bundle create "$BUNDLE" main >/dev/null
-ls -lh "$BUNDLE" | awk '{print "bundle 大小:", $5}'
+echo "== 2/5 推送到 GitHub + Gitee =="
+if [ -n "$GH_TOKEN" ]; then
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 \
+  git -c http.proxy=http://127.0.0.1:7897 push \
+    "https://Charlie929-dot:${GH_TOKEN}@github.com/Charlie929-dot/friend-ai.git" main 2>&1 | tail -2
+else
+  echo "跳过 GitHub（未设 GH_TOKEN，如：export GH_TOKEN=ghp_xxx）"
+fi
+if [ -n "$GITEE_TOKEN" ]; then
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 \
+  git push "https://Charlie929-dot:${GITEE_TOKEN}@gitee.com/Charlie929-dot/friend-ai.git" main 2>&1 | tail -2
+else
+  echo "跳过 Gitee（未设 GITEE_TOKEN，如：export GITEE_TOKEN=xxx）"
+fi
 
-echo "== 3/4 上传 =="
-scp $SSHOPT "$BUNDLE" "$HOST:/tmp/"
+echo "== 3/5 服务器从 Gitee 拉取 =="
+PULL_OK=1
+ssh $SSHOPT "$HOST" "cd $REMOTE_DIR && git checkout -- . 2>/dev/null; git pull --ff-only gitee main 2>&1 | tail -3" || PULL_OK=0
 
-echo "== 4/4 服务器端应用并重启 =="
+if [ "$PULL_OK" != "1" ]; then
+  echo "Gitee 拉取失败，退回 SSH 直传 bundle"
+  echo "== 3b 打包上传 =="
+  rm -f "$BUNDLE"
+  git bundle create "$BUNDLE" main >/dev/null
+  scp $SSHOPT "$BUNDLE" "$HOST:/tmp/"
+  ssh $SSHOPT "$HOST" "cd $REMOTE_DIR && git pull /tmp/friend-ai.bundle main 2>&1 | tail -3"
+fi
+
+echo "== 4/5 装依赖 + 重启 =="
 ssh $SSHOPT "$HOST" "
   cd $REMOTE_DIR
-  git checkout -- . 2>/dev/null || true
-  git pull /tmp/friend-ai.bundle main 2>&1 | tail -3
   .venv/bin/pip install -q -r requirements.txt 2>&1 | tail -2 || true
   sudo systemctl restart friend-ai
+"
+
+echo "== 5/5 自检 =="
+ssh $SSHOPT "$HOST" "
   sleep 5
   echo -n '服务状态: '; systemctl is-active friend-ai
+  echo -n 'HEAD: '; git -C $REMOTE_DIR log --oneline -1
   curl -s -o /dev/null -w 'GET /login -> %{http_code}\n' -k --max-time 8 \
     --resolve derp.charlie2kabu.xyz:8443:127.0.0.1 \
     https://derp.charlie2kabu.xyz:8443/login
