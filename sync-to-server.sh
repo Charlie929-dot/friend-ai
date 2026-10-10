@@ -59,22 +59,27 @@ if [ "$PULL_OK" != "1" ]; then
   ssh $SSHOPT "$HOST" "cd $REMOTE_DIR && git pull /tmp/friend-ai.bundle main 2>&1 | tail -3"
 fi
 
-echo "== 4/5 装依赖 + 下载 embedding 模型 + 重启 =="
+echo "== 4/5 装依赖 + 同步 embedding 模型 + 重启 =="
 ssh $SSHOPT "$HOST" "
   cd $REMOTE_DIR
   .venv/bin/pip install -q -r requirements.txt 2>&1 | tail -2 || true
-  # 语义召回模型（bge-small-zh-v1.5 ONNX，约 100MB）不进 git，首次同步时下载
-  if [ ! -f models/bge-small-zh-v1.5/model.onnx ]; then
-    mkdir -p models/bge-small-zh-v1.5
-    curl -sL -o models/bge-small-zh-v1.5/model.onnx https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model.onnx
-    curl -sL -o models/bge-small-zh-v1.5/config.json https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/config.json
-    curl -sL -o models/bge-small-zh-v1.5/tokenizer.json https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/tokenizer.json
-    echo 'embedding 模型已下载'
-  else
-    echo 'embedding 模型已存在，跳过下载'
-  fi
-  sudo systemctl restart friend-ai
+  mkdir -p models/bge-small-zh-v1.5
 "
+# 语义召回模型（bge-small-zh-v1.5 ONNX，约 100MB）不进 git。
+# ⚠️ 服务器（腾讯云）连 hf-mirror 不通（curl 超时），所以不走"服务器自己下载"，
+# 改从本机 scp 直传（本机 models/ 已下好；没有就先在本机跑 download 一步）。
+if ssh $SSHOPT "$HOST" "test -f $REMOTE_DIR/models/bge-small-zh-v1.5/model.onnx"; then
+  echo 'embedding 模型已存在，跳过上传'
+else
+  echo '上传 embedding 模型（scp 直传）…'
+  scp $SSHOPT \
+    "$REPO/models/bge-small-zh-v1.5/model.onnx" \
+    "$REPO/models/bge-small-zh-v1.5/config.json" \
+    "$REPO/models/bge-small-zh-v1.5/tokenizer.json" \
+    "$REPO/models/bge-small-zh-v1.5/vocab.txt" \
+    "$HOST:$REMOTE_DIR/models/bge-small-zh-v1.5/"
+fi
+ssh $SSHOPT "$HOST" "sudo systemctl restart friend-ai"
 
 echo "== 5/5 自检 =="
 ssh $SSHOPT "$HOST" "
