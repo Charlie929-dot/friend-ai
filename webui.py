@@ -170,15 +170,24 @@ def _make_handler(channel: WebChannel, on_message):
         # --- 登录（公网部署时才启用；本机 WEB_AUTH_ENABLED 默认 off，不受影响）---
         def _do_login(self):
             ip = self.client_address[0]
+            ctype = self.headers.get("Content-Type") or ""
+            # 登录页是纯 HTML 表单；前端 fetch 才是 JSON。两种返回形式不同：
+            # 表单 -> 成功 303 跳转 / 失败直接重渲染登录页；JSON -> 保持 JSON 语义。
+            wants_json = ("json" in ctype) or (
+                "json" in (self.headers.get("Accept") or ""))
             if auth.locked(ip):
-                self._json({"error": "试错太多次，10 分钟后再来"}, 429)
+                msg = "试错太多次，10 分钟后再来"
+                if wants_json:
+                    self._json({"error": msg}, 429)
+                else:
+                    self._send_body(auth.login_page(msg).encode("utf-8"),
+                                    "text/html; charset=utf-8")
                 return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 n = 0
             raw = self.rfile.read(n) if n > 0 else b""
-            ctype = self.headers.get("Content-Type") or ""
             data = {}
             if "json" in ctype:
                 try:
@@ -193,22 +202,38 @@ def _make_handler(channel: WebChannel, on_message):
             code = re.sub(r"\D", "", data.get("totp") or "")
             if not auth.verify_password(pw):
                 auth.note_failure(ip)
-                self._json({"error": "密码不对（注意大小写，别带空格）"}, 401)
-                return
-            if auth.totp_enabled() and not auth.verify_totp(code):
+                msg = "密码不对（注意大小写，别带空格）"
+            elif auth.totp_enabled() and not auth.verify_totp(code):
                 auth.note_failure(ip)
-                self._json({"error": "动态口令不对（检查手机时间是否自动同步）"}, 401)
+                msg = "动态口令不对（检查手机时间是否自动同步）"
+            else:
+                msg = ""
+            if msg:
+                if wants_json:
+                    self._json({"error": msg}, 401)
+                else:
+                    self._send_body(auth.login_page(msg).encode("utf-8"),
+                                    "text/html; charset=utf-8")
                 return
+
             auth.note_success(ip)
             remember = str(data.get("remember", "")).lower() in ("1", "on", "true")
             days = 30 if remember else 1
-            body = json.dumps({"ok": True}).encode("utf-8")
-            self.send_response(200)
+            if wants_json:
+                body = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+            else:
+                # 303：让浏览器把 POST 转成 GET，否则表单提交后会停在空白/JSON 页
+                body = b""
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
             self.send_header("Set-Cookie", auth.cookie_header(days))
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if body:
+                self.wfile.write(body)
 
         # --- 页面 ---
         def do_GET(self):
