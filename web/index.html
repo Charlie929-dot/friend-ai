@@ -625,7 +625,6 @@ $('btnNew').onclick=async()=>{
   resetChat(); panelDone('抽新朋友',r.reply||r.error); await loadFriends(); poll(); closeDrawer('L');
 };
 $('pClear').onclick=()=>panelDone('输出','点上面任意一项，结果会显示在这里。');
-$('btnRestart').onclick=()=>restartService();
 $('btnRestart2').onclick=()=>restartService();
 async function restartService(){
   if(!confirm('重启服务？守护会自动拉起新进程，几秒后回来。')) return;
