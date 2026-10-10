@@ -1,0 +1,2 @@
+# shell 脚本必须 LF：CRLF 会让 #!/bin/bash\r 找不到解释器，Git Bash 直接跑不起来
+*.sh text eol=lf
