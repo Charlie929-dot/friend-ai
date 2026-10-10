@@ -11,6 +11,7 @@
 """
 import json
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -187,12 +188,16 @@ def _make_handler(channel: WebChannel, on_message):
             else:   # 登录页用的是普通表单
                 data = {k: v[0] for k, v in
                         parse_qs(raw.decode("utf-8", "replace")).items()}
-            ok = auth.verify_password(data.get("password", ""))
-            if ok and auth.totp_enabled():
-                ok = auth.verify_totp(data.get("totp", ""))
-            if not ok:
+            # 容错：复制粘贴常带首尾空格/换行；验证器 App 有时显示成 "123 456"
+            pw = (data.get("password") or "").strip()
+            code = re.sub(r"\D", "", data.get("totp") or "")
+            if not auth.verify_password(pw):
                 auth.note_failure(ip)
-                self._json({"error": "密码或动态口令不对"}, 401)
+                self._json({"error": "密码不对（注意大小写，别带空格）"}, 401)
+                return
+            if auth.totp_enabled() and not auth.verify_totp(code):
+                auth.note_failure(ip)
+                self._json({"error": "动态口令不对（检查手机时间是否自动同步）"}, 401)
                 return
             auth.note_success(ip)
             remember = str(data.get("remember", "")).lower() in ("1", "on", "true")
