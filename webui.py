@@ -278,6 +278,24 @@ def _make_handler(channel: WebChannel, on_message):
                 rows = db.messages_page(after, 200)
                 self._json({"messages": rows,
                             "last_id": rows[-1]["id"] if rows else after})
+            elif u.path == "/api/stream":
+                # 意识流（S4「完全自我意识」）：TA 脑子里那条第一人称自我叙事。
+                # 网页端原本看不到，这里吐出来给「查看意识流」面板用。
+                qs = parse_qs(u.query)
+                day = qs.get("day", [None])[0]
+                if not day:
+                    day = persona._life_day(datetime.now())[0].strftime("%Y-%m-%d")
+                try:
+                    limit = int(qs.get("limit", ["0"])[0])
+                except ValueError:
+                    limit = 0
+                rows = db.stream_for_day(day)
+                if limit:
+                    rows = rows[-limit:]
+                self._json({"day": day, "count": len(rows),
+                            "stream": [{"ts": r["ts"], "hhmm": r["ts"][11:16],
+                                        "kind": r["kind"], "text": r["text"]}
+                                       for r in rows]})
             elif u.path == "/account":
                 # 账号管理页（改密码 / 重绑 TOTP）
                 self._serve_web_file("account.html", "text/html; charset=utf-8")
