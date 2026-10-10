@@ -103,22 +103,38 @@ _PROACTIVE_CONTEXT_RULE = (
 
 def build_proactive_messages(state: str, scenario: str) -> list[dict]:
     """主动消息的 messages：最近聊天上下文 + 场景指令。
-    random 场景有一半概率翻一条**关于TA的**旧记忆接着聊（话题弹药）。"""
+    random 场景的话题弹药二选一：攒下的素材（读后感想）或关于TA的旧记忆。"""
     prompt = persona.build_proactive_prompt(state, scenario)
     prompt[-1]["content"] += f"\n{_PROACTIVE_CONTEXT_RULE}"
-    if scenario == "random" and random.random() < 0.5:
-        mem = memory.random_memory()
-        if mem:
-            anchor = mem.get("time_label") or ""
-            if not anchor and mem.get("created_at"):
-                anchor = f"{mem['created_at'][5:10]}记的"
-            when = f"（{anchor}）" if anchor else ""
-            prompt[-1]["content"] += (
-                f"\n（你忽然想起关于TA的一件事{when}：「{mem['content']}」。"
-                f"可以就着它聊，比如问问后续；想聊别的也行。）")
+    if scenario == "random":
+        _inject_random_topic(prompt)
     recent = db.recent_context(config.PROACTIVE_CONTEXT_TURNS)
     if recent:
         # 顺序：system（人设）→ 最近聊天（事实）→ 指令（内心活动）最后说
         return [prompt[0]] + recent + [prompt[-1]]
     return prompt
+
+
+def _inject_random_topic(prompt: list[dict]) -> None:
+    """random 场景的话题弹药：一半概率翻一条攒下的素材（工作=读书的读后感），
+    没有素材（或没抽中）才退回翻一条关于TA的旧记忆。素材攒了就要用得起来，
+    否则 TA 闷头读书、攒一堆感想却从来不跟人聊（实测 #28）。"""
+    if random.random() < 0.5:
+        import work
+        mat = work.take_shareable()
+        if mat:
+            prompt[-1]["content"] += (
+                f"\n（你刚忙完手头的事，脑子里还留着这么一句："
+                f"「{mat}」。可以自然跟TA聊起它——比如提一句你最近在读什么书、"
+                f"读到哪句挺有感觉。想聊别的也行。）")
+            return
+    mem = memory.random_memory()
+    if mem:
+        anchor = mem.get("time_label") or ""
+        if not anchor and mem.get("created_at"):
+            anchor = f"{mem['created_at'][5:10]}记的"
+        when = f"（{anchor}）" if anchor else ""
+        prompt[-1]["content"] += (
+            f"\n（你忽然想起关于TA的一件事{when}：「{mem['content']}」。"
+            f"可以就着它聊，比如问问后续；想聊别的也行。）")
 

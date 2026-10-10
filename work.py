@@ -328,12 +328,44 @@ def hud(now: datetime | None = None) -> str:
 
 
 def prompt_hint(now: datetime | None = None) -> str:
-    """注入 system prompt：让它知道自己手头正在做什么（空串 = 不注入）。"""
+    """注入 system prompt：让它知道自己手头正在做什么（空串 = 不注入）。
+    忙/心流时还注入「正在读什么」——否则 TA 连自己在读哪本书都不知道，
+    被问「你在忙啥」只能含糊回避、瞎编个"读文献"（实测 #28）。"""
     if not config.WORK_ENABLED:
         return ""
     s = status(now)
     hint = PHASE_HINTS.get(s["phase"], "")
-    return hint.format(done=s["done"], quota=s["quota"]) if hint else ""
+    if not hint:
+        return ""
+    base = hint.format(done=s["done"], quota=s["quota"])
+    if s["phase"] in ("working", "flow"):
+        reading = _current_reading()
+        if reading:
+            base += f" 具体在忙的事：{reading}"
+    return base
+
+
+def _current_reading() -> str:
+    """当前正在读什么（一句话，给 prompt 注入用）。
+    优先用户书库（真书），没导书退回内置书摘；都拿不到返回空串。"""
+    try:
+        import library
+        prog = library.progress()
+        if prog and prog.get("book_id"):
+            for b in library.books():
+                if b.get("id") == prog["book_id"]:
+                    return (f"你在读《{b['title']}》（{b.get('author', '')}），"
+                            f"已经读到第 {prog.get('idx', 0) + 1} 段")
+    except Exception:
+        pass
+    try:
+        import reading
+        a = reading.current_article()
+        if a:
+            return f"你在读{a.get('source', '')}的《{a['title']}》"
+    except Exception:
+        pass
+    return ""
 
 
 def tick() -> dict:

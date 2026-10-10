@@ -294,7 +294,7 @@ function renderState(s){
   $('mQuota').textContent = '配额 ' + (p.done||0) + '/' + (p.quota||0);
   $('mEnergy').textContent = '精力 ' + (p.energy||0);
   $('mMoney').textContent = '余额 ' + (p.money||0);
-  $('mMat').textContent = '素材 ' + (p.materials||0) + ' 条';
+  $('mMat').textContent = '素材 ' + (s.materials||0) + ' 条';
   $('typing').textContent = s.typing ? (s.name + '正在输入…') : '';
   $('pName').textContent = s.name || '—';
   if (s.persona) {

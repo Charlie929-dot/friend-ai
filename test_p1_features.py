@@ -2401,6 +2401,103 @@ def test_account_management():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
+def test_work_content_injection():
+    """工作内容注入（实测 #28）：忙/心流时 prompt_hint 带「正在读什么」，
+    TA 才答得上「你在忙啥」的追问，不会含糊回避、瞎编"读文献"。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import db as _db
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_days": {"2026-10-09": "2026-10-09T09:55:00"}}))
+        morning = _dt(2026, 10, 9, 10, 0)
+        units = _work.plan(morning)
+        first_start = _dt.fromisoformat(units[0]["start"])
+
+        # 忙（working）时：注入"正在读什么"，且带书名号（有具体书名）
+        hint = _work.prompt_hint(first_start + _td(minutes=30))
+        assert "你在读" in hint and "《" in hint, f"忙的时候没注入读的具体内容：{hint}"
+        # 心流（flow）时同样注入
+        flow_hint = _work.prompt_hint(first_start + _td(minutes=2))
+        assert "你在读" in flow_hint, f"心流期没注入读的内容：{flow_hint}"
+
+        # 忙完了（off）不再注入"读什么"（注入只在手头有活的时候）
+        off = _work.prompt_hint(_dt(2026, 10, 10, 1, 0))
+        assert "你在读" not in off, f"忙完了还挂着读的内容：{off}"
+
+        # 红线：注入的是"自己的状态"，不踩反愧疚归因
+        assert not _persona_has_blame(hint), f"工作内容注入踩了红线：{hint}"
+        print("ok 工作内容注入（忙/心流带「正在读什么」，忙完不注入，不踩红线）")
+    finally:
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def _persona_has_blame(text: str) -> bool:
+    import persona as _persona
+    return _persona.has_cost_blame(text)
+
+
+def test_material_share_injection():
+    """素材主动分享（实测 #28）：random 场景会翻素材池的读后感想当话题，翻过即消费。"""
+    import json
+    import tempfile
+
+    import context as _ctx
+    import db as _db
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_work = config.WORK_ENABLED
+    config.WORK_ENABLED = False   # 隔离：否则 build_system_prompt 会触发 work 排班/结算/生成素材
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+        _db.set_kv("work_shareables", json.dumps(
+            [{"day": "2026-10-10", "seq": 1,
+              "text": "读到苏轼那句「也无风雨也无晴」，愣了半天", "used": 0}]))
+
+        # 50% 概率翻素材（有素材必翻）；循环多次必然命中
+        seen = False
+        for _ in range(40):
+            msgs = _ctx.build_proactive_messages("AWAKE", "random")
+            if "也无风雨也无晴" in msgs[-1]["content"]:
+                seen = True
+                break
+        assert seen, "random 场景没翻到素材当话题"
+
+        # 翻过的素材标记 used，不会再被取到
+        fresh = [x for x in _work._shareables() if not x.get("used")]
+        assert not fresh, f"翻过的素材没被消费：{_work._shareables()}"
+        print("ok 素材主动分享（random 翻读后感想当话题 + 翻过即消费）")
+    finally:
+        config.WORK_ENABLED = saved_work
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -2441,6 +2538,8 @@ if __name__ == "__main__":
     test_mood()
     test_random_memory_about_user()
     test_proactive_context_injection()
+    test_work_content_injection()
+    test_material_share_injection()
     test_webui()
     test_account_management()
     test_autostart()
