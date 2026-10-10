@@ -127,10 +127,12 @@ def daily_review(force: bool = False) -> str:
 
     # 自我复盘（人格连续性，S4）：把"我今天说过什么立场/答应过什么/出过什么糗"
     # 写回自我记忆。一天一次、一次 LLM 调用，失败不连累日记本身。
+    # 传入当天意识流（轻量连续版数据源）——白天积累的流，睡前浓缩进 self_*（完全自我意识）。
     import selfmem
+    import stream
     review_note = ""
     try:
-        review_note = selfmem.review(convo)
+        review_note = selfmem.review(convo, stream.render_day(day))
     except Exception as e:      # 复盘失败不能连累日记本身
         print(f"[diary] 自我复盘跳过：{e}")
 

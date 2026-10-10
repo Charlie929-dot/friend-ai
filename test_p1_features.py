@@ -3244,7 +3244,31 @@ def test_consciousness_stream():
         assert _stream.prompt_hint(first_start) == "", "关工作系统不该注入意识流"
         config.WORK_ENABLED = True
 
-        print("ok 自我意识流（流表读写 + 状态行含钱/精力 + 工作结算埋点 + 每轮注入）")
+        # 6. render_day：把当天流渲染成第一人称时间线（睡前浓缩的数据源）
+        day_text = _stream.render_day("2026-10-09")
+        assert "我伸了懒腰，起床了" in day_text, day_text
+        assert "忙完第 1 件" in day_text, day_text
+
+        # 7. 睡前浓缩：selfmem.review 收到当天流（mock LLM 捕获 system prompt 断言带流）
+        import llm as _llm
+        import selfmem as _self
+        captured = {}
+        real_chat = _llm.chat
+        def _fake_chat(messages, *a, **k):
+            captured["system"] = messages[0]["content"]
+            return ('{"stances":[],"promises":[],"mistakes":[],"my_topics":[],'
+                    '"relation":{},"state":{},"self_observation":""}')
+        _llm.chat = _fake_chat
+        try:
+            _self.review("对方：在吗\n阿夜：在", day_text)
+        finally:
+            _llm.chat = real_chat
+        assert "今天你自己是怎么过的" in captured.get("system", ""), \
+            "selfmem.review 缺意识流数据源段：" + captured.get("system", "")
+        assert "忙完第 1 件" in captured.get("system", ""), \
+            "当天意识流没进 selfmem.review 的 prompt"
+
+        print("ok 自我意识流（流表读写 + 状态行含钱/精力 + 工作结算埋点 + 每轮注入 + 睡前浓缩）")
     finally:
         config.WORK_ENABLED = saved_work
         config.MOOD_ENABLED = saved_mood

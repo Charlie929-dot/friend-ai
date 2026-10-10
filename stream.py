@@ -102,3 +102,19 @@ def _hhmm(r: dict) -> str:
 def _line_text(r: dict) -> str:
     body = (r.get("text") or "").strip()
     return body[:config.CONSCIOUS_STREAM_LINE_CHARS]
+
+
+def render_day(day: str | None = None) -> str:
+    """把某个生活日的意识流渲染成第一人称时间线文本（睡前浓缩的数据源）。
+
+    供 selfmem.review 用——白天积累的流，睡前浓缩进 self_*，让"我的一天"有连续性。
+    空流返回空串（那天没什么可浓缩的）。
+    """
+    rows = db.stream_for_day(day or _life_day_str())
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        hhmm = _hhmm(r)
+        lines.append(f"{hhmm} {r['text']}" if hhmm else r["text"])
+    return "\n".join(lines)

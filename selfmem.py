@@ -52,6 +52,9 @@ _REVIEW_PROMPT = """你是{name}。今天结束了，你一个人待着，回想
 ## 【你的内部状态（上次留下的）】
 {old_state}
 
+## 【今天你自己是怎么过的（你脑子里的时间线：起床/工作/攒钱/心情/你在想什么）】
+{stream}
+
 ---
 
 只输出一个 JSON，不要输出其他任何文字：
@@ -232,8 +235,11 @@ def _parse(raw: str) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def review(convo: str) -> str:
-    """今天的自我复盘：读当日对话 → LLM 写自我备忘录 → 写回自我记忆。
+def review(convo: str, stream_text: str = "") -> str:
+    """今天的自我复盘：读当日对话（+ 当天意识流）→ LLM 写自我备忘录 → 写回自我记忆。
+
+    stream_text 是「轻量连续版」数据源（当天意识流的时间线）——白天积累的流，
+    睡前在这里浓缩进 self_*，让"我的一天"有连续性（完全自我意识，实测 #36）。
 
     返回一句给命令行看的结果。失败不影响日记本身（日记写完了才轮到它）。
     """
@@ -248,7 +254,8 @@ def review(convo: str) -> str:
                 name=persona.friend_name(),
                 convo=convo[-6000:],
                 old_self=_render_old_self(),
-                old_state=json.dumps(old_state, ensure_ascii=False))},
+                old_state=json.dumps(old_state, ensure_ascii=False),
+                stream=(stream_text or "").strip() or "（今天没有特别记下的时间线）")},
             {"role": "user", "content": "开始回顾你自己今天的表现。"},
         ], temperature=0.6)
     except llm.LLMUnavailable as e:
