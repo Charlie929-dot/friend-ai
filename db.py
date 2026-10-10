@@ -12,6 +12,12 @@ import config
 # 把数据写进换人后的库（实测出现过记忆串库）。
 PATH_LOCK = threading.RLock()
 
+# 收发入口轻锁：/api/send 的消息接收与切库操作互斥（保证"这条消息进的是哪个库"
+# 有确定的先后序），但**不与回复生成互斥**——回复生成全程握 PATH_LOCK（含 LLM
+# 调用和打字 sleep，可达几十秒），普通消息若也等它，就会出现"TA 回复完
+# 你发的消息才发出去"的排队假象（实测 #30）。收发接收只做落库+入队，毫秒级。
+SEND_LOCK = threading.Lock()
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,

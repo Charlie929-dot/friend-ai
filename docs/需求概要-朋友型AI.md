@@ -1,4 +1,6 @@
-# 朋友型 AI · 需求概要 v0.49
+# 朋友型 AI · 需求概要 v0.50
+
+> v0.50（2026-10-10）：**Web 两 bug 修复**（实测 #31）。①**发送排队**：`/api/send` 处理套着 `db.PATH_LOCK`，而回复线程生成回复全程（LLM+打字 sleep，可达几十秒）握着这把锁 → TA 回复完用户消息才发得出去；换朋友命令内部已自带 PATH_LOCK，外层对普通消息多余。新增 `db.SEND_LOCK`（收发与切库互斥、不与回复生成互斥），`webui` 改用它，`/friend` `/new-friend` 在 PATH_LOCK 内再套 SEND_LOCK（锁序无环）。②**偶发重复消息**：本地回显与 900ms 轮询的时序竞态（#25 的 id 游标只防轮询重渲染、防不住"落库后、POST 返回前"的窗口），前端加 `shownIds` 按消息 id 去重，切朋友时清空。
 
 > v0.49（2026-10-10）：**语义化召回落地（S4 首位）**——你指认的「目前最大问题」治本。①**本地向量**：新增 `embeddings.py`，onnxruntime 跑 bge-small-zh-v1.5（DeepSeek 无 embedding API，云端 embedding 又会把记忆文本上传第三方、违背「数据只在本地」卖点，故选本地；不需要 torch/GPU/sentence-transformers）。模型文件放 `models/bge-small-zh-v1.5/`（约 100MB，不进 git，由 `sync-to-server.sh` 从本机 scp 上传——服务器连 hf-mirror 不通）。②**混合召回**：`memory.recall()` 在字面 bigram/关键词/时间标签之上叠加语义向量分（余弦相似度 × `EMBEDDING_SEMANTIC_WEIGHT`），「几点睡」终于能召回「熬夜」；模型/依赖不可用自动退回纯字面（语义召回是增强不是必须）。③**向量持久化**：db 新增 `memory_vectors` 表，记忆入库惰性补算 + BLOB 存储，进程重启不重算。测试 44 项全过（新增 1 项回归）。
 
@@ -342,4 +344,5 @@
 | 27 | 2026-10-10 | 修 #26 时测试抓到的连带坑：起床缓存单槽（wake_day/wake_at）被今天/明天来回翻转 → 夜里 tick 每分钟随机重算一个新起床点（抖动）；改 `wake_days` 按日 dict 解决。另修 SLEEPING 睡过头（next_wake_at 语义在早晨翻篇后指向明天 → 错过 cron 会睡一整天）与凌晨误唤醒（生活日未翻篇时 today_wake_at 查到昨天已过的点） |
 | 28 | 2026-10-10 | 素材库四个现象：①UI 素材数永远 0（`/api/state` 的 materials 是顶层字段，前端误读成 `work.materials`）②问工作内容避而不谈（prompt 没注入"在读什么"，TA 答不上来）③假装"读文献"其实在读书（"文献"是 LLM 瞎编，全项目无此词）④素材只攒不聊（`take_shareable()` 无生产调用点，主动分享未落地） |
 | 29 | 2026-10-10 | 收尾三小事：①登录页动态口令输入框溢出卡片（TOTP input 没被 `.field` 包裹，拿不到 `width:100%`）②项目根积压 1100+ 个测试临时目录 `tmpXXXX`（`tempfile.mkdtemp()` 在 `%TEMP%` 不可写环境下回退到当前工作目录），已清理并收口到固定 `.test-tmp/` ③AGENTS.md 对照表补齐一批模块行 |
+| 31 | 2026-10-10 | Web 两 bug：发送被回复生成阻塞（PATH_LOCK 全程占锁）→ 新增 SEND_LOCK；回显+轮询竞态重复渲染 → 前端按消息 id 去重 |
 | 30 | 2026-10-10 | 语义召回落地（S4 首位，v0.49）。三个工程注意点：①DeepSeek 无 embedding API（只有 chat/completions），云端 embedding 又违背「数据只在本地」卖点 → 必须本地（bge-small-zh-v1.5 + onnxruntime，不需要 torch/GPU）；②模型约 100MB 不进 git，`sync-to-server.sh` 首次同步时自动从 hf-mirror 下载到服务器；③测试 `main` 是**显式调用列表**，新增 `test_*` 函数必须手动加进 `__main__`，否则全量测试静默跳过它（这次踩到：加了 `test_semantic_recall` 却只在单测里过、全量没跑） |

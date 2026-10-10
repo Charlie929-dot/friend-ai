@@ -212,6 +212,7 @@
 })();
 
 let lastId = 0;
+const shownIds = new Set();   // 已渲染的消息 id：本地回显与轮询去重（实测 #25 偶发双发）
 const $ = id => document.getElementById(id);
 const chat = () => $('chat');
 
@@ -253,7 +254,11 @@ function fmtTime(ts){
                                             : (y + '-' + m + '-' + dd + ' ' + hhmm);
 }
 
-function addMsg(m){
+function addMsg(m, id){
+  if (id){
+    if (shownIds.has(id)) return;   // 轮询和本地回显撞车时只渲染一遍（#25 的竞态补丁）
+    shownIds.add(id);
+  }
   const day = m.ts ? m.ts.slice(0,10) : '';
   if (day && day !== lastMsgDay){
     const div = document.createElement('div');
@@ -318,7 +323,7 @@ async function poll(){
     const s = await (await fetch('/api/state')).json();
     renderState(s);
     const m = await (await fetch('/api/messages?after=' + lastId)).json();
-    (m.messages || []).forEach(x => { addMsg(x); lastId = Math.max(lastId, x.id); });
+    (m.messages || []).forEach(x => { addMsg(x, x.id); lastId = Math.max(lastId, x.id); });
     if (m.last_id) lastId = Math.max(lastId, m.last_id);
   }catch(e){ $('pLink').textContent = '连接断了，重连中…'; }
 }
@@ -334,7 +339,7 @@ async function send(){
     })).json();
     $('urgent').checked = false;
     if (r.echo !== false){
-      addMsg({role:'user', content:t, ts:r.ts});
+      addMsg({role:'user', content:t, ts:r.ts}, r.id || 0);
       if (r.id) lastId = Math.max(lastId, r.id);  // 回显过就把游标推上去，轮询不再渲染第二遍
     }
     if (r.reply) addSys(r.reply);          // 输入框里敲的命令，输出照旧走聊天区
@@ -361,7 +366,7 @@ async function runCmd(cmd, title){
 }
 
 // 换人之后整个库都换了：聊天区必须清掉重来，不然两条时间线会串在一起
-function resetChat(){ chat().innerHTML = ''; lastId = 0; lastMsgDay = ''; }
+function resetChat(){ chat().innerHTML = ''; lastId = 0; lastMsgDay = ''; shownIds.clear(); }
 
 document.querySelectorAll('.btn[data-cmd]').forEach(b => {
   b.onclick = () => runCmd(b.dataset.cmd, b.textContent);

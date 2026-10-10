@@ -265,7 +265,7 @@ def handle(cmd_line: str) -> str:
         return "回到初见阶段，我会经常来冒泡的～"
 
     if cmd == "/new-friend":
-        with db.PATH_LOCK:  # 与后台回复/提取互斥：归档+清库期间旧库不再被写
+        with db.PATH_LOCK, db.SEND_LOCK:  # PATH_LOCK 与后台回复互斥；SEND_LOCK 与消息接收互斥（#30）
             archived = _archive_current()
             db.clear_all()  # 清空而非删文件：避免沙箱安全删除拦截，也无文件占用问题
             db.set_kv("profile_locked", "1")  # 新朋友零了解开局，信息清单自己攒
@@ -391,7 +391,7 @@ def handle(cmd_line: str) -> str:
         if not arg.isdigit() or not (1 <= int(arg) <= len(archives)):
             return f"用法：/friend <编号>（1-{len(archives)}），先用 /friends 查看列表"
         chosen = archives[int(arg) - 1]
-        with db.PATH_LOCK:  # 与后台回复/提取互斥：归档+覆盖期间库不被写
+        with db.PATH_LOCK, db.SEND_LOCK:  # 同 /new-friend：切库期间消息接收也停下（#30）
             _archive_current()  # 当前朋友也归档（覆盖更新TA自己的那份），不丢
             shutil.copyfile(str(chosen), str(config.DB_PATH))
             db.init()  # 覆盖回旧库文件后重新迁移（补齐后加的列，如五维标签/long_id）

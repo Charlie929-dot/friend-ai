@@ -332,7 +332,7 @@ def _make_handler(channel: WebChannel, on_message):
             if text == "/restart":
                 self._restart()
                 return
-            with db.PATH_LOCK:      # 与切换朋友/回复流程互斥，别写错库
+            with db.SEND_LOCK:      # 只与切库互斥；不等回复生成（否则消息全卡到 TA 回完，实测 #30）
                 out = on_message(text)
             is_cmd = isinstance(out, str)   # 命令：输出走返回值；普通消息：out 是消息 id
             self._json({
