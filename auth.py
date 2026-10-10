@@ -244,46 +244,48 @@ LOGIN_PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>登录 · 有生活的朋友</title>
 <style>
-  * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         background:#0e1016;
-         background-image:radial-gradient(60%% 50%% at 50%% 0%%, #1a2233 0%%, #0e1016 70%%);
-         color:#e8e6e3;
+  * { box-sizing: border-box; margin:0; padding:0; }
+  body { min-height:100vh; display:flex; align-items:center; justify-content:center;
+         padding:20px;
+         background:#f3f1ea;
+         background-image:radial-gradient(80%% 60%% at 50%% 0%%, #fbfaf6 0%%, #f3f1ea 65%%);
+         color:#40473f;
          font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  .card { width:100%%; max-width:340px; padding:32px 26px 26px; border-radius:16px;
-          background:#1b1e26; border:1px solid #2a2e39;
-          box-shadow:0 12px 40px rgba(0,0,0,.5); }
-  .mark { width:40px; height:40px; margin:0 auto 14px; border-radius:12px;
-          background:linear-gradient(135deg,#4a6cf7,#7a5cff);
+  .card { width:100%%; max-width:340px; padding:34px 28px 26px; border-radius:20px;
+          background:#fbfaf6; border:1px solid #e4e1d5;
+          box-shadow:0 20px 60px rgba(90,104,80,.14); }
+  .mark { width:44px; height:44px; margin:0 auto 14px; border-radius:14px;
+          background:#e3ebe1; color:#83a585;
           display:flex; align-items:center; justify-content:center;
-          font-size:20px; color:#fff; }
-  h1 { margin:0 0 4px; font-size:19px; font-weight:600; text-align:center; }
-  .sub { margin:0 0 24px; font-size:13px; color:#8b8f9a; text-align:center; }
-  label { display:block; margin:0 0 6px; font-size:13px; color:#a8adb8; }
+          font-size:22px; }
+  h1 { margin:0 0 4px; font-size:20px; font-weight:600; text-align:center; }
+  .sub { margin:0 0 24px; font-size:13px; color:#98a096; text-align:center; }
+  label { display:block; margin:0 0 6px; font-size:13px; color:#98a096; }
   .field { position:relative; margin:0 0 16px; }
-  .field input { width:100%%; padding:11px 12px; border:1px solid #2e323d; border-radius:10px;
-      background:#12141a; color:#e8e6e3; font-size:15px; outline:none; transition:border-color .15s; }
-  .field input:focus { border-color:#4a6cf7; box-shadow:0 0 0 3px rgba(74,108,247,.18); }
+  .field input { width:100%%; padding:12px 13px; border:1px solid #e4e1d5; border-radius:12px;
+      background:#fff; color:#40473f; font-size:15px; outline:none; transition:border-color .15s, box-shadow .15s; }
+  .field input:focus { border-color:#83a585; box-shadow:0 0 0 3px rgba(131,165,133,.18); }
   input[type=text] { letter-spacing:.35em; font-size:19px; text-align:center; }
-  .peek { position:absolute; right:6px; top:50%%; transform:translateY(-50%%);
-          background:none; border:0; color:#8b8f9a; font-size:12px; padding:6px;
+  .peek { position:absolute; right:8px; top:50%%; transform:translateY(-50%%);
+          background:none; border:0; color:#98a096; font-size:12px; padding:6px;
           cursor:pointer; user-select:none; }
-  .peek:hover { color:#c8ccd6; }
-  .row { display:flex; align-items:center; gap:8px; margin:0 0 18px; font-size:13px; color:#a8adb8; }
-  button[type=submit] { width:100%%; padding:12px; border:0; border-radius:10px;
-           background:linear-gradient(135deg,#4a6cf7,#5b7bff); color:#fff; font-size:15px;
+  .peek:hover { color:#83a585; }
+  .row { display:flex; align-items:center; gap:8px; margin:0 0 18px; font-size:13px; color:#98a096; }
+  .row input { accent-color:#83a585; }
+  button[type=submit] { width:100%%; padding:12px; border:0; border-radius:12px;
+           background:#83a585; color:#fff; font-size:15px;
            font-weight:500; cursor:pointer; transition:filter .15s, transform .05s; }
-  button[type=submit]:hover { filter:brightness(1.1); }
+  button[type=submit]:hover { filter:brightness(1.06); }
   button[type=submit]:active { transform:translateY(1px); }
-  .err { margin:0 0 14px; padding:9px 12px; border-radius:8px; font-size:13px;
-         background:rgba(255,86,86,.12); color:#ff8080; }
+  .err { margin:0 0 14px; padding:10px 12px; border-radius:10px; font-size:13px;
+         background:#fbecec; color:#d97a7a; }
   .err:empty { display:none; }
-  .foot { margin:14px 0 0; text-align:center; font-size:12px; color:#5d616c; }
+  .foot { margin:14px 0 0; text-align:center; font-size:12px; color:#b3b9af; }
 </style>
 </head>
 <body>
   <form class="card" method="post" action="/api/login" id="f">
-    <div class="mark">🌙</div>
+    <div class="mark">🌱</div>
     <h1>有生活的朋友</h1>
     <p class="sub">验证身份后才能继续</p>
     <div class="err">%(err)s</div>
@@ -293,7 +295,7 @@ LOGIN_PAGE = """<!doctype html>
       <span class="peek" data-for="p">显示</span>
     </div>
     %(totp_field)s
-    <div class="row"><input type="checkbox" id="r" name="remember" checked style="width:auto">
+    <div class="row"><input type="checkbox" id="r" name="remember" checked>
       <label for="r" style="margin:0">记住这台设备 30 天</label></div>
     <button type="submit">进 入</button>
     <p class="foot">密码 + 动态口令双保险</p>

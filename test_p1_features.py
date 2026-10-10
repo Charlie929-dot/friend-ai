@@ -2320,11 +2320,11 @@ def test_webui():
             base = f"http://127.0.0.1:{port}"
 
             html = c.get(base + "/").text
-            assert 'class="hud-card"' in html and "barE" in html and "barP" in html, \
-                "页面缺 HUD 结构（状态卡/精力条/进度条）"
-            # 「最近记住的事」卡片 + 收起洞察栏（v0.60 UI 精化）
-            assert 'id="memList"' in html and 'id="hideInsights"' in html, \
-                "页面缺记忆卡/收起洞察栏结构"
+            assert "barE" in html and "barP" in html and 'id="chat"' in html and 'id="txt"' in html, \
+                "页面缺聊天主结构（消息流/输入框/精力条/进度条）"
+            # 「最近记住的事」卡片 + 左右抽屉（v0.61 单栏极简重做）
+            assert 'id="memList"' in html and 'id="drawerL"' in html and 'id="drawerR"' in html, \
+                "页面缺记忆卡/抽屉结构"
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
