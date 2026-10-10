@@ -3,3 +3,5 @@ apscheduler>=3.10
 fastapi>=0.110
 uvicorn>=0.29
 pycryptodome>=3.20
+onnxruntime>=1.17
+tokenizers>=0.15

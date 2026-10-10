@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS long_memories (
     recall_count INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'ok'    -- ok / pending_delete
 );
+CREATE TABLE IF NOT EXISTS memory_vectors (
+    memory_id INTEGER PRIMARY KEY,     -- 对应 memories.id
+    vec BLOB NOT NULL                  -- float32 向量（语义召回，本地 bge-small-zh-v1.5）
+);
 """
 
 
@@ -94,7 +98,7 @@ def init():
 def clear_all():
     """清空所有数据（/new-friend 用），保留表结构。"""
     with _conn() as c:
-        for table in ("kv", "messages", "counters", "memories", "long_memories"):
+        for table in ("kv", "messages", "counters", "memories", "long_memories", "memory_vectors"):
             c.execute(f"DELETE FROM {table}")
 
 
@@ -273,7 +277,48 @@ def delete_memory(mem_id: int) -> str | None:
         if not row:
             return None
         c.execute("DELETE FROM memories WHERE id=?", (mem_id,))
+        c.execute("DELETE FROM memory_vectors WHERE memory_id=?", (mem_id,))
         return row["content"]
+
+
+# --- 记忆向量（语义召回：本地 bge-small-zh-v1.5 的 float32 向量，BLOB 存） ---
+def set_memory_vector(mem_id: int, vec: bytes):
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO memory_vectors(memory_id, vec) VALUES(?, ?) "
+            "ON CONFLICT(memory_id) DO UPDATE SET vec=excluded.vec",
+            (mem_id, vec),
+        )
+
+
+def get_memory_vector(mem_id: int) -> bytes | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT vec FROM memory_vectors WHERE memory_id=?", (mem_id,)
+        ).fetchone()
+    return row["vec"] if row else None
+
+
+def get_memory_vectors(mem_ids: list[int]) -> dict[int, bytes]:
+    """批量取向量：{memory_id: vec_bytes}。只查有记录的那些。"""
+    if not mem_ids:
+        return {}
+    out = {}
+    # 分块查询，避免 IN 子句参数超限（记忆量小，一般一次即可）
+    for i in range(0, len(mem_ids), 500):
+        chunk = mem_ids[i:i + 500]
+        q = "SELECT memory_id, vec FROM memory_vectors WHERE memory_id IN (%s)" % (
+            ",".join("?" * len(chunk)))
+        with _conn() as c:
+            rows = c.execute(q, chunk).fetchall()
+        for r in rows:
+            out[r["memory_id"]] = r["vec"]
+    return out
+
+
+def delete_memory_vector(mem_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM memory_vectors WHERE memory_id=?", (mem_id,))
 
 
 def set_memory_status(mem_id: int, status: str):

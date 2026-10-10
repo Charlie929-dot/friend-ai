@@ -7,7 +7,8 @@
   仅跳过与已有记忆原文完全相同的重复（防相邻轮次重复提取）。
 - 时间标签绝对化：提取时注入当前日期，"今天下午"→"2026-10-06 下午"，
   召回时查询里的相对时间词也会换算成日期去匹配。
-- 召回：字符 bigram 重叠打分 + 时间标签加成；命中后同组（category+theme
+- 召回：字符 bigram 重叠 + 关键词 + 语义向量（本地 bge-small-zh-v1.5，治「几点睡」
+  召不回「熬夜」）+ 时间标签加成；命中后同组（category+theme
   完全一致）的更新进展一起带出，AI 看到的是最新状态而非过时记忆。
 - 弹药：random 主动话题有概率接一条旧记忆（"你之前说的那个……后来咋样了"）。
 - 事实便签（/note）仍是最高优先级的"用户亲口确认"层，与本系统并存。
@@ -606,10 +607,45 @@ def expand_long_memory(mem: dict) -> str | None:
     return None
 
 
+def _semantic_scores(query: str, mems: list[dict]) -> dict[int, float] | None:
+    """语义向量相似度 {memory_id: 余弦相似度}。模型/依赖不可用时返回 None（退回纯字面）。
+
+    治本「几点睡召不回熬夜」：字面 bigram 对不上就是零分，但向量能把"熬夜"和
+    "几点睡"归到同一语义。向量惰性补算 + 持久化（db.memory_vectors），进程重启不重算。
+    """
+    import embeddings
+    if not config.EMBEDDING_ENABLED or not embeddings.available():
+        return None
+    qv = embeddings.embed([query])
+    if qv is None:
+        return None
+    qv = qv[0]
+    existing = db.get_memory_vectors([m["id"] for m in mems])
+    missing = [m for m in mems if m["id"] not in existing]
+    if missing:
+        vecs = embeddings.embed([m["content"] for m in missing])
+        if vecs is not None:
+            import numpy as np
+            for m, v in zip(missing, vecs):
+                blob = v.astype(np.float32).tobytes()
+                db.set_memory_vector(m["id"], blob)
+                existing[m["id"]] = blob
+    import numpy as np
+    scores: dict[int, float] = {}
+    for m in mems:
+        blob = existing.get(m["id"])
+        if blob is None:
+            continue
+        v = np.frombuffer(blob, dtype=np.float32)
+        scores[m["id"]] = float(np.dot(qv, v))
+    return scores
+
+
 def recall(query: str, top_k: int = 5, expand_long: bool = False) -> list[dict]:
     """按与 query 的相关度召回 top-K 记忆。
     记忆总量还小（≤10）时直接全量返回——早期每条都珍贵。
-    打分：bigram/关键词重叠 + 时间标签加成（query 的相对时间词换算成日期匹配）。
+    打分：bigram/关键词重叠 + 时间标签加成 + **语义向量**（本地 bge-small-zh-v1.5，
+    治「几点睡」召不回「熬夜」；模型不可用时自动退回纯字面）。
     命中后同组（category+theme 完全一致）的更新进展一起带出——
     AI 看到的是时间线的最新状态，不是过时记忆。"""
     mems = [m for m in db.all_memories(limit=200)
@@ -626,12 +662,18 @@ def recall(query: str, top_k: int = 5, expand_long: bool = False) -> list[dict]:
     # 意图感知：问"是谁/认识/记得"→ 人际记忆优先；query 点到人名 → person 标签命中优先
     identity_q = bool(_IDENTITY_QUERY.search(query))
     q_names = _query_person_names(query)
+    semantic = _semantic_scores(query, mems)
     scored = []
     for m in mems:
         # 五维标签全部参与匹配（人物/地点/主题往往是检索入口）
         hay = (m["content"] + m["tags"] + m.get("time_label", "")
                + m.get("place", "") + m.get("person", "") + m.get("theme", ""))
         score = len(q_bi & _bigrams(hay)) * 2 + len(q_kw & _keywords(hay)) * 0.5
+        # 语义向量：同义近义（熬夜↔几点睡）字面对不上，靠向量补；只收超过下限的
+        if semantic is not None:
+            cos = semantic.get(m["id"], 0.0)
+            if cos >= config.EMBEDDING_MIN_SIMILARITY:
+                score += cos * config.EMBEDDING_SEMANTIC_WEIGHT
         # 时间标签衔接："今天下午"换算成日期后命中记忆的绝对时间标签
         score += sum(3.0 for t in time_tokens if t in m.get("time_label", ""))
         # 人名标签命中：query 里点到的名字，person 标签精确命中是强信号（标签 > 字面）

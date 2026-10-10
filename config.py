@@ -93,6 +93,14 @@ PURGE_REVIEWED_MESSAGES = os.environ.get("PURGE_REVIEWED_MESSAGES", "off").lower
 MEMORY_TOOLS_ENABLED = os.environ.get("MEMORY_TOOLS_ENABLED", "on").lower() == "on"   # AI 在对话里主动调检索工具的总开关（反复要求回忆时自己翻记忆库）
 MEMORY_TOOL_MAX_ROUNDS = int(os.environ.get("MEMORY_TOOL_MAX_ROUNDS", "3"))           # 一轮回复里工具调用循环的最大轮数（防无限循环/失控）
 
+# --- 语义化召回（S4 首位：本地向量 bge-small-zh-v1.5，治"几点睡召不回熬夜"） ---
+# 为什么本地：DeepSeek 无 embedding API；云端 embedding 会把记忆文本上传第三方，
+# 违背「数据永远只在本地」的卖点。用 onnxruntime 本地跑 bge-small-zh-v1.5。
+EMBEDDING_ENABLED = os.environ.get("EMBEDDING_ENABLED", "on").lower() == "on"   # 总开关（关了就退回纯字面召回）
+EMBEDDING_MODEL_DIR = Path(os.environ.get("EMBEDDING_MODEL_DIR", str(BASE_DIR / "models" / "bge-small-zh-v1.5")))  # ONNX 模型目录（含 model.onnx + tokenizer.json）
+EMBEDDING_SEMANTIC_WEIGHT = float(os.environ.get("EMBEDDING_SEMANTIC_WEIGHT", "4.0"))  # 语义相似分在混合打分里的权重（字面 bigram 仍占 2.0/重叠）
+EMBEDDING_MIN_SIMILARITY = float(os.environ.get("EMBEDDING_MIN_SIMILARITY", "0.35"))   # 余弦相似度下限（低于此值不算语义命中，防噪声）
+
 # --- 工作系统（S3「有自己的生活」：它自己的日子，工作循环 + 心流期） ---
 WORK_ENABLED = os.environ.get("WORK_ENABLED", "on").lower() == "on"          # 总开关（关了它就没有"手头的事"，打断成本也无从算起）
 WORK_DAILY_QUOTA = int(os.environ.get("WORK_DAILY_QUOTA", "6"))              # 今日工作单元配额（做满才下班）

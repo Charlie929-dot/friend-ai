@@ -1097,6 +1097,44 @@ def test_identity_recall():
         _db.init()
 
 
+def test_semantic_recall():
+    """语义召回（S4 首位）：字面对不上但同义（熬夜 ↔ 几点睡）也能召回来。
+
+    治「几点睡召不回熬夜」——纯字面 bigram 对不上就是零分；本地 bge-small-zh-v1.5
+    把"熬夜""凌晨才睡""几点睡"归到同一语义，向量相似度补上字面的空档。
+    embedding 模型/依赖不可用时优雅跳过（语义召回是增强、不是必须）。
+    """
+    import tempfile
+    import db as _db
+    import memory as _mem
+    import embeddings as _emb
+
+    if not _emb.available():
+        print("skip 语义召回（embedding 模型/依赖不可用）")
+        return
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        # 目标记忆：与 query 语义相关、但字面 bigram 几乎不重叠
+        _db.add_memory("小徐平时熬夜，凌晨一两点才睡", "画像", person="小徐")
+        # 填充 12 条无关记忆，凑过「≤10 条直接全量返回」的分支，逼它走打分
+        for i in range(12):
+            _db.add_memory(f"小徐周末喜欢去公园散步{i}号", "偏好", person="小徐")
+
+        hits = _mem.recall("小徐一般几点睡", top_k=3)
+        contents = [m["content"] for m in hits]
+        assert any("熬夜" in c for c in contents), \
+            f"语义召回应带回「熬夜」记忆：{contents}"
+        print("ok 语义召回（熬夜 ↔ 几点睡）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_long_memory():
     """A/B 两级库：长文存 B 库（全文+摘要）、A 库挂 long_id 伪链接；追问细节时展开。"""
     import tempfile
@@ -2531,6 +2569,7 @@ if __name__ == "__main__":
     test_corpus_consolidation()
     test_bubble_fixed_corpus()
     test_identity_recall()
+    test_semantic_recall()
     test_long_memory()
     test_memory_tool_calling()
     test_diary_daily_review()

@@ -13,6 +13,11 @@ archive.log
 outbox.log
 *.log
 
+# 用户导入的电子书 + 本地 embedding 模型（不进 git，与 .gitignore 对齐）
+books/*
+!books/README.txt
+models/
+
 # 常驻守护的运行时产物（PID / 停止标志）
 *.pid
 web.stop

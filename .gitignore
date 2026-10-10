@@ -17,6 +17,10 @@ outbox.log
 books/*
 !books/README.txt
 
+# 本地 embedding 模型（bge-small-zh-v1.5 ONNX，约 100MB，不进 git；
+# 首次同步时由 sync-to-server.sh 自动下载到 models/）
+models/
+
 # 常驻守护的运行时产物（PID / 停止标志）
 *.pid
 web.stop
