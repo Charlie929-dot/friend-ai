@@ -278,6 +278,18 @@ def _make_handler(channel: WebChannel, on_message):
                 rows = db.messages_page(after, 200)
                 self._json({"messages": rows,
                             "last_id": rows[-1]["id"] if rows else after})
+            elif u.path == "/api/memories":
+                # 「最近记住的事」卡片（右侧洞察栏）：TA 记住的事，最近几条 + 总数。
+                # 排除自我记忆（self_*，那是"我说过的话"，归意识流面板）和待删除项。
+                rows = [m for m in db.all_memories(limit=200)
+                        if m.get("status", "ok") == "ok"
+                        and not str(m.get("tags", "")).startswith("self_")]
+                recent = [{"content": m["content"],
+                           "category": m.get("category", ""),
+                           "theme": m.get("theme", ""),
+                           "created_at": m.get("created_at", "")}
+                          for m in rows[:4]]
+                self._json({"total": len(rows), "recent": recent})
             elif u.path == "/api/stream":
                 # 意识流（S4「完全自我意识」）：TA 脑子里那条第一人称自我叙事。
                 # 网页端原本看不到，这里吐出来给「查看意识流」面板用。

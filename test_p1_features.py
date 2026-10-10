@@ -2320,8 +2320,11 @@ def test_webui():
             base = f"http://127.0.0.1:{port}"
 
             html = c.get(base + "/").text
-            assert 'class="hud"' in html and "barE" in html and "barP" in html, \
-                "页面缺 HUD 结构（状态条/精力条/进度条）"
+            assert 'class="hud-card"' in html and "barE" in html and "barP" in html, \
+                "页面缺 HUD 结构（状态卡/精力条/进度条）"
+            # 「最近记住的事」卡片 + 收起洞察栏（v0.60 UI 精化）
+            assert 'id="memList"' in html and 'id="hideInsights"' in html, \
+                "页面缺记忆卡/收起洞察栏结构"
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
@@ -2356,6 +2359,11 @@ def test_webui():
                     f"朋友项字段不全：{f}"
             assert [f["idx"] for f in fr["friends"]] == list(
                 range(1, len(fr["friends"]) + 1)), "编号必须从 1 连续"
+
+            # 「最近记住的事」卡片（v0.60）：返回 recent + total，排除自我记忆
+            mm = c.get(base + "/api/memories").json()
+            assert "total" in mm and isinstance(mm["recent"], list), \
+                f"/api/memories 结构不对：{mm}"
 
             # 页面上做成按钮的那些命令：任何一条挂了，点下去就是没反应
             for cmd in ("/work", "/diaries", "/notes", "/profile", "/guard on"):

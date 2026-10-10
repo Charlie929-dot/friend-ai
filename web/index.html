@@ -56,16 +56,28 @@
   .fc-row b { color: var(--ink); font-weight: 600; }
   .side-label { padding: 18px 11px 9px; color: var(--muted); font-size: 11px; letter-spacing: .04em; }
   .flist { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; }
-  .fitem { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 0; border-radius: 11px;
-    background: transparent; text-align: left; font-size: 12px; color: var(--muted); }
+  .fitem { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: 11px;
+    background: transparent; text-align: left; font-size: 12px; color: var(--muted); position: relative; }
   .fitem:hover { color: var(--ink); background: var(--surface-2); }
   .fitem.active { color: var(--ink); background: var(--surface-2); }
-  .fitem .fname { flex: 1; cursor: pointer; }
-  .fitem .fat { font-size: 10px; color: var(--muted); }
+  .fitem.cur { color: var(--ink); background: var(--surface-2); }
+  .fitem.cur::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px;
+    border-radius: 99px; background: var(--accent); }
+  /* 首字彩色头像（随皮肤自适应） */
+  .favatar { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 9px; display: grid;
+    place-items: center; font-size: 12px; font-weight: 700; }
+  .favatar.c0 { color: #4eae78; background: color-mix(in srgb, #4eae78 16%, transparent); }
+  .favatar.c1 { color: #d97a7a; background: color-mix(in srgb, #d97a7a 16%, transparent); }
+  .favatar.c2 { color: #d8a03b; background: color-mix(in srgb, #d8a03b 16%, transparent); }
+  .favatar.c3 { color: #5b7fd8; background: color-mix(in srgb, #5b7fd8 16%, transparent); }
+  .favatar.c4 { color: #9a6fd8; background: color-mix(in srgb, #9a6fd8 16%, transparent); }
+  .favatar.c5 { color: #4fa8a8; background: color-mix(in srgb, #4fa8a8 16%, transparent); }
+  .fitem .fbody { flex: 1; min-width: 0; }
+  .fitem .fname { display: block; cursor: pointer; line-height: 1.3; }
+  .fitem .fnote { display: block; margin-top: 1px; font-size: 10px; color: var(--muted); }
   .fitem .fop { font-size: 10.5px; color: var(--muted); cursor: pointer; padding: 0 2px; }
   .fitem .fop:hover { color: var(--accent); }
   .fitem .fop.del:hover { color: #e07a7a; }
-  .fitem.cur { outline: 1px solid var(--accent); }
   .empty { font-size: 11.5px; color: var(--muted); padding: 8px 11px; line-height: 1.6; }
   .sidebar-bottom { display: flex; flex-direction: column; gap: 3px; margin-top: auto; }
   .sidebar-link { display: flex; align-items: center; gap: 9px; padding: 9px 11px; color: var(--muted);
@@ -188,6 +200,8 @@
   .stat { background: var(--surface-2); border-radius: 12px; padding: 10px 11px; }
   .stat .s-label { font-size: 10px; color: var(--muted); }
   .stat .s-val { font-size: 16px; font-weight: 700; margin-top: 3px; }
+  .stat .s-val em { font-style: normal; }
+  .stat .s-val .q-den { font-size: 11px; font-weight: 500; color: var(--muted); margin-left: 1px; }
   .stat .s-sub { font-size: 10px; color: var(--muted); margin-top: 1px; }
   .mini-bar { height: 5px; margin-top: 7px; overflow: hidden; background: var(--line); border-radius: 99px; }
   .mini-bar > i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width .4s; }
@@ -195,6 +209,27 @@
   .quote-card { padding: 15px; color: var(--accent); background: var(--accent-soft); border-radius: 16px; }
   .quote-card p { margin: 9px 0 8px; color: var(--ink); font-size: 12px; line-height: 1.75; }
   .quote-card small { color: var(--muted); font-size: 10px; }
+
+  /* 「最近记住的事」卡片 */
+  .memory-card { padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; }
+  .memory-card .card-title { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; }
+  .memory-card .card-title button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+  .memory-card p { margin: 12px 0 0; color: var(--ink); font-size: 12px; line-height: 1.65; }
+  .memory-card p + p { padding-top: 10px; border-top: 1px solid var(--line); }
+  .memory-card .mem-empty { color: var(--muted); }
+  .memory-card a { display: inline-block; margin-top: 12px; color: var(--accent); font-size: 11px;
+    cursor: pointer; text-decoration: none; }
+  .memory-card a:hover { text-decoration: underline; }
+
+  /* 收起 / 展开洞察栏 */
+  .hide-insights { align-self: flex-start; border: 0; color: var(--muted); background: transparent;
+    font-size: 11px; cursor: pointer; padding: 2px; }
+  .hide-insights:hover { color: var(--accent); }
+  .show-insights { display: none; position: fixed; right: 18px; bottom: 18px; z-index: 20; padding: 10px 14px;
+    border: 0; border-radius: 12px; color: var(--ink); background: var(--surface); box-shadow: var(--shadow);
+    font-size: 12px; cursor: pointer; }
+  .no-insights .insight-panel { display: none; }
+  .no-insights .show-insights { display: block; }
 
   /* 调试 / 意识流（默认收起，账户菜单里开） */
   .ext-card { padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; display: none; }
@@ -244,6 +279,8 @@
     .chat-panel { min-height: calc(100vh - 92px); border-radius: 18px; }
     .insight-panel { margin-top: 16px; }
     .friend-heading p { display: none; }
+    .hide-insights, .show-insights { display: none !important; }
+    .no-insights .insight-panel { display: block; }
   }
 </style>
 </head>
@@ -285,6 +322,7 @@
         <div class="mobile-brand"><div class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24"><path fill="currentColor" d="M12 21s-7.5-4.6-9.6-9C1 8.9 2.4 5.5 5.5 5.5c1.9 0 3.2 1 4.5 2.6C11.3 6.5 12.6 5.5 14.5 5.5c3.1 0 4.5 3.4 3.1 6.5C19.5 16.4 12 21 12 21z"/></svg></div><strong>有生活的朋友</strong></div>
         <div class="breadcrumbs"><span>我的朋友</span><span style="color:var(--muted)">›</span><span class="crumb-current" id="crumbName">…</span><span class="live-pill"><i></i><span id="crumbPill">在线</span></span></div>
         <div class="top-actions">
+          <button class="icon-btn" id="btnHelp" aria-label="帮助"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg></button>
           <div class="menu-wrap">
             <button class="avatar-btn" id="avatarBtn" aria-label="账户">友</button>
             <div class="account-menu" id="accountMenu" style="display:none">
@@ -344,7 +382,7 @@
             <div class="typing" id="typing" style="margin:8px 0 0;min-height:14px"></div>
             <div class="stat-grid">
               <div class="stat"><div class="s-label">精力</div><div class="s-val" id="mEnergy">0</div><div class="mini-bar e"><i id="barE2" style="width:0%"></i></div></div>
-              <div class="stat"><div class="s-label">今日进度</div><div class="s-val" id="mQuota">0/0</div><div class="mini-bar p"><i id="barP" style="width:0%"></i></div></div>
+              <div class="stat"><div class="s-label">今日进度</div><div class="s-val"><em id="qDone">0</em><em class="q-den" id="qQuota">/0</em></div><div class="mini-bar p"><i id="barP" style="width:0%"></i></div></div>
               <div class="stat"><div class="s-label">余额</div><div class="s-val" id="mMoney">0</div><div class="s-sub">TA 自己挣的</div></div>
               <div class="stat"><div class="s-label">素材</div><div class="s-val" id="mMat">0</div><div class="s-sub">条新鲜事</div></div>
             </div>
@@ -354,6 +392,12 @@
             <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 16.6 5.7 21l2.3-7.2-6-4.4h7.6z"/></svg>
             <p id="quoteText">不必成为更好的人，今天也可以只是成为自己。</p>
             <small>— 小满的每日提醒</small>
+          </div>
+
+          <div class="memory-card">
+            <div class="card-title"><span>最近记住的事</span><button id="mMemRefresh" aria-label="刷新"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></button></div>
+            <div id="memList"><p class="mem-empty">还没记住什么，聊着聊着就有了。</p></div>
+            <a id="mMemAll">查看全部记忆 <span>→</span></a>
           </div>
 
           <!-- 调试面板（账户菜单开启） -->
@@ -384,10 +428,13 @@
             <h3><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 3a3 3 0 0 0-3 3v0a3 3 0 0 0 0 6 3 3 0 0 1 0 6 3 3 0 0 0 3 3"/><path d="M15 21a3 3 0 0 0 3-3v0a3 3 0 0 0 0-6 3 3 0 0 1 0-6 3 3 0 0 0-3-3"/></svg>意识流<span class="ec-sub" id="streamDay"></span></h3>
             <div class="stream-list" id="streamList"><div class="empty">加载中…</div></div>
           </div>
+
+          <button class="hide-insights" id="hideInsights">收起侧栏 ↑</button>
         </aside>
       </div>
     </section>
     <button class="mobile-menu" id="mobileMenu" aria-label="打开菜单"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    <button class="show-insights" id="showInsights">打开洞察</button>
   </div>
 
 <script>
@@ -496,7 +543,8 @@ function renderState(s){
   const e=p.energy||0;
   $('barE').style.width=e+'%'; $('barE2').style.width=e+'%';
   $('barP').style.width=(p.quota?(p.done/p.quota*100):0)+'%';
-  $('mQuota').textContent=(p.done||0)+'/'+(p.quota||0);
+  $('qDone').textContent=(p.done||0);
+  $('qQuota').textContent='/'+(p.quota||0);
   $('mEnergy').textContent=e;
   $('mMoney').textContent=p.money||0;
   $('mMat').textContent=(s.materials||0)+' 条';
@@ -580,8 +628,10 @@ async function loadFriends(){
       d.friends.forEach(f=>{
         const row=document.createElement('div');
         row.className='fitem'+(f.name===d.current?' cur':'');
-        row.innerHTML='<span class="fname">'+esc(f.name)
-          +(f.at?' <span class="fat">· '+esc(f.at)+'</span>':'')+'</span>'
+        const ci=(f.idx||0)%6;
+        row.innerHTML='<div class="favatar c'+ci+'">'+esc((f.name||'?').slice(0,1))+'</div>'
+          +'<div class="fbody"><span class="fname">'+esc(f.name)+'</span>'
+          +(f.at?'<span class="fnote">'+esc(f.at)+'</span>':'')+'</div>'
           +'<span class="fop" data-rename="'+f.idx+'">改名</span>'
           +'<span class="fop del" data-del="'+f.idx+'">删除</span>';
         row.querySelector('.fname').onclick=()=>switchFriend(f.idx,f.name);
@@ -634,6 +684,7 @@ $('btnNew').onclick=async()=>{
   resetChat(); panelDone('抽新朋友',r.reply||r.error); await loadFriends(); poll();
 };
 $('pClear').onclick=()=>panelDone('输出','点上面任意一项，结果会显示在这里（不占聊天区）。');
+$('btnHelp').onclick=()=>runCmd('/help','帮助');
 $('btnRestart').onclick=()=>restartService();
 $('btnRestart2').onclick=()=>restartService();
 async function restartService(){
@@ -650,6 +701,31 @@ document.addEventListener('click',(e)=>{ if(!e.target.closest('.menu-wrap')) acc
 $('mDebug').onclick=()=>{ const c=$('debugCard'); const open=!c.classList.contains('open'); c.classList.toggle('open',open); $('mDebug').classList.toggle('on',open); accMenu.style.display='none'; };
 $('mStream').onclick=()=>{ const c=$('streamCard'); const open=!c.classList.contains('open'); c.classList.toggle('open',open); $('mStream').classList.toggle('on',open); if(open) loadStream(); accMenu.style.display='none'; };
 $('mRestart').onclick=()=>restartService();
+
+/* ===== 记忆卡（最近记住的事） ===== */
+async function loadMemories(){
+  try{
+    const d=await (await fetch('/api/memories')).json();
+    const box=$('memList');
+    if(!d.recent||!d.recent.length){
+      box.innerHTML='<p class="mem-empty">还没记住什么，聊着聊着就有了。</p>';
+    }else{
+      box.innerHTML=d.recent.map(m=>'<p>'+esc(m.content)+'</p>').join('');
+    }
+    $('mMemAll').innerHTML='查看全部记忆'+(d.total?('（'+d.total+'）'):'')+' <span>→</span>';
+  }catch(e){ $('memList').innerHTML='<p class="mem-empty">⚠ 拉取失败：'+esc(e.message)+'</p>'; }
+}
+$('mMemRefresh').onclick=()=>loadMemories();
+$('mMemAll').onclick=()=>{ if(!$('debugCard').classList.contains('open')) $('mDebug').onclick(); runCmd('/memories','TA 记住的事'); };
+
+/* ===== 收起 / 展开洞察栏 ===== */
+function setInsights(on){
+  $('app').classList.toggle('no-insights',!on);
+  try{ localStorage.setItem('fa-insights',on?'1':'0'); }catch(e){}
+}
+(function(){ let on=true; try{ on=localStorage.getItem('fa-insights')!=='0'; }catch(e){} setInsights(on); })();
+$('hideInsights').onclick=()=>setInsights(false);
+$('showInsights').onclick=()=>setInsights(true);
 
 /* ===== 意识流 ===== */
 const STREAM_LABEL={inbox:'收',reply:'说',monologue:'想',work:'活',sleep:'眠',wake:'醒'};
@@ -683,7 +759,9 @@ $('send').onclick=send;
 
 poll();
 loadFriends();
+loadMemories();
 setInterval(poll,900);
+setInterval(loadMemories,30000);
 </script>
 </body>
 </html>
