@@ -81,6 +81,18 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
             messages.append({"role": "system", "content": f"【此刻的心情】{mhint}"})
     if game_rules:
         messages.append({"role": "system", "content": game_rules})
+    # 今天做过/读到的事（B 库，跨天自动不再注入）：TA 才知道自己这一天是怎么过的
+    notes = memory.today_notes() if config.TODAY_NOTES_ENABLED else []
+    if notes:
+        lines = []
+        for n in notes:
+            body = (n.get("content") or "").strip().replace("\n", " ")
+            if len(body) > config.TODAY_NOTES_CHARS:
+                body = body[:config.TODAY_NOTES_CHARS] + "…"
+            lines.append(f"- {n['summary']}：{body}")
+        messages.append({"role": "system",
+                         "content": f"【你今天做过的事】（{memory._TODAY_NOTE_HINT}，"
+                                    f"细节过了今天就淡了）\n" + "\n".join(lines)})
     combined = " ".join(batch)
     if combined:
         # 追问细节（"详细讲讲/完整说说"）时展开命中的长记忆全文

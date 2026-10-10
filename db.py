@@ -2,7 +2,7 @@
 import json
 import sqlite3
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import config
 
@@ -99,6 +99,11 @@ def init():
         # 旧库迁移：A/B 两级库——A 库记忆可挂一条 B 库长文（long_id 指向 long_memories.id，0=无）
         if "long_id" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN long_id INTEGER NOT NULL DEFAULT 0")
+        # 旧库迁移：艾宾浩斯衰减（decay_level=0 原文，压到 DECAY_MAX_LEVEL 就删；pinned=1 永久）
+        if "decay_level" not in cols:
+            c.execute("ALTER TABLE memories ADD COLUMN decay_level INTEGER NOT NULL DEFAULT 0")
+        if "pinned" not in cols:
+            c.execute("ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
 
 
 def clear_all():
@@ -414,6 +419,71 @@ def set_long_memory_status(long_id: int, status: str):
 def long_memory_count() -> int:
     with _conn() as c:
         return c.execute("SELECT COUNT(*) AS n FROM long_memories").fetchone()["n"]
+
+
+def today_long_notes(day: str | None = None, limit: int = 3) -> list[dict]:
+    """今天做过/读到的事（B 库，tags 含「今日素材」）：注入当天上下文用。
+
+    筛选条件就是"创建于今天"——跨天自动从上下文里消失，而 B 库的记录本身
+    保留（用户要的"从上下文中清除，记忆还是保留"）。
+    """
+    day = day or date.today().isoformat()
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM long_memories WHERE tags LIKE ? AND created_at LIKE ? "
+            "ORDER BY id DESC LIMIT ?",
+            (f"%{_TODAY_NOTE_TAG}%", f"{day}%", limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+_TODAY_NOTE_TAG = "今日素材"   # B 库"今天做过/读到的事"的标记（写入在 work._gen_shareable）
+
+
+def add_today_note(summary: str, content: str, title: str = "") -> int:
+    """落一条"今天做过/读到的事"进 B 库（工作单元产出素材时调用，不额外调 LLM）。"""
+    return add_long_memory(summary, content, "事件", _TODAY_NOTE_TAG,
+                           date.today().isoformat(), "", "", "其他")
+
+
+def memories_for_decay(now: datetime, idle_days: int, recall_bonus: float,
+                       pin_recalls: int, max_level: int, limit: int) -> list[dict]:
+    """挑出该遗忘一级的记忆：距"最后一次被想起"超过有效期 且 还没压到上限。
+
+    有效期 = idle_days × (1 + recall_count × recall_bonus)——被想起得越多撑得越久；
+    recall_count ≥ pin_recalls 的会先被标 pinned（永久），不再进这个列表。
+    """
+    with _conn() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT * FROM memories WHERE status='ok' AND pinned=0 "
+            "AND decay_level < ? ORDER BY id", (max_level,)).fetchall()]
+    out = []
+    for m in rows:
+        base = m.get("recalled_at") or m.get("created_at") or ""
+        try:
+            last = datetime.fromisoformat(base)
+        except (ValueError, TypeError):
+            continue
+        allow = timedelta(days=idle_days * (1 + int(m.get("recall_count", 0)) * recall_bonus))
+        if now - last >= allow:
+            out.append(m)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def set_memory_decay(mem_id: int, level: int, content: str):
+    """更新一条记忆的衰减等级与（压缩后的）内容。"""
+    with _conn() as c:
+        c.execute("UPDATE memories SET decay_level=?, content=? WHERE id=?",
+                  (level, content, mem_id))
+        c.execute("DELETE FROM memory_vectors WHERE memory_id=?", (mem_id,))  # 内容变了，向量作废重算
+
+
+def pin_memory(mem_id: int):
+    """标为永久记住（被想起够多次），从此不参与衰减。"""
+    with _conn() as c:
+        c.execute("UPDATE memories SET pinned=1 WHERE id=?", (mem_id,))
 
 
 # --- 日记 + 每日回顾（P2：记忆 v3 每日回顾 + 日记系统 + 今日对话回顾线） ---

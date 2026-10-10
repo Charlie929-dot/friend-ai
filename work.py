@@ -223,7 +223,30 @@ def _gen_shareable(day: str, seq: int, article: dict | None = None) -> str:
     items = _shareables()
     items.append({"day": day, "seq": seq, "text": text, "used": 0})
     db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
+    _note_today(article, seq, text)   # 顺手进 B 库：今天读到的东西，当天能说得出细节
     return text
+
+
+def _note_today(article: dict | None, seq: int, text: str) -> None:
+    """把"今天读到/想到的这件事"落进 B 库（不额外调 LLM——素材文本已经生成了）。
+
+    当天注入上下文（`context` 拉 TODAY_NOTE_TAG 的今日条目），跨天自动不再注入，
+    但 B 库这条记录保留：细节会淡，做过的事不丢。
+    """
+    if not config.TODAY_NOTES_ENABLED:
+        return
+    if article and article.get("title"):
+        summary = f"今天读到《{article['title']}》第 {seq} 段"
+        body = (f"【{article['source']}《{article['title']}》】\n"
+                f"金句：{article.get('quote', '')}\n"
+                f"我的感想：{text}")
+        excerpt = (article.get("text") or "")[:1000]
+        if excerpt:
+            body += f"\n\n【读到的内容】{excerpt}"
+    else:
+        summary = f"今天忙完第 {seq} 件事"
+        body = text
+    db.add_today_note(summary, body)
 
 
 def _reading_content(article: dict | None, seq: int) -> str:

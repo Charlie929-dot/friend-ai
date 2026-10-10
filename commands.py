@@ -43,6 +43,8 @@ HELP = """可用命令：
   /delmem <编号>   删掉一条自动记忆（也用于确认 AI 提议的删除）
   /keepmem <编号>  保留一条 AI 提议删除的记忆（取消待删除标记）
   /memfill         历史回填：把旧聊天记录补进记忆（历史多会跑一会儿）
+  /decay           手动跑一轮遗忘（艾宾浩斯：很久没想起的记忆压短一级，压够就忘掉）
+  /decay dry       只看哪些记忆该淡忘了，不动手
   /work            看它今天手头的事（进度/精力/余额/攒了多少素材）
   /books           看我书架上的书（导入的 txt/epub 真书）
   /autostart       查开机自启状态；/autostart on|off 开/关（网页端开机自己回来）
@@ -489,6 +491,11 @@ def handle(cmd_line: str) -> str:
         if added == 0:
             return "历史里没有新东西可记（或已经全部回填过了）。"
         return f"回填完成：从旧聊天里新记住 {added} 条。用 /memories 看看吧。"
+
+    if cmd == "/decay":
+        # 艾宾浩斯遗忘（S4）：平时挂睡前复盘一天一次，这里可手动跑/预览
+        import memory as _memory
+        return _memory.forget_pass(dry=(arg.strip().lower() == "dry"))
 
     if cmd == "/work":
         # 工作系统（S3）：它今天手头的事。看得见它的日子，才知道什么时候找它会打扰

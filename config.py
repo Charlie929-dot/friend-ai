@@ -101,6 +101,17 @@ EMBEDDING_MODEL_DIR = Path(os.environ.get("EMBEDDING_MODEL_DIR", str(BASE_DIR / 
 EMBEDDING_SEMANTIC_WEIGHT = float(os.environ.get("EMBEDDING_SEMANTIC_WEIGHT", "4.0"))  # 语义相似分在混合打分里的权重（字面 bigram 仍占 2.0/重叠）
 EMBEDDING_MIN_SIMILARITY = float(os.environ.get("EMBEDDING_MIN_SIMILARITY", "0.35"))   # 余弦相似度下限（低于此值不算语义命中，防噪声）
 
+# --- 艾宾浩斯记忆衰减（S4：遗忘 = 一次次总结；被想起得越多，记得越久） ---
+MEMORY_DECAY_ENABLED = os.environ.get("MEMORY_DECAY_ENABLED", "on").lower() == "on"   # 总开关（关了记忆只增不减）
+MEMORY_DECAY_IDLE_DAYS = int(os.environ.get("MEMORY_DECAY_IDLE_DAYS", "30"))          # 多久没被想起 → 遗忘一级（基准天数）
+MEMORY_DECAY_RECALL_BONUS = float(os.environ.get("MEMORY_DECAY_RECALL_BONUS", "0.5")) # 每被想起一次，有效期加成（有效期 = 基准 ×(1+召回次数×本值)）
+MEMORY_DECAY_MAX_LEVEL = int(os.environ.get("MEMORY_DECAY_MAX_LEVEL", "3"))           # 压到第几级彻底遗忘（删行；0=原文）
+MEMORY_DECAY_PIN_RECALLS = int(os.environ.get("MEMORY_DECAY_PIN_RECALLS", "8"))       # 被想起够多次 → 永久记住，不再衰减
+MEMORY_DECAY_BATCH = int(os.environ.get("MEMORY_DECAY_BATCH", "6"))                   # 一次遗忘最多处理几条（挂睡前复盘，一天一次）
+TODAY_NOTES_ENABLED = os.environ.get("TODAY_NOTES_ENABLED", "on").lower() == "on"      # 今天做过/读到的事注入当天上下文（跨天自动不注入）
+TODAY_NOTES_MAX = int(os.environ.get("TODAY_NOTES_MAX", "3"))                          # 最多注入几条今日素材
+TODAY_NOTES_CHARS = int(os.environ.get("TODAY_NOTES_CHARS", "200"))                    # 每条正文注入截断字数（B 库存全文，注入只看摘要量）
+
 # --- 工作系统（S3「有自己的生活」：它自己的日子，工作循环 + 心流期） ---
 WORK_ENABLED = os.environ.get("WORK_ENABLED", "on").lower() == "on"          # 总开关（关了它就没有"手头的事"，打断成本也无从算起）
 WORK_DAILY_QUOTA = int(os.environ.get("WORK_DAILY_QUOTA", "6"))              # 今日工作单元配额（做满才下班）

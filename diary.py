@@ -125,9 +125,21 @@ def daily_review(force: bool = False) -> str:
         cutoff = (datetime.now() + timedelta(seconds=1)).isoformat(timespec="seconds")
         purged = db.purge_messages_before(cutoff)
 
+    # 艾宾浩斯遗忘（S4）：写完日记顺手跑一轮——一天一次、一次批量 LLM 调用。
+    # 遗忘 = 把很久没想起的记忆压成更短的一句，压够了就彻底忘掉。
+    import memory
+    forget_note = ""
+    if config.MEMORY_DECAY_ENABLED:
+        try:
+            forget_note = memory.forget_pass()
+        except Exception as e:      # 衰减失败不能连累日记本身
+            print(f"[diary] 遗忘轮跳过：{e}")
+
     parts = [f"日记写好啦（{day}）"]
     if mood:
         parts.append(f"心情：{mood}")
+    if forget_note:
+        parts.append(f"遗忘：{forget_note}")
     if added or deleted:
         parts.append(f"补记 {added} 条 / 提议删 {deleted} 条")
     if purged:

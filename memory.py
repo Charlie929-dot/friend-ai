@@ -802,6 +802,153 @@ def run_memory_tool(name: str, args: dict) -> str:
     return _TOOL_UNKNOWN
 
 
+# ---------- 今天做过/读到的事（B 库）→ 注入当天上下文 ----------
+# 用户要的「一天所有信息交流都进记忆，阅读内容存 B 库并注入上下文，写日记后从
+# 上下文清除但记忆保留」：注入的筛选条件就是"创建于今天"——跨天自动不再注入，
+# 而 B 库记录本身保留。写入点在 work._gen_shareable（不额外调 LLM）。
+_TODAY_NOTE_HINT = "这是你今天自己做过/读到的事，细节只有今天还记得清楚"
+
+
+def today_notes(day: str | None = None) -> list[dict]:
+    """今天做过/读到的事（B 库），供上下文注入。关了开关或没有就返回空列表。"""
+    if not config.TODAY_NOTES_ENABLED:
+        return []
+    return db.today_long_notes(day, config.TODAY_NOTES_MAX)
+
+
+# ---------- 艾宾浩斯衰减：遗忘 = 一次次总结 ----------
+# 规则（用户拍板）：到期 → 把这条记忆总结成更短的一句（level+1）；压到
+# DECAY_MAX_LEVEL 就彻底遗忘（删行）；被想起的次数越多有效期越长（bonus），
+# 够多次（PIN_RECALLS）就永久记住（pinned）。
+# 保真优先：模型压缩结果更长 / 踩红线 / 太短 → 本次跳过，宁可不淡忘也不让记忆变味。
+_COMPRESS_PROMPT = """（内心活动，不用回复这句话）下面这些是你脑子里很久没想起来的记忆。时间久了细节会淡——把它们各自压成更短的一句话。
+
+规则（硬）：
+- 只压缩，不许新增任何细节、不许推测、不许改意思；
+- 每条不超过 {max_chars} 字，且必须比原来短；
+- 拿不准就保留原话；
+- 输出一个 JSON 数组，不要输出任何其他文字：[{{"id": 1, "content": "压缩后的一句话"}}]
+
+【待淡忘的记忆】
+{items}"""
+_LEVEL_CHARS = {0: 50, 1: 20}      # 压到 level 1 约 50 字，level 2 约 20 字
+
+
+def _decay_window(now: datetime, recall_count: int) -> int:
+    """这条记忆能撑多少天：被想起得越多，有效期越长。"""
+    return int(config.MEMORY_DECAY_IDLE_DAYS * (1 + recall_count * config.MEMORY_DECAY_RECALL_BONUS))
+
+
+def forget_preview() -> list[dict]:
+    """到期待淡忘的记忆（不改数据）。/forget dry 与测试用。"""
+    if not config.MEMORY_DECAY_ENABLED:
+        return []
+    now = datetime.now()
+    return db.memories_for_decay(now, config.MEMORY_DECAY_IDLE_DAYS,
+                                 config.MEMORY_DECAY_RECALL_BONUS,
+                                 config.MEMORY_DECAY_PIN_RECALLS,
+                                 config.MEMORY_DECAY_MAX_LEVEL,
+                                 config.MEMORY_DECAY_BATCH)
+
+
+def _pin_long_remembered() -> int:
+    """被想起够多次的 → 升为永久记忆（不再衰减）。返回新标永久的条数。"""
+    n = 0
+    for m in db.all_memories(limit=500):
+        if m.get("pinned"):
+            continue
+        if int(m.get("recall_count", 0)) >= config.MEMORY_DECAY_PIN_RECALLS:
+            db.pin_memory(m["id"])
+            n += 1
+    return n
+
+
+def _compress_batch(items: list[dict]) -> dict[int, str]:
+    """一次 LLM 调用把一批记忆压短。返回 {记忆id: 压缩后内容}（失败的条目不在里面）。"""
+    max_chars = max(_LEVEL_CHARS.get(int(m.get("decay_level", 0)), 20) for m in items)
+    listing = "\n".join(f'{{"id": {m["id"]}, "content": "{m["content"]}"}}' for m in items)
+    import persona  # 后台调用：内部 prompt 一律走 core_identity（硬性约定 #6）
+    try:
+        raw = llm.chat([
+            {"role": "system", "content": persona.core_identity_prompt()},
+            {"role": "user", "content": _COMPRESS_PROMPT.format(max_chars=max_chars,
+                                                                items=listing)},
+        ], temperature=0.2)
+    except llm.LLMUnavailable as e:
+        print(f"[memory] 淡忘跳过（LLM 不可用）：{e}")
+        return {}
+    out: dict[int, str] = {}
+    for it in _parse_json_array(raw):
+        try:
+            mid = int(it.get("id"))
+        except (TypeError, ValueError):
+            continue
+        text = str(it.get("content", "")).strip()
+        if mid and text:
+            out[mid] = text
+    return out
+
+
+def _apply_decay(mem: dict, shorter: str) -> str:
+    """把压缩结果落库（或压到上限就遗忘）。返回 'fade' / 'forget' / 'skip'。"""
+    old = mem["content"]
+    # 保真校验：不许变长、不许踩红线、不许空话
+    if len(shorter) >= len(old) or len(shorter) < 6:
+        return "skip"
+    if _validate(shorter, False) is None:
+        return "skip"
+    level = int(mem.get("decay_level", 0)) + 1
+    if level >= config.MEMORY_DECAY_MAX_LEVEL:
+        long_id = int(mem.get("long_id", 0) or 0)
+        db.delete_memory(mem["id"])
+        if long_id:
+            db.delete_long_memory(long_id)   # 记忆忘了，它挂的全文一起清（证据随记忆走）
+        print(f"[memory] 彻底遗忘：{old[:30]}…（压到 {level} 级）")
+        return "forget"
+    db.set_memory_decay(mem["id"], level, shorter)
+    print(f"[memory] 淡忘一级：{old[:24]}… → {shorter[:24]}…（level {level}）")
+    return "fade"
+
+
+def forget_pass(dry: bool = False) -> str:
+    """跑一轮遗忘（挂睡前复盘，一天一次；/forget 可手动）。dry=True 只预览不动手。
+
+    返回给人看的一句结果。LLM 不可用 → 跳过（下次再试），绝不拿空结果误删记忆。
+    """
+    if not config.MEMORY_DECAY_ENABLED:
+        return "记忆衰减已关闭（MEMORY_DECAY_ENABLED=off）。"
+    pinned = _pin_long_remembered()
+    due = forget_preview()
+    if not due:
+        return ("没有该淡忘的记忆" + (f"（{pinned} 条升为永久）" if pinned else "") + "。")
+    if dry:
+        lines = [f"- #{m['id']}（{_decay_window(datetime.now(), m['recall_count'])}天没想起，"
+                 f"level {m.get('decay_level', 0)}）{m['content']}" for m in due]
+        return f"待淡忘 {len(due)} 条：\n" + "\n".join(lines)
+    shorter_map = _compress_batch(due)
+    faded = forgotten = skipped = 0
+    for m in due:
+        shorter = shorter_map.get(m["id"], "")
+        if not shorter:
+            skipped += 1
+            continue
+        r = _apply_decay(m, shorter)
+        if r == "fade":
+            faded += 1
+        elif r == "forget":
+            forgotten += 1
+        else:
+            skipped += 1
+    parts = [f"淡忘 {faded} 条"]
+    if forgotten:
+        parts.append(f"彻底忘了 {forgotten} 条")
+    if skipped:
+        parts.append(f"{skipped} 条没动（模型压得不好，保真优先）")
+    if pinned:
+        parts.append(f"{pinned} 条升为永久")
+    return "，".join(parts) + "。"
+
+
 def random_memory(category: str | None = None) -> dict | None:
     """给主动话题供弹药：随机抽一条**关于对方**的记忆（优先最近没被召回过的）。
 

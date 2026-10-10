@@ -1135,6 +1135,143 @@ def test_semantic_recall():
         _db.init()
 
 
+def test_today_notes_injection():
+    """今天做过/读到的事：进 B 库 → 注入当天上下文 → 跨天自动不再注入（记忆保留）。"""
+    import tempfile
+    import datetime as _dt
+    import db as _db
+    import memory as _mem
+    import context as _ctx
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    today = _dt.date.today().isoformat()
+    try:
+        _db.init()
+        # 1) 工作产出素材时顺手落 B 库（不额外调 LLM）
+        _work._note_today({"genre": "科幻", "title": "三体", "source": "刘慈欣",
+                           "quote": "不要回答", "text": "正文" * 300},
+                          2, "这句挺带感的，宇宙社会学是真敢想")
+        notes = _mem.today_notes()
+        assert len(notes) == 1, f"今天的事应进 B 库：{notes}"
+        assert "三体" in notes[0]["summary"], f"摘要应带书名：{notes[0]['summary']}"
+
+        # 2) 注入当天上下文
+        msgs = _ctx.build_chat_messages("AWAKE", ["你今天干嘛了"])
+        joined = "\n".join(m.get("content", "") for m in msgs)
+        assert "你今天做过的事" in joined, "应注入今天的素材"
+        assert "不要回答" in joined, "注入里应能看到读到的内容"
+
+        # 3) 跨天不再注入，但 B 库记录保留（记忆还在）
+        assert _mem.today_notes("2020-01-01") == [], "跨天不该再注入"
+        assert _db.long_memory_count() == 1, "B 库记录应保留"
+        print("ok 今日素材（B 库落库 + 当天注入 + 跨天不注入）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_memory_decay():
+    """艾宾浩斯遗忘：到期压短一级；被想起越多撑得越久；够多次永久；压够级数彻底忘掉。
+
+    保真优先：模型压出来的比原文长/踩红线 → 本次跳过，绝不把记忆改味。
+    """
+    import tempfile
+    import datetime as _dt
+    import db as _db
+    import memory as _mem
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_idle, real_bonus, real_max, real_pin = (config.MEMORY_DECAY_IDLE_DAYS,
+                                                 config.MEMORY_DECAY_RECALL_BONUS,
+                                                 config.MEMORY_DECAY_MAX_LEVEL,
+                                                 config.MEMORY_DECAY_PIN_RECALLS)
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    config.MEMORY_DECAY_IDLE_DAYS = 30
+    config.MEMORY_DECAY_RECALL_BONUS = 0.5
+    config.MEMORY_DECAY_MAX_LEVEL = 3
+    config.MEMORY_DECAY_PIN_RECALLS = 8
+    old = _dt.datetime.now() - _dt.timedelta(days=100)
+    try:
+        _db.init()
+        # 1) 很久没被想起 → 进待淡忘列表
+        mid = _db.add_memory("小徐说过他小时候养过一只叫团子的猫，后来送人了还要过很久", "事件")
+        _db.add_memory("小徐喜欢吃学校门口那家麻辣烫，尤其加麻酱", "偏好")
+        _db.touch_memory(mid)          # 想起过一次 → 有效期 30×1.5=45 天
+        with _db._conn() as c:
+            c.execute("UPDATE memories SET recalled_at=? WHERE id=?",
+                      (old.isoformat(timespec="seconds"), mid))
+        # 第二条：从未被想起（用 created_at）
+        with _db._conn() as c:
+            c.execute("UPDATE memories SET created_at=?, recalled_at='' WHERE content LIKE '小徐喜欢吃%'",
+                      (old.isoformat(timespec="seconds"),))
+        due = _mem.forget_preview()
+        assert len(due) == 2, f"两条都过期未想起：{due}"
+
+        # 2) 有效期随召回次数变长：想起 8 次以上 → 永久，不再待淡忘
+        many = _db.add_memory("小徐是夜猫子，经常凌晨一两点才睡", "画像")
+        for _ in range(9):
+            _db.touch_memory(many)
+        with _db._conn() as c:
+            c.execute("UPDATE memories SET recalled_at=? WHERE id=?",
+                      (old.isoformat(timespec="seconds"), many))
+        assert _mem._pin_long_remembered() == 1, "想起够多次应升为永久"
+        assert many not in [m["id"] for m in _mem.forget_preview()], "永久记忆不该待淡忘"
+
+        # 3) 压短一级（模型返回更短且合规）
+        real_chat = _mem.llm.chat
+        _mem.llm.chat = lambda *a, **k: ('[{"id": %d, "content": "小徐小时候养过猫团子"},'
+                                         '{"id": %d, "content": "小徐爱吃门口那家麻辣烫"}]'
+                                         % (mid, mid + 1))
+        try:
+            out = _mem.forget_pass()
+        finally:
+            _mem.llm.chat = real_chat
+        assert "淡忘 2 条" in out, f"应淡忘两条：{out}"
+        m1 = [x for x in _db.all_memories(limit=10) if x["id"] == mid][0]
+        assert m1["decay_level"] == 1, f"等级应变 1：{m1}"
+        assert m1["content"] == "小徐小时候养过猫团子", f"内容应被压短：{m1['content']}"
+
+        # 4) 保真：模型压得比原文长 → 跳过不改
+        before = m1["content"]
+        _mem.llm.chat = lambda *a, **k: ('[{"id": %d, "content": "%s并且他还说过很多很多很多别的事情哦"}]'
+                                         % (mid, before))
+        try:
+            out = _mem.forget_pass()
+        finally:
+            _mem.llm.chat = real_chat
+        assert "没动" in out, f"压长了应跳过：{out}"
+        m1b = [x for x in _db.all_memories(limit=10) if x["id"] == mid][0]
+        assert m1b["content"] == before, "跳过时内容不能变"
+
+        # 5) 压到上限 → 彻底遗忘（连带 B 库长文一起删）
+        long_id = _db.add_long_memory("长文摘要", "全文" * 100)
+        m2 = _db.add_memory("小徐讲过一段很长的往事细节", "事件", long_id=long_id)
+        with _db._conn() as c:
+            c.execute("UPDATE memories SET created_at=?, recalled_at='' WHERE id=?",
+                      (old.isoformat(timespec="seconds"), m2))
+        _db.set_memory_decay(m2, config.MEMORY_DECAY_MAX_LEVEL - 1, "小徐讲过一段往事")
+        _mem.llm.chat = lambda *a, **k: '[{"id": %d, "content": "小徐讲过往事"}]' % m2
+        try:
+            out = _mem.forget_pass()
+        finally:
+            _mem.llm.chat = real_chat
+        assert "彻底忘了 1 条" in out, f"到上限应删除：{out}"
+        assert _db.find_memory_by_keyword("小徐讲过往事") is None, "A 库行应删掉"
+        assert _db.get_long_memory(long_id) is None, "挂的 B 库长文应一起删"
+        print("ok 艾宾浩斯记忆衰减（压短/永久/保真跳过/彻底遗忘）")
+    finally:
+        config.MEMORY_DECAY_IDLE_DAYS, config.MEMORY_DECAY_RECALL_BONUS = real_idle, real_bonus
+        config.MEMORY_DECAY_MAX_LEVEL, config.MEMORY_DECAY_PIN_RECALLS = real_max, real_pin
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_long_memory():
     """A/B 两级库：长文存 B 库（全文+摘要）、A 库挂 long_id 伪链接；追问细节时展开。"""
     import tempfile
@@ -2570,6 +2707,8 @@ if __name__ == "__main__":
     test_bubble_fixed_corpus()
     test_identity_recall()
     test_semantic_recall()
+    test_today_notes_injection()
+    test_memory_decay()
     test_long_memory()
     test_memory_tool_calling()
     test_diary_daily_review()
