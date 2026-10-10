@@ -1272,6 +1272,62 @@ def test_memory_decay():
         _db.init()
 
 
+def test_delete_friend():
+    """删除朋友（用户拍板）：先备份到 backups/ 再删；**正在聊的这位不许删**；
+    不带 yes 只给确认提示不真删。"""
+    import tempfile
+    import db as _db
+    import commands as _cmd
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        _db.add_message("user", "你好呀")
+        # 造两位归档朋友：aaa 是"当前"那位，bbb 是要删的那位
+        _db.set_kv("friend_id", "aaa11111")
+        _cmd._archive_current()
+        _db.set_kv("friend_id", "bbb22222")
+        _cmd._archive_current()
+        # 当前库切回 aaa（这样 aaa = 正在聊的，bbb = 可删）
+        _cmd.handle("/friend 1")
+        files = _cmd._archives()
+        assert len(files) == 2, f"应有两个归档：{files}"
+
+        bbb = [p for p in files if "bbb22222" in p.name][0]
+        aaa = [p for p in files if "aaa11111" in p.name][0]
+
+        # 1) 正在聊的这位：拒绝
+        out = _cmd.handle("/delfriend 1 yes")   # 编号按相识时间，先确认哪个是当前
+        cur_idx = 1 if "aaa11111" in files[0].name else 2
+        out = _cmd.handle(f"/delfriend {cur_idx} yes")
+        assert "不能删" in out, f"当前朋友不该被删：{out}"
+        assert aaa.exists(), "当前朋友的库不能被动过"
+
+        # 2) 不带 yes：只给确认提示，不真删
+        other_idx = 3 - cur_idx
+        out = _cmd.handle(f"/delfriend {other_idx}")
+        assert "确认请输入" in out, f"未确认应只给提示：{out}"
+        assert bbb.exists(), "未确认不能删"
+
+        # 3) 带 yes：备份 + 删除 + 留痕
+        out = _cmd.handle(f"/delfriend {other_idx} yes")
+        assert "告别" in out, f"删除结果：{out}"
+        assert not bbb.exists(), "归档文件应已删除"
+        backups = list((tmp / "backups").glob("*.db"))
+        assert len(backups) == 1, f"应先备份一份：{backups}"
+        assert "bbb22222" in backups[0].name, f"备份应可追溯到这位：{backups[0].name}"
+        log = (tmp / "archive.log").read_text(encoding="utf-8")
+        assert "删除" in log and "备份" in log, "archive.log 应留痕"
+        assert len(_cmd._archives()) == 1, "列表里应只剩一位"
+        print("ok 删除朋友（先备份再删 / 当前朋友拒绝 / 未确认不删）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_friend_switch_no_deadlock():
     """换朋友不能卡死（实测 #33）：网页端 /api/send 外面握着 SEND_LOCK，
     而 /friend /new-friend 内部切库还要再拿一次 → 同一线程重入。
@@ -2756,6 +2812,7 @@ if __name__ == "__main__":
     test_today_notes_injection()
     test_memory_decay()
     test_friend_switch_no_deadlock()
+    test_delete_friend()
     test_long_memory()
     test_memory_tool_calling()
     test_diary_daily_review()

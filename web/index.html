@@ -95,6 +95,8 @@
   .fitem .fat { font-size:10.5px; color:#7e84a8; }
   .fitem .fop { font-size:11px; color:#8a8fc0; cursor:pointer; }
   .fitem .fop:hover { color:#c0a8ff; }
+  .fitem .fop.del { color:#c98a8a; }
+  .fitem .fop.del:hover { color:#ff8e8e; }
   .fitem.cur { border:1px solid #3a6df0; }
   .empty { font-size:11.5px; color:#7e84a8; margin-top:8px; }
 
@@ -377,9 +379,11 @@ $('btnGuard').onclick = () => {
 };
 
 // --- 朋友列表：点一下就换，不用记编号 ---
+let curFriend = '';   // 当前正在聊的朋友（删除时用于"不许删正在聊的这位"的本地拦截）
 async function loadFriends(){
   try{
     const d = await (await fetch('/api/friends')).json();
+    curFriend = d.current || '';
     const box = $('flist'); box.innerHTML = '';
     if (!d.friends.length){
       box.innerHTML = '<div class="empty">还没有归档的老朋友。抽个新朋友之后，'
@@ -390,10 +394,14 @@ async function loadFriends(){
         row.className = 'fitem' + (f.name === d.current ? ' cur' : '');
         row.innerHTML = '<span class="fname">' + esc(f.name)
           + (f.at ? ' <span class="fat">· ' + esc(f.at) + '</span>' : '') + '</span>'
-          + '<span class="fop" data-rename="' + f.idx + '">改名</span>';
+          + '<span class="fop" data-rename="' + f.idx + '">改名</span>'
+          + '<span class="fop del" data-del="' + f.idx + '">删除</span>';
         row.querySelector('.fname').onclick = () => switchFriend(f.idx, f.name);
         row.querySelector('.fop').onclick = (e) => {
           e.stopPropagation(); renameFriend(f.idx, f.name);
+        };
+        row.querySelector('.fop.del').onclick = (e) => {
+          e.stopPropagation(); deleteFriend(f.idx, f.name);
         };
         box.appendChild(row);
       });
@@ -412,6 +420,24 @@ async function switchFriend(idx, name){
   panelDone('换朋友', r.reply || r.error);
   $('flist').classList.remove('open');
   await loadFriends();            // 归档时间变了，列表要重取
+  poll();
+}
+
+// 和某位老朋友告别：先换走当前这位才能删它，删前自动备份到 backups/
+async function deleteFriend(idx, name){
+  if (name === curFriend){
+    panelDone('删除朋友', '「' + name + '」是现在正在聊的这位，先换成别人（或抽个新朋友）再来删TA。');
+    return;
+  }
+  if (!confirm('和「' + name + '」告别？\n\nTA 的记忆和日记会先备份到 backups/，然后从列表里消失。')) return;
+  panelBusy('删除朋友');
+  const r = await (await fetch('/api/send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: '/delfriend ' + idx + ' yes'})
+  })).json();
+  panelDone('删除朋友', r.reply || r.error);
+  $('flist').classList.remove('open');
+  await loadFriends();
   poll();
 }
 

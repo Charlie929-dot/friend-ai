@@ -28,6 +28,7 @@ HELP = """可用命令：
   /friends         列出所有归档的"老朋友"（名字+最后归档时间）
   /friend <编号>   换回某个老朋友继续聊（当前朋友自动归档，覆盖更新TA那份）
   /alias <编号> <别名>  给归档的老朋友改别名（只改库内记录，文件名不变）
+  /delfriend <编号> yes  和某位老朋友告别（先备份到 backups/ 再删；正在聊的这位要先换走）
   /profile         查看当前朋友持有的你的信息清单
   /profile add <一行>   往清单里加一条（如 /profile add 年级：大二）
   /profile reuse   让当前朋友沿用之前填过的清单
@@ -205,6 +206,51 @@ def pick_friend_on_startup(input_fn=input, print_fn=print) -> str | None:
         return f"/friend {choice}"
     print_fn("没看懂，继续和当前朋友聊。")
     return None
+
+
+def _delete_friend(arg: str) -> str:
+    """删除一位归档朋友（`/delfriend <编号> [yes]`）。
+
+    用户拍板的两条规矩：
+    1. **先备份再删** —— 库文件先复制进 `backups/`，误删还能拷回来；
+    2. **当前正在聊的这位不许删** —— 删它会打断正在进行的回复/记忆写入，
+       先 `/friend <别人>` 或 `/new-friend` 切走再来删。
+    不带 `yes` 只返回确认提示，不真删（网页端弹窗已确认过才带 yes）。
+    """
+    parts = arg.split()
+    if not parts or not parts[0].isdigit():
+        return "用法：/delfriend <编号> yes（编号见 /friends 或网页端朋友列表）"
+    archives = _archives()
+    idx = int(parts[0])
+    if not (1 <= idx <= len(archives)):
+        return f"没有第 {idx} 位朋友（现在共 {len(archives)} 位），先用 /friends 看看"
+    target = archives[idx - 1]
+    name, _ = _archive_display(target)
+
+    # 当前正在聊的这位：拒绝（它的库就是 config.DB_PATH 指向的那份）
+    fid = _read_kv_file(target).get("friend_id", "")
+    if fid and fid == db.get_kv("friend_id"):
+        return (f"「{name}」是现在正在聊的这位，不能删——先换个朋友"
+                f"（/friend <编号> 或 /new-friend），再回来删TA。")
+
+    confirmed = len(parts) > 1 and parts[1].lower() == "yes"
+    if not confirmed:
+        return (f"确定要和「{name}」告别吗？TA 的记忆和日记会先备份到 backups/，"
+                f"然后从列表里消失。确认请输入：/delfriend {idx} yes")
+
+    backups = config.BASE_DIR / "backups"
+    backups.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = backups / f"friend-{fid or target.stem}-删除备份-{stamp}.db"
+    try:
+        shutil.copyfile(str(target), str(backup))
+        target.unlink()
+    except OSError as e:
+        return f"删不掉「{name}」：{e}"
+    with open(config.BASE_DIR / "archive.log", "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] 删除 {name}（{fid}）"
+                f"备份于 backups/{backup.name}\n")
+    return f"已经和「{name}」告别了。（备份留在 backups/{backup.name}，想找回可以拷回项目根）"
 
 
 def _intro_greeting(card: dict) -> str:
@@ -402,6 +448,11 @@ def handle(cmd_line: str) -> str:
         import core  # 切过去就顺手看看TA有没有留言攒着
         pending = core.pending_outbox_text()
         return msg + (f"\n\n{pending}" if pending else "")
+
+    if cmd == "/delfriend":
+        # 删除一位归档朋友（用户拍板：先备份再删；当前正在聊的这位不许删——
+        # 删它会打断正在进行的回复/记忆写入，先换朋友再来删）
+        return _delete_friend(arg)
 
     if cmd == "/note":
         if not arg:
