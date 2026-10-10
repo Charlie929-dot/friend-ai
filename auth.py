@@ -247,7 +247,7 @@ LOGIN_PAGE = """<!doctype html>
   * { box-sizing: border-box; }
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
          background:#0e1016;
-         background-image:radial-gradient(60% 50% at 50% 0%, #1a2233 0%, #0e1016 70%);
+         background-image:radial-gradient(60%% 50%% at 50%% 0%%, #1a2233 0%%, #0e1016 70%%);
          color:#e8e6e3;
          font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
   .card { width:100%%; max-width:340px; padding:32px 26px 26px; border-radius:16px;
