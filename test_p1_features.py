@@ -3095,6 +3095,90 @@ def test_anti_sycophancy_redlines():
     print("ok 人格红线（投降句式检测：真人反应不误伤 / 秒认必被抓）")
 
 
+def test_tone_main_track():
+    """语气主轨（10-10）：每轮定一个主导情绪状态（mood 主轨），cost 相处姿势从属；
+    反谄媚补「分享/异议排队」；书名号 bug 修复（reading 标题裸存、work 只包一层）。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import config as _cfg
+    import db as _db
+    import reading as _reading
+    import tone as _tone
+    import persona as _persona
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_share = config.WORK_SHAREABLE_ENABLED
+    saved_mood = config.MOOD_ENABLED
+    saved_work = config.WORK_ENABLED
+    config.WORK_SHAREABLE_ENABLED = False
+    config.MOOD_ENABLED = True
+    config.WORK_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
+        morning = _dt(2026, 10, 9, 10, 0)
+        units = _work.plan(morning)
+        first_start = _dt.fromisoformat(units[0]["start"])
+
+        # 主轨 = mood（情绪），从属 = cost（相处姿势）：心流期 = 投入 + costly
+        d = _tone.dominant(first_start + _td(minutes=2))
+        assert d["main"] == "投入" and d["cost"] == "costly", d
+
+        # voice_hint 是统一的一个块：带「此刻的我」+ 主轨词 + 松紧度（从属）
+        hint = _tone.voice_hint(first_start + _td(minutes=2))
+        assert "此刻的我" in hint and "投入" in hint, hint
+        assert "松紧度" in hint, f"从属的相处姿势没进语气块：{hint}"
+        assert not _persona.has_cost_blame(hint), f"语气主轨踩了反愧疚红线：{hint}"
+
+        # 书名号 bug：reading 标题裸存（不再自带《》），work 层只包一层（单《》）
+        for a in _reading.LIBRARY:
+            assert "《" not in a["title"] and "》" not in a["title"], \
+                f"内置素材标题不该自带书名号：{a['title']}"
+        whint = _work.prompt_hint(first_start + _td(minutes=30))
+        assert "《" in whint and "《《" not in whint, f"书名号没修干净：{whint}"
+
+        # 忙完（off）白天 → 轻松；夜里 → 平静（主轨跟时段走）
+        _db.set_kv("work_state", json.dumps({
+            "day": "2026-10-09", "quota": 1, "planned": 1,
+            "units": [{"start": first_start.isoformat(timespec="seconds"),
+                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
+            "settled": 1, "energy": 100, "money": 20}))
+        assert _tone.dominant(_dt(2026, 10, 9, 14, 0))["main"] == "轻松"
+        assert _tone.dominant(_dt(2026, 10, 9, 22, 0))["main"] == "平静"
+
+        # 睡着 → 没有主轨，不注入语气块
+        _db.set_state("SLEEPING")
+        assert _tone.voice_hint(_dt(2026, 10, 9, 14, 0)) == "", "睡着不该有语气块"
+        _db.set_state("AWAKE")
+        # 关工作系统 → 没有主轨，不注入语气块
+        config.WORK_ENABLED = False
+        assert _tone.dominant(first_start)["main"] == "", "关工作系统不该有主轨"
+        config.WORK_ENABLED = True
+
+        # 排队：反谄媚里「怼」和「分享」同一句只做一件
+        anti = _persona.anti_sycophancy_prompt()
+        assert "排队" in anti and "只做一件" in anti, "反谄媚缺「分享/异议排队」协调条款"
+
+        print("ok 语气主轨（mood 主轨 + cost 从属 + 分享/异议排队 + 书名号修复）")
+    finally:
+        config.WORK_ENABLED = saved_work
+        config.MOOD_ENABLED = saved_mood
+        config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -3138,6 +3222,7 @@ if __name__ == "__main__":
     test_interruption_cost()
     test_urgent_channel()
     test_mood()
+    test_tone_main_track()
     test_random_memory_about_user()
     test_proactive_context_injection()
     test_work_content_injection()

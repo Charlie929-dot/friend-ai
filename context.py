@@ -70,16 +70,12 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
             "【急事】TA 刚才的话听着有急事。把手头的事先放下，立刻回应、"
             "简短、先听TA说，别扯别的、别卖关子。")})
     else:
-        # 打断成本（S3 招牌）：它忙不忙/累不累 → 现在找它的代价，落到回复语态上
-        import cost
-        chint = cost.prompt_hint()
-        if chint:
-            messages.append({"role": "system", "content": f"【此刻的相处】{chint}"})
-        # 心情（D 模块，10-09 解冻）：它此刻的感受，落到语气上（只说自己状态）
-        import mood
-        mhint = mood.prompt_hint()
-        if mhint:
-            messages.append({"role": "system", "content": f"【此刻的心情】{mhint}"})
+        # 语气主轨（A 模块，10-10）：每轮定一个主导情绪状态（mood 主轨），打断成本
+        # （cost 相处姿势）从属于它，收成一条【此刻的我】块——治语言割裂（实测 #36）。
+        import tone
+        thint = tone.voice_hint()
+        if thint:
+            messages.append({"role": "system", "content": thint})
     if config.SELF_MEMORY_ENABLED:
         self_hint = selfmem.prompt_hint(" ".join(batch))
         if self_hint:
