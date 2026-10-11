@@ -115,6 +115,10 @@
     100% { box-shadow: 0 0 0 0 transparent; } }
   .msg.hl { background: var(--hl); border-radius: 12px;
     box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 28%, transparent); }
+  /* 高亮时气泡也蒙进整行：气泡去掉自己的底色，别像补丁一样单独露出来 */
+  .msg.hl .bubble { background: transparent; border-color: transparent; }
+  .msg.hl.user .bubble { background: transparent; color: var(--ink); }
+  .msg.hl.user .bubble .bubble-quote { border-left-color: color-mix(in srgb, var(--muted) 55%, transparent); }
   /* 细栏滑动定位：右边目录里被指到的条目深色框高亮 */
   .ol-item.ol-cur { background: var(--surface-2); color: var(--ink);
     box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent); }
@@ -129,6 +133,9 @@
   .chat-inner { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; }
   .daydiv { align-self: center; background: var(--surface-2); color: var(--muted); font-size: 11px;
     padding: 4px 12px; border-radius: 12px; margin: 10px 0 4px; }
+  /* 离线自动提示（kind=notice）：灰色居中小字，不是一条正经消息 */
+  .sys-notice { align-self: center; margin: 10px 0 2px; color: var(--muted); font-size: 11px;
+    text-align: center; line-height: 1.5; opacity: .85; }
   .msg { display: flex; flex-direction: column; width: 100%; margin: 4px 0; position: relative; animation: fadeUp .28s ease; }
   .msg.ai { align-items: flex-start; }
   .msg.user { align-items: flex-end; }
@@ -892,6 +899,13 @@ function buildMsgNode(m, id){
     if(shownIds.has(id)) return null;
     shownIds.add(id);
   }
+  // 离线自动提示（kind=notice）：灰色居中小字，不进目录、不可引用/撤回
+  if(m.kind==='notice'){
+    const d=document.createElement('div');
+    d.className='sys-notice';
+    d.textContent=m.content;
+    return d;
+  }
   const d=document.createElement('div');
   d.className='msg '+(m.role==='user'?'user':'ai');
   if(id) d.dataset.mid=id;
@@ -923,7 +937,7 @@ function addMsg(m, id){
   const d=buildMsgNode(m, id);
   if(!d) return;
   const day=m.ts?m.ts.slice(0,10):'';
-  if(day && day!==lastMsgDay){
+  if(m.kind!=='notice' && day && day!==lastMsgDay){
     const div=document.createElement('div');
     div.className='daydiv'; div.textContent=dayLabel(m.ts);
     chat().appendChild(div); lastMsgDay=day;
@@ -984,7 +998,7 @@ function renderState(s){
   $('mEnergy').textContent=e;
   $('mMoney').textContent=p.money||0;
   $('mMat').textContent=(s.materials||0)+' 条';
-  $('typing').textContent=s.typing?(s.name+'正在输入…'):'';
+  $('typing').textContent=s.typing?(s.name+' 正在回复…'):'';
   // 朋友档案
   $('pName').textContent=s.name||'—';
   curName=s.name||'';

@@ -788,9 +788,10 @@ def test_interrupt_detection():
         _t.sleep(1.2)  # 等段间睡眠与后续流程走完
         sent2 = [e[1] for e in ch2.events if e[0] == "send"]
         assert "第二段不该发出" not in sent2, f"插话后剩余段应停发：{sent2}"
-        assert any(t in _persona.INTERRUPT_ACKS for t in sent2), \
-            f"缺让步语（{ _persona.INTERRUPT_ACKS }）：{sent2}"
-        print("ok 插话检测（打字打断作废 + 中途停发让步）")
+        # 打断不再补发让步语（"你说，我听着"这类）——用户拍板：打断就是安静停发、先听
+        assert not any(t in _persona.INTERRUPT_ACKS for t in sent2), \
+            f"打断不应再补发让步语：{sent2}"
+        print("ok 插话检测（打字打断作废 + 中途停发剩余段、不再补让步语）")
     finally:
         for _eng in (eng, eng2):
             if _eng:

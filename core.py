@@ -157,12 +157,17 @@ class Engine:
             texts = [m["text"] for m in batch]
             # 引用只认"这批里最后一条带引用的"——用户最后那句在回哪句，才是当前语境
             quote = next((m["quote"] for m in reversed(batch) if m.get("quote")), None)
+            set_gen = getattr(self.channel, "set_generating", None)
+            if set_gen:
+                set_gen(True)   # 开始生成回复 → 网页端显示"正在回复"
             try:
                 with db.PATH_LOCK:  # 回复全流程与切换朋友互斥，不写错库
                     self._generate_reply(texts, quote=quote)
             finally:
                 with self._lock:
                     self._sending = False
+                if set_gen:
+                    set_gen(False)
 
     def _generate_reply(self, batch: list[str], from_inbox: bool = False,
                         quote: dict | None = None) -> None:
@@ -208,11 +213,8 @@ class Engine:
                 _time.sleep(min(max(len(segments[i - 1]) * config.SEND_SECONDS_PER_CHAR,
                                     config.SEND_MIN_SECONDS), config.SEND_MAX_SECONDS))
             # 插话检测（发送前最后一刻检查）：TA 打字/连发期间你又说话了——
-            # 停发剩余段，先听你说
+            # 停发剩余段，先听你说（不再补发"你说，我听着"这类让步语——用户明确不要）
             if self._interrupted():
-                if i > 0:  # 已经发出去几段了，补一句让步语
-                    self._send(corpus.pick(corpus.INTERRUPT_ACKS, "interrupt"),
-                               kind="chat")
                 interrupted = True
                 break
             self._send(seg, kind="chat")
@@ -391,12 +393,13 @@ class Engine:
 
     # --- 离线留言（你 → 它）：TA 离线（专注工作/睡觉）时你发的消息攒着，上线后回 ---
     def _send_offline_notice(self) -> None:
-        """离线时收到消息的轻提示：睡 → 迷糊语；工作专注 → 第一人称"正忙"（不调 LLM）。"""
+        """离线时收到消息的轻提示：睡 → 迷糊语；工作专注 → 第一人称"正忙"（不调 LLM）。
+        kind=notice：前端渲染成灰色居中小字（离线自动提示），不当成一条正经消息。"""
         reason = offline.offline_reason()
         if reason == "sleep":
-            self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
+            self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="notice")
         else:
-            self._send(corpus.pick(corpus.OFFLINE_FOCUS_NOTICES, "offline_focus"), kind="chat")
+            self._send(corpus.pick(corpus.OFFLINE_FOCUS_NOTICES, "offline_focus"), kind="notice")
 
     def flush_inbox(self) -> None:
         """上线了：把离线期间攒下的留言正经回应一遍（后台线程，复用 _sending 互斥）。"""
@@ -416,12 +419,17 @@ class Engine:
             _time.sleep(0.2)
         if self._stopped:
             return
+        set_gen = getattr(self.channel, "set_generating", None)
         try:
+            if set_gen:
+                set_gen(True)
             with db.PATH_LOCK:
                 self._generate_reply(texts, from_inbox=True)
         finally:
             with self._lock:
                 self._sending = False
+            if set_gen:
+                set_gen(False)
 
     # --- 主动消息（调度器调用） ---
     def proactive(self, scenario: str) -> bool:

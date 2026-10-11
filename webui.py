@@ -35,6 +35,7 @@ class WebChannel(Channel):
 
     def __init__(self):
         self.typing_until = 0.0
+        self.generating = False
 
     def send(self, text: str) -> None:
         pass  # core 已写 db；前端靠 /api/messages 增量拉取，无需再推
@@ -43,8 +44,12 @@ class WebChannel(Channel):
         # core 紧接着自己 sleep 打字时长，这里给个略长的窗口，避免一闪而过
         self.typing_until = time.time() + 8
 
+    def set_generating(self, active: bool) -> None:
+        # 回复生成中（LLM 思考阶段）：持续显示"正在回复"，覆盖最长的思考时段
+        self.generating = active
+
     def typing_now(self) -> bool:
-        return time.time() < self.typing_until
+        return self.generating or time.time() < self.typing_until
 
     def run(self, on_message) -> None:
         """启动 HTTP 服务并阻塞（调度器已在 run 之前启动）。
