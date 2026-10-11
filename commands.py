@@ -49,7 +49,7 @@ HELP = """可用命令：
   /selfmem         看TA记下的关于**它自己**的事（我说过的立场/答应过的事/出过的糗）
   /selfreview      现在复盘一次"今天的我"（睡前会自动跑，写回自我记忆）
   /work            看它今天手头的事（进度/精力/余额/攒了多少素材）
-  /books           看我书架上的书（导入的 txt/epub 真书）
+  /books           看我书架上的书（按分类分组）；/books cats|set|reindex 管分类
   /autostart       查开机自启状态；/autostart on|off 开/关（网页端开机自己回来）
   /diary           看今天的日记（含复盘）；/diary <日期> 看指定那天
   /diaries         列出所有写过日记的日期
@@ -407,10 +407,14 @@ def handle(cmd_line: str) -> str:
         card = persona_pool.load()
         if not card:
             return "这位是默认老朋友，没有人格卡。/new-friend 可以抽一位有专属人格的新朋友。"
+        pref = card.get('reading_pref') or ''
+        tags = card.get('reading_tags') or []
+        pref_line = (f"{pref}（爱{'/'.join(tags)}）" if tags
+                     else (pref or '没特别偏好'))
         return (f"人格卡：{card['name']} · {card['label']}\n"
                 f"  作息：{card['wake_hour']}点起 / {card['sleep_hour']}点睡\n"
                 f"  冒泡频率：x{card['bubble_mult']}\n"
-                f"  阅读偏好：{card.get('reading_pref') or '没特别偏好'}\n"
+                f"  阅读偏好：{pref_line}\n"
                 f"  怪癖：{card.get('quirk') or '没特别怪癖'}\n"
                 f"  相识于：{card.get('drawn_at', '')}")
 
@@ -586,21 +590,64 @@ def handle(cmd_line: str) -> str:
 
     if cmd == "/books":
         # 用户书库（S4）：TA 读你导入的真实电子书（txt/epub）
+        # 分类不靠建子目录：平铺在 books/ 根目录，分类存 books/categories.json 映射表，
+        # 网页端「书架」面板能批量上传 + 逐本选分类；这里给命令行一个改的口子。
         import library as _lib
+        arg_s = (arg or "").strip()
+        if arg_s.startswith("cats"):
+            return ("书架的 22 个分类：\n  " + "、".join(_lib.genre_names()[:-1])
+                    + "\n（" + _lib.genre_names()[-1] + "是兜底：自动分不出来的书都在这儿）")
+        if arg_s.startswith("reindex"):
+            n = _lib.reindex()
+            return (f"重新分类完了，改了 {n} 本。"
+                    f"（手动指定过的没动——手动选的永远听你的）")
+        if arg_s.startswith("set"):
+            parts = arg_s.split()[1:]
+            if len(parts) < 2:
+                return "用法：/books set <书名片段> <分类> [细标签 细标签]"
+            key, cat, tags = parts[0], parts[1], parts[2:]
+            if cat not in _lib.genre_names():
+                return f"「{cat}」不在 22 个分类里。/books cats 看全部分类。"
+            hits = [b for b in _lib.books() if key in b["id"] or key in b["title"]]
+            if not hits:
+                return f"书架上没有书名含「{key}」的书。/books 看看都有啥。"
+            if len(hits) > 1:
+                return ("「" + key + "」匹配到好几本，说得更具体点：\n  "
+                        + "\n  ".join(b["title"] for b in hits))
+            got = _lib.set_category(hits[0]["id"], cat, tags)
+            if got is None:
+                return "没改成功（书不见了？）。"
+            tail = f"，标签 {'/'.join(got['tags'])}" if got["tags"] else ""
+            return f"《{got['title']}》归到「{got['category']}」{tail}。"
+
         items = _lib.books()
         if not items:
-            return (f"我书架上还没有书。把 txt/epub 丢进 {config.BOOKS_DIR} 目录"
-                    f"（可按分类放子目录，如 books/科幻/三体.txt），/refresh 后我就能读真书啦。")
+            return (f"我书架上还没有书。网页端「此刻的 TA → 书架」可以直接拖 txt/epub 进去，"
+                    f"或者把文件丢进 {config.BOOKS_DIR} 目录（不用建子目录，我自动分类）。")
         prog = _lib.progress()
         cur_id = prog.get("book_id")
-        lines = []
+        import persona as _persona      # handle() 里后面还有局部 import persona，换个名免得打架
+        pref = _persona.behavior_params().get("reading_pref", "")
+        groups: dict[str, list] = {}
         for b in items:
-            genre = f"·{b['genre']}" if b["genre"] else ""
-            mark = " ← 正在读" if b["id"] == cur_id else ""
-            lines.append(f"  {b['title']}（{b['author'] or '佚名'}）{genre} · {b['count']} 段{mark}")
-        return ("我书架上的书（忙自己的事时会读，优先读我偏好的分类）：\n"
+            groups.setdefault(b["category"] or "未分类", []).append(b)
+        order = _lib.genre_names()
+        keys = sorted(groups.keys(),
+                      key=lambda k: (0 if k == "未分类" else (1 if k == pref else 2),
+                                     order.index(k) if k in order else 99))
+        lines = []
+        for k in keys:
+            mark = " ★我偏好的" if k == pref else ""
+            lines.append(f"· {k}（{len(groups[k])} 本）{mark}")
+            for b in groups[k]:
+                tags = f"·{'/'.join(b['tags'])}" if b["tags"] else ""
+                cur = " ← 正在读" if b["id"] == cur_id else ""
+                lines.append(f"    《{b['title']}》{b['author'] or '佚名'} {tags}"
+                             f" · {b['count']} 段{cur}")
+        return ("我书架上的书（忙自己的事时会读，先读我偏好的分类）：\n"
                 + "\n".join(lines)
-                + "\n（放新书进 books/ 后 /refresh 即可）")
+                + "\n（/books cats 看分类；/books set <书名片段> <分类> [标签] 改；"
+                  "/books reindex 重跑自动分类；网页端书架面板能批量上传）")
 
     if cmd == "/autostart":
         # 开机自启与常驻（G 模块）：查状态 / 开 / 关。start、stop 只在终端做——

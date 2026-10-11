@@ -4,11 +4,16 @@
 读一篇；读的顺序按 TA 的人格阅读偏好优先（爱读科幻的先把科幻读完），顺序推进、
 进度持久化（kv），一轮读完再从头。
 
+**分类和书库统一**（2026-10-11）：库里 genre 仍是旧的细标签（散文/科幻/热血…），
+对外统一翻译成 22 个一级分类（`corpus.PREF_LEGACY_MAP`），原标签降级成 `tag`——
+这样内置书摘和用户导入的真书共用同一套分类，人格两级偏好（分类 + 细标签）两头都能命中。
+
 产出：每读完一篇 → 1 条可分享素材（摘抄金句 + TA 人格化的读后感），供 C 模块
 主动分享当内容源（work._gen_shareable 读这里的 quote 当"摘抄"）。
 """
 import json
 
+import corpus
 import db
 
 # 素材库：genre（阅读偏好大类，对应 persona 卡的 reading_pref）/ title / source /
@@ -119,15 +124,41 @@ def _save(progress: dict) -> None:
     db.set_kv(_KEY, json.dumps(progress, ensure_ascii=False))
 
 
+def category_of(genre: str) -> str:
+    """旧细标签（散文/科幻/热血…）→ 22 个一级分类；新分类原样返回。"""
+    return corpus.PREF_LEGACY_MAP.get((genre or "").strip(), (genre or "").strip())
+
+
+def _enrich(article: dict) -> dict:
+    """把一篇素材翻译成对外口径：genre=一级分类、tag=原细标签（和 library 同构）。"""
+    out = dict(article)
+    out["tag"] = article.get("genre", "")
+    out["genre"] = category_of(article.get("genre", ""))
+    out["category"] = out["genre"]
+    return out
+
+
+def _rank(i: int, pref: str, pref_tags: list[str]) -> int:
+    """这篇在 TA 口味里的排位：0 一级分类命中 → 1 细标签命中 → 2 其他。"""
+    g = LIBRARY[i]["genre"]
+    if pref and category_of(g) == pref:
+        return 0
+    if g in pref_tags:
+        return 1
+    return 2
+
+
 def _order() -> list[int]:
-    """TA 的阅读顺序：人格阅读偏好分类排前面、其余按库序，首次读时定死并缓存。"""
+    """TA 的阅读顺序：人格两级偏好命中排前面、其余按库序，首次读时定死并缓存。"""
     progress = _load()
     if progress.get("order"):
         return progress["order"]
     import persona
-    pref = persona.behavior_params().get("reading_pref", "")
+    params = persona.behavior_params()
+    pref = params.get("reading_pref", "")
+    pref_tags = params.get("reading_tags") or []
     order = list(range(len(LIBRARY)))
-    order.sort(key=lambda i: (0 if LIBRARY[i]["genre"] == pref else 1, i))
+    order.sort(key=lambda i: (_rank(i, pref, pref_tags), i))
     progress["order"] = order
     progress["pos"] = 0
     _save(progress)
@@ -135,13 +166,16 @@ def _order() -> list[int]:
 
 
 def next_article() -> dict | None:
-    """取下一篇要读的（顺序推进、一轮读完再从头），返回素材 dict，并推进进度。"""
+    """取下一篇要读的（顺序推进、一轮读完再从头），返回素材 dict，并推进进度。
+
+    返回的 genre 是一级分类（给 work/interests 用），原细标签在 tag 里。
+    """
     if not LIBRARY:
         return None
     order = _order()
     progress = _load()
     pos = progress.get("pos", 0) % len(order)
-    article = LIBRARY[order[pos]]
+    article = _enrich(LIBRARY[order[pos]])
     progress["pos"] = pos + 1
     _save(progress)
     return article
@@ -154,4 +188,4 @@ def current_article() -> dict | None:
     order = _order()
     progress = _load()
     pos = progress.get("pos", 0) % len(order)
-    return LIBRARY[order[pos]]
+    return _enrich(LIBRARY[order[pos]])

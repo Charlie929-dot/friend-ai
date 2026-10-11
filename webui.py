@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import commands
 import config
@@ -93,13 +93,14 @@ def _clear_pid() -> None:
 
 
 def _persona_tags(card: dict | None) -> list[str]:
-    """人物标签：人格 label + 阅读偏好（爱读X）。旧卡没 reading_pref 就只给 label。"""
+    """人物标签：人格 label + 阅读偏好（分类 · 细标签）。旧卡没 reading_pref 就只给 label。"""
     if not card:
         return []
     tags = [card["label"]]
     pref = card.get("reading_pref")
     if pref:
-        tags.append(f"爱读{pref}")
+        sub = card.get("reading_tags") or []
+        tags.append(f"爱读{pref}" + (f"·{'/'.join(sub[:2])}" if sub else ""))
     return tags
 
 
@@ -316,6 +317,18 @@ def _make_handler(channel: WebChannel, on_message):
                            "created_at": m.get("created_at", "")}
                           for m in rows[:4]]
                 self._json({"total": len(rows), "recent": recent})
+            elif u.path == "/api/books":
+                # 书架（S4 用户书库）：分类清单 + 全部书 + 阅读进度 + TA 当前口味。
+                # 分类在后端映射表里（books/categories.json），不靠建子目录。
+                import library as _lib
+                p = persona.behavior_params()
+                try:
+                    self._json({"categories": _lib.categories(), "books": _lib.books(),
+                                "progress": _lib.progress(),
+                                "pref": {"category": p.get("reading_pref", ""),
+                                         "tags": p.get("reading_tags") or []}})
+                except Exception as e:
+                    self._json({"error": f"书架读不出来：{e}"}, 500)
             elif u.path == "/api/emoji":
                 # 表情包池（E 模块）：分桶表情库存，前端「表情」面板渲染用。
                 import emoji_pool
@@ -384,6 +397,9 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if u.path == "/api/emoji":
                 self._do_emoji()
+                return
+            if u.path.startswith("/api/books/"):
+                self._do_books(u.path)
                 return
             if u.path != "/api/send":
                 self._json({"error": "not found"}, 404)
@@ -534,6 +550,88 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"ok": False, "error": "未知操作"}, 400)
                 return
             self._json({"ok": ok, "error": "" if ok else err})
+
+        def _read_multipart(self) -> list[tuple[str, bytes]]:
+            """自写 multipart/form-data 解析（Python 3.14 已移除 cgi，只能手撸）。
+
+            只取带 filename 的段（上传的书），返回 [(原文件名, 字节内容)]。
+            文件名支持 RFC 5987 的 `filename*=UTF-8''%E4%B8%89%E4%BD%93.epub` 写法。
+            """
+            ctype = self.headers.get("Content-Type", "")
+            m = re.search(r'boundary=(?:"([^"]+)"|([^;\r\n]+))', ctype)
+            if not m:
+                return []
+            boundary = (m.group(1) or m.group(2) or "").strip()
+            if not boundary:
+                return []
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return []
+            raw = self.rfile.read(n) if n > 0 else b""
+            out = []
+            for part in raw.split(b"--" + boundary.encode("utf-8", "ignore")):
+                if b"\r\n\r\n" not in part:
+                    continue
+                head, body = part.split(b"\r\n\r\n", 1)
+                if body.endswith(b"\r\n"):        # 每段尾部是 CRLF + 下一个 boundary
+                    body = body[:-2]
+                name = ""
+                for line in head.split(b"\r\n"):
+                    if not line.lower().startswith(b"content-disposition:"):
+                        continue
+                    fm = re.search(rb"filename\*\s*=\s*([^;\r\n]+)|filename\s*=\s*"
+                                   rb'(?:"([^"]*)"|([^;\r\n]+))', line, re.I)
+                    if not fm:
+                        continue
+                    if fm.group(1):               # filename*=UTF-8''xxx
+                        raw_name = fm.group(1).decode("utf-8", "ignore").strip()
+                        name = unquote(raw_name.split("''", 1)[1]) if "''" in raw_name \
+                            else unquote(raw_name)
+                    else:
+                        name = (fm.group(2) or fm.group(3) or b"").decode(
+                            "utf-8", "ignore").strip()
+                if name:
+                    out.append((name, body))
+            return out
+
+        def _do_books(self, path: str):
+            """书架维护（S4）：批量上传 / 改分类 / 重新分类 / 删书。
+
+            上传的书一律平铺进 books/ 根目录（不建子目录），分类由后端映射表管，
+            上传完前端把这一批列出来让用户逐本确认标签——分错了点一下就改过来。
+            """
+            import library as _lib
+            if path == "/api/books/upload":
+                files = self._read_multipart()
+                if not files:
+                    self._json({"error": "没收到文件（只支持 .txt / .epub）"}, 400)
+                    return
+                added, failed = [], []
+                for name, payload in files:
+                    got = _lib.save_upload(name, payload)
+                    if got:
+                        added.append(got)
+                    else:
+                        failed.append(name)
+                self._json({"added": added, "failed": failed})
+                return
+            data = self._read_json()
+            if path == "/api/books/set":
+                book_id = (data.get("id") or "").strip()
+                got = _lib.set_category(book_id, (data.get("category") or "").strip(),
+                                        data.get("tags"))
+                if got is None:
+                    self._json({"ok": False, "error": "书不存在或分类名不认识"}, 400)
+                    return
+                self._json({"ok": True, "book": got})
+            elif path == "/api/books/reindex":
+                self._json({"ok": True, "changed": _lib.reindex()})
+            elif path == "/api/books/delete":
+                ok = _lib.delete_book((data.get("id") or "").strip())
+                self._json({"ok": ok, "error": "" if ok else "删不掉（书不在书架里？）"})
+            else:
+                self._json({"error": "not found"}, 404)
 
         def _do_revoke(self):
             """撤回一条消息：删库 + 意识流注入一条同步响应（TA 下一轮知道"你撤回了"）。

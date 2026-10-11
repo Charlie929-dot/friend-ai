@@ -445,6 +445,37 @@
   .ep-img-pick b { font-weight: 500; color: var(--accent); overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
 
+  /* ===== 书架（S4 用户书库）=====
+     书平铺在 books/ 根目录，分类由后端映射表管 —— 这里只负责「选/改」，不碰文件目录 */
+  .bk-drop { border: 1.5px dashed var(--line); border-radius: 12px; padding: 12px 10px;
+    text-align: center; font-size: 12px; color: var(--muted); transition: border-color .18s, background .18s; }
+  .bk-drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .bk-new { margin-top: 8px; padding: 9px 10px; border: 1px solid var(--accent); border-radius: 12px;
+    background: var(--accent-soft); }
+  .bk-new-t { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 7px;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .bk-row { display: flex; gap: 7px; align-items: center; padding: 5px 0; }
+  .bk-row + .bk-row { border-top: 1px solid var(--line); }
+  .bk-name { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; }
+  .bk-name b { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bk-name small { color: var(--muted); font-size: 11px; }
+  .bk-row select, .bk-row input { flex: 0 0 auto; padding: 5px 7px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 11.5px; outline: 0; }
+  .bk-row select { max-width: 108px; }
+  .bk-row input { width: 92px; }
+  .bk-row select:focus, .bk-row input:focus { border-color: var(--accent); }
+  .bk-grp { margin-top: 10px; }
+  .bk-grp-t { font-size: 11px; font-weight: 600; color: var(--muted); display: flex;
+    align-items: center; gap: 6px; margin-bottom: 5px; }
+  .bk-grp-t .n { font-weight: 400; opacity: .8; }
+  .bk-grp-t .pin { color: var(--accent); font-weight: 600; }
+  .bk-del { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; color: var(--muted);
+    font-size: 15px; line-height: 1; display: grid; place-items: center; }
+  .bk-del:hover { background: #f8e4e4; color: #e07a7a; }
+  .bk-tag { display: inline-block; padding: 1px 6px; border-radius: 6px; background: var(--surface-2);
+    color: var(--muted); font-size: 10.5px; margin-right: 4px; }
+  .bk-reading { color: var(--accent); font-weight: 600; }
+
   @media (max-width: 640px) { .outline { display: none; } }
 
   @media (max-width: 520px) {
@@ -604,6 +635,23 @@
           <div class="fold-body">
             <div class="stream-actions"><button class="btn" id="streamCopy">复制全部</button></div>
             <div class="stream-list" id="streamList"><div class="empty">展开时加载…</div></div>
+          </div>
+        </details>
+
+        <details class="fold" id="foldBooks">
+          <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5V6a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v14"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M8 7h7M8 11h5"/></svg>书架<span class="ec-sub" id="booksCount"></span></summary>
+          <div class="fold-body">
+            <div class="bk-drop" id="bkDrop">
+              <input type="file" id="bkFile" multiple accept=".txt,.epub" hidden>
+              把 txt / epub 拖到这里，或
+              <button class="btn" id="bkPick" style="padding:3px 10px;margin-top:6px">选书（可多选）</button>
+              <div style="margin-top:6px;font-size:11px">上传后平铺存根目录，分类在下面选，不用建文件夹</div>
+            </div>
+            <div id="bkNew"></div>
+            <div class="btnrow" style="margin-top:8px">
+              <button class="btn" id="bkReindex">重新自动分类</button>
+            </div>
+            <div id="bkList"><div class="empty">展开时加载…</div></div>
           </div>
         </details>
 
@@ -1327,6 +1375,126 @@ async function loadMemories(){
 }
 $('mMemRefresh').onclick=()=>loadMemories();
 $('mMemAll').onclick=()=>{ $('foldDebug').open=true; runCmd('/memories','TA 记住的事'); };
+
+/* ===== 书架（分类由后端映射表管，这里只选/改，不用建文件夹）===== */
+let bkData = {categories:[], books:[], progress:{}, pref:{category:'',tags:[]}};
+
+async function loadBooks(){
+  try{ bkData = await (await fetch('/api/books')).json(); }
+  catch(e){ $('bkList').innerHTML='<div class="empty">书架加载失败</div>'; return; }
+  $('booksCount').textContent = (bkData.books||[]).length ? (' · '+(bkData.books||[]).length+' 本') : '';
+  renderBooks();
+}
+function bkTagsOf(cat){
+  const g=(bkData.categories||[]).find(x=>x.name===cat);
+  return (g&&g.tags)?g.tags:[];
+}
+async function bkSave(id, category, tags){
+  const r = await fetch('/api/books/set', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id, category, tags: (tags||'').split(/[\s,，、]+/).filter(Boolean)})});
+  const d = await r.json().catch(()=>({ok:false,error:'保存失败'}));
+  if(!d.ok){ alert(d.error||'保存失败'); return; }
+  loadBooks();
+}
+async function bkDel(b){
+  if(!confirm('把《'+(b.title||b.id)+'》从书架删掉？文件也会一起删。')) return;
+  await fetch('/api/books/delete', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({id:b.id})});
+  loadBooks();
+}
+function bkRow(b){
+  const row=document.createElement('div'); row.className='bk-row';
+  const name=document.createElement('div'); name.className='bk-name';
+  const reading = bkData.progress && bkData.progress.book_id===b.id;
+  name.innerHTML = '<b>'+esc(b.title||b.id)+(reading?' <span class="bk-reading">正在读</span>':'')+'</b>'
+    + '<small>'+esc(b.author||'佚名')+' · '+(b.count||0)+' 段'
+    + ((b.tags&&b.tags.length)?' · '+b.tags.map(t=>'<span class="bk-tag">'+esc(t)+'</span>').join(''):'')
+    + (b.by==='manual'?' · 手动':'')+'</small>';
+  const sel=document.createElement('select');
+  (bkData.categories||[]).forEach(c=>{
+    const o=document.createElement('option'); o.value=c.name;
+    o.textContent=c.name+(c.count?'（'+c.count+'）':'');
+    if(c.name===b.category) o.selected=true; sel.appendChild(o);
+  });
+  const dlId='bkdl-'+Math.random().toString(36).slice(2,8);
+  const inp=document.createElement('input');
+  inp.value=(b.tags||[]).join(' '); inp.placeholder='细标签'; inp.setAttribute('list',dlId);
+  inp.title='空格分隔，如：科幻 长篇；也可以手打新标签';
+  const dl=document.createElement('datalist'); dl.id=dlId;
+  const fillDl=()=>{ dl.innerHTML=''; bkTagsOf(sel.value).forEach(t=>{
+    const o=document.createElement('option'); o.value=t; dl.appendChild(o); }); };
+  fillDl();
+  sel.onchange=()=>{ fillDl(); bkSave(b.id, sel.value, inp.value); };
+  inp.onchange=()=>bkSave(b.id, sel.value, inp.value);
+  const del=document.createElement('button'); del.className='bk-del'; del.textContent='×';
+  del.title='从书架删掉'; del.onclick=()=>bkDel(b);
+  row.append(name, sel, inp, dl, del);
+  return row;
+}
+function renderBooks(){
+  const box=$('bkList'), books=bkData.books||[];
+  if(!books.length){ box.innerHTML='<div class="empty">书架还空着。丢几本 txt / epub 进来，TA 忙自己的事时就读真书啦。</div>'; return; }
+  box.innerHTML='';
+  const pref=bkData.pref||{}, order=(bkData.categories||[]).map(c=>c.name);
+  const groups=new Map();
+  books.forEach(b=>{ const k=b.category||'未分类'; if(!groups.has(k)) groups.set(k,[]); groups.get(k).push(b); });
+  [...groups.keys()].sort((a,b)=>{
+    const rank=k=> k==='未分类'?0 : (k===pref.category?1:2);
+    return rank(a)!==rank(b) ? rank(a)-rank(b) : order.indexOf(a)-order.indexOf(b);
+  }).forEach(k=>{
+    const g=document.createElement('div'); g.className='bk-grp';
+    const t=document.createElement('div'); t.className='bk-grp-t';
+    const isPref = k===pref.category;
+    t.innerHTML='<span class="'+(isPref?'pin':'')+'">'+esc(k)+'</span><span class="n">'
+      +groups.get(k).length+' 本</span>'+(isPref?'<span class="n">· TA 的口味</span>':'');
+    g.appendChild(t);
+    groups.get(k).forEach(b=>g.appendChild(bkRow(b)));
+    box.appendChild(g);
+  });
+}
+async function bkUpload(files){
+  files = files ? [...files] : [];
+  if(!files.length) return;
+  $('bkNew').innerHTML='<div class="bk-new"><div class="bk-new-t">上传中…</div></div>';
+  const fd=new FormData();
+  files.forEach(f=>fd.append('books', f, f.name));
+  try{
+    const d=await (await fetch('/api/books/upload',{method:'POST',body:fd})).json();
+    renderNew(d.added||[], d.failed||[]);
+    await loadBooks();
+  }catch(e){ $('bkNew').innerHTML='<div class="bk-new"><div class="bk-new-t">上传失败</div></div>'; }
+}
+function renderNew(added, failed){
+  const box=$('bkNew'); box.innerHTML='';
+  if(!added.length && !failed.length) return;
+  const card=document.createElement('div'); card.className='bk-new';
+  const t=document.createElement('div'); t.className='bk-new-t';
+  t.innerHTML='<span>这批书已自动分类，不对的直接改</span>';
+  card.appendChild(t);
+  added.forEach(b=>card.appendChild(bkRow(b)));
+  failed.forEach(n=>{ const d=document.createElement('div');
+    d.style.cssText='font-size:11px;color:#e07a7a;padding:3px 0';
+    d.textContent='× '+n+'（只支持 txt / epub）'; card.appendChild(d); });
+  const ok=document.createElement('button'); ok.className='btn';
+  ok.textContent='好了'; ok.style.marginTop='8px';
+  ok.onclick=()=>{ box.innerHTML=''; };
+  card.appendChild(ok); box.appendChild(card);
+}
+(function(){
+  const drop=$('bkDrop');
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e=>bkUpload(e.dataTransfer && e.dataTransfer.files));
+  $('bkPick').onclick=()=>$('bkFile').click();
+  $('bkFile').onchange=e=>{ bkUpload(e.target.files); e.target.value=''; };
+  $('bkReindex').onclick=async()=>{
+    const d=await (await fetch('/api/books/reindex',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:'{}'})).json().catch(()=>({changed:0}));
+    loadBooks(); alert('重新分类完成，改了 '+(d.changed||0)+' 本（手动指定的没动）');
+  };
+  $('foldBooks').addEventListener('toggle', ()=>{ if($('foldBooks').open) loadBooks(); });
+})();
 
 /* ===== 意识流 ===== */
 const STREAM_LABEL={inbox:'收',reply:'说',monologue:'想',work:'活',sleep:'眠',wake:'醒',revoke:'撤'};

@@ -1826,18 +1826,19 @@ def test_reading_system():
         for a in _reading.LIBRARY:
             assert a.get("quote") and a.get("text"), f"素材缺字段：{a['title']}"
 
-        # 人格卡行为参数带阅读偏好（persona 卡已扩字段）
-        assert _persona.behavior_params()["reading_pref"] == "科幻", \
-            f"阅读偏好没跟人格走：{_persona.behavior_params()}"
+        # 人格卡行为参数带阅读偏好（两级：一级分类 + 细标签。旧标签"科幻"已自动迁移）
+        params = _persona.behavior_params()
+        assert params["reading_pref"] == "精品小说", f"阅读偏好没跟人格走：{params}"
+        assert params["reading_tags"] == ["科幻"], params
 
-        # 阅读顺序：偏好分类（科幻）排最前
+        # 阅读顺序：偏好细标签（科幻）排最前
         order = _reading._order()
         first_genres = [_reading.LIBRARY[i]["genre"] for i in order[:4]]
         assert first_genres == ["科幻"] * 4, f"偏好分类没排前面：{first_genres}"
 
-        # 顺序推进 + 进度持久化
+        # 顺序推进 + 进度持久化（对外 genre 已翻译成一级分类，原标签在 tag）
         a1 = _reading.next_article()
-        assert a1["genre"] == "科幻", f"第一篇应是科幻：{a1}"
+        assert a1["genre"] == "精品小说" and a1["tag"] == "科幻", f"第一篇应是科幻：{a1}"
         assert _reading._load()["pos"] == 1, "进度没推进"
 
         # 一轮读完再循环：把进度推到最后一篇，再取一篇应回到第一篇
@@ -1913,11 +1914,18 @@ def test_user_library():
         items = _lib.books()
         assert len(items) == 2, f"应解析出 2 本书：{items}"
         assert {b["title"] for b in items} == {"三体", "背影"}, items
+        # 旧摆法兼容：子目录名是细标签 → 归到它所属的一级分类
+        got = {b["title"]: (b["category"], b["tags"], b["by"]) for b in items}
+        assert got["三体"] == ("精品小说", ["科幻"], "dir"), got
+        assert got["背影"] == ("文学", ["散文"], "dir"), got
 
-        # 偏好选书：科幻（三体）优先读；返回结构与 reading.next_article 同构
+        # 偏好选书：人格两级偏好（精品小说 + [科幻]）命中三体；结构与内置书摘同构
         first = _lib.next_passage()
-        assert first["genre"] == "科幻" and first["title"] == "三体", first
-        assert set(("genre", "title", "source", "quote", "text")) <= set(first), \
+        assert first["title"] == "三体", first
+        assert first["genre"] == first["category"] == "精品小说", first
+        assert first["tag"] == "科幻", first
+        assert set(("genre", "category", "tag", "title", "source",
+                    "quote", "text")) <= set(first), \
             f"返回结构要对齐内置书摘：{first.keys()}"
         assert first["quote"] == "给时光以生命，给岁月以文明。", first["quote"]
 
@@ -1949,6 +1957,122 @@ def test_user_library():
         _db.init()
 
 
+def test_library_categories():
+    """书库分类（2026-10-11）：平铺不建子目录 + 映射表分类 + 手动优先 + 上传/重分类/删除。"""
+    import tempfile
+
+    import config as _cfg
+    import corpus as _corpus
+    import db as _db
+    import library as _lib
+
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
+    try:
+        _db.init()
+        books = config.BOOKS_DIR
+        books.mkdir(parents=True)
+        # 全部平铺在根目录：靠书名/作者/正文自动分类，一个子目录都不建
+        (books / "三体.txt").write_text("给时光以生命，给岁月以文明。\n\n" + "弱小和无知不是生存的障碍。\n\n" * 20,
+                                        encoding="utf-8")
+        (books / "活着.txt").write_text("人是为了活着本身而活着，而不是为了活着之外的任何事物。\n\n" * 20,
+                                        encoding="utf-8")
+        (books / "孙子兵法.txt").write_text("兵者，诡道也。故能而示之不能，用而示之不用。\n\n" * 20,
+                                            encoding="utf-8")
+        (books / "随便起的名字.txt").write_text("这是一段完全看不出门类的正文内容。\n\n" * 20,
+                                                encoding="utf-8")
+        (books / "README.txt").write_text("说明文件，不该被当成书", encoding="utf-8")
+
+        got = {b["id"]: b["category"] for b in _lib.books()}
+        assert "README.txt" not in got, f"README 不该当书：{got}"
+        assert got["三体.txt"] == "精品小说", got
+        assert got["活着.txt"] == "文学", got
+        assert got["孙子兵法.txt"] == "军事", got
+        assert got["随便起的名字.txt"] == _corpus.UNCATEGORIZED, got
+
+        # 分类清单：22 类 + 未分类兜底，计数对得上
+        cats = {c["name"]: c["count"] for c in _lib.categories()}
+        assert len(cats) == 23, f"应是 22 类 + 未分类：{len(cats)}"
+        assert cats["精品小说"] == 1 and cats[_corpus.UNCATEGORIZED] == 1, cats
+
+        # 手动指定 → by=manual，reindex 重跑自动分类也动不了它
+        _lib.set_category("三体.txt", "科学技术", ["科普"])
+        assert _lib.get("三体.txt")["by"] == "manual", _lib.get("三体.txt")
+        _lib.reindex()
+        assert _lib.get("三体.txt")["category"] == "科学技术", "手动选过的不能被自动重分类覆盖"
+
+        # 上传：平铺存根目录（不建子目录）+ 自动分类；不支持的格式直接拒
+        up = _lib.save_upload("人类简史.txt", ("认知革命让智人走上食物链顶端。\n\n" * 20).encode("utf-8"))
+        assert up and up["category"] == "历史", up
+        assert (books / "人类简史.txt").is_file(), "上传的书必须平铺在根目录"
+        assert _lib.save_upload("坏东西.pdf", b"junk") is None, "只收 txt / epub"
+        dup = _lib.save_upload("人类简史.txt", ("同名再来一本，正文也要够长才作数。\n\n" * 5).encode("utf-8"))
+        assert dup and dup["id"] == "人类简史(2).txt", f"同名要另存，不能覆盖：{dup}"
+
+        # 删书：文件 + 映射表条目一起没
+        assert _lib.delete_book("人类简史(2).txt")
+        assert not (books / "人类简史(2).txt").exists()
+        assert _lib.get("人类简史(2).txt") is None
+
+        print("ok 书库分类（平铺 + 映射表 + 手动优先 + 上传/重分类/删书）")
+    finally:
+        config.BOOKS_DIR = real_books
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_reading_pref_two_level():
+    """阅读偏好两级（一级分类 + 细标签）：旧标签自动迁移，内置书摘翻译到同一套分类。"""
+    import json
+    import tempfile
+
+    import config as _cfg
+    import corpus as _corpus
+    import db as _db
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        import persona as _persona
+        import persona_pool as _pool
+        import reading as _reading
+
+        # 旧卡（reading_pref 是老标签）→ 一级分类 + 细标签，口味没丢
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "q",
+            "text": "夜猫子", "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2,
+            "reading_pref": "科幻", "drawn_at": "2026-10-10T00:00:00"}, ensure_ascii=False))
+        p = _persona.behavior_params()
+        assert p["reading_pref"] == "精品小说", p
+        assert p["reading_tags"] == ["科幻"], p
+
+        # 新卡：POOL 里直接就是两级，且一级分类必须是 22 类之一
+        names = [g["name"] for g in _corpus.GENRES]
+        for _ in range(12):
+            card = _pool.draw()
+            assert card["reading_pref"] in names, card
+            assert isinstance(card.get("reading_tags"), list), card
+            for t in card["reading_tags"]:
+                assert t in _corpus.PREF_LEGACY_MAP or any(
+                    t in g["tags"] for g in _corpus.GENRES), (card, t)
+
+        # 内置书摘：旧细标签翻译成一级分类（和用户书库同一套），原标签留在 tag
+        for g, cat in _corpus.PREF_LEGACY_MAP.items():
+            assert _reading.category_of(g) == cat, g
+        a = _reading.next_article()
+        assert a["genre"] == a["category"] and a["genre"] in names, a
+        assert a["tag"] in _corpus.PREF_LEGACY_MAP, a
+
+        print("ok 阅读偏好两级（分类 + 细标签）+ 内置书摘分类统一")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_legacy_persona_card_compat():
     """旧人格卡（缺 quirk/reading_pref/archetype）补全：/persona 不崩、阅读标签能显示。"""
     import json
@@ -1972,16 +2096,18 @@ def test_legacy_persona_card_compat():
         card = _pool.load()
         assert card["quirk"] == "", "旧卡 quirk 应补空"
         assert card["archetype"] == "sunshine", "旧卡 archetype 应按 label 反推"
-        assert card["reading_pref"] == "生活随笔", "旧卡 reading_pref 应按 label 反推"
+        # 旧卡 reading_pref 按 label 反推成老标签「生活随笔」，再迁移成两级（文学 + [生活随笔]）
+        assert card["reading_pref"] == "文学", f"旧卡应迁移到一级分类：{card}"
+        assert card["reading_tags"] == ["生活随笔"], card
 
         # /persona 不崩、带阅读偏好、空怪癖有兜底
         out = commands.handle("/persona")
         assert "阅读偏好" in out and "生活随笔" in out, f"/persona 缺阅读偏好：{out}"
         assert "没特别怪癖" in out, f"旧卡空怪癖应兜底：{out}"
 
-        # 阅读偏好标签能显示（爱读X）
+        # 阅读偏好标签能显示（爱读X·细标签）
         import webui as _webui
-        assert _webui._persona_tags(card) == ["阳光话痨", "爱读生活随笔"], \
+        assert _webui._persona_tags(card) == ["阳光话痨", "爱读文学·生活随笔"], \
             f"旧卡补全后标签不对：{_webui._persona_tags(card)}"
 
         # 新卡（已含 reading_pref）不被 normalize 覆盖
@@ -1990,7 +2116,10 @@ def test_legacy_persona_card_compat():
             "text": "夜猫子", "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2,
             "reading_pref": "科幻", "drawn_at": "2026-10-10T00:00:00",
         }, ensure_ascii=False))
-        assert _pool.load()["reading_pref"] == "科幻", "新卡 reading_pref 不应被覆盖"
+        # 新卡（已含 reading_pref）不被 normalize 覆盖，只会从老标签迁移到两级
+        new = _pool.load()
+        assert new["reading_pref"] == "精品小说", f"新卡应迁移到一级分类：{new['reading_pref']}"
+        assert new["reading_tags"] == ["科幻"], new
 
         print("ok 旧人格卡兼容（缺字段补全 / /persona 不崩 / 阅读标签显示 / 新卡不覆盖）")
     finally:
@@ -3725,6 +3854,8 @@ if __name__ == "__main__":
     test_wake_semantics_and_tick()
     test_reading_system()
     test_user_library()
+    test_library_categories()
+    test_reading_pref_two_level()
     test_legacy_persona_card_compat()
     test_care_events()
     test_interruption_cost()

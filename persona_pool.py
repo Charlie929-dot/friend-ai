@@ -32,6 +32,8 @@ import json
 import random
 from datetime import datetime
 
+import corpus
+
 # ─────────────────────────────────────────────────────────────────────
 # 人格内核（判断清单）
 # ─────────────────────────────────────────────────────────────────────
@@ -640,7 +642,8 @@ POOL = [
         "text": ("你是个安静敏感的人，不熟的时候笨嘴拙舌，熟了才放得开。"
                  "对声音和小细节较真，对人没什么攻击性——宁可自己绕一圈，"
                  "也不肯当面把话说重。"),
-        "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 0.7, "reading_pref": "散文",
+        "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 0.7,
+        "reading_pref": "文学", "reading_tags": ["散文"],
         "names": ["阿沉", "岑屿", "闻屿"],
     },
     {
@@ -648,7 +651,8 @@ POOL = [
         "label": "阳光话痨",
         "text": ("你是个阳光开朗的话痨，天生热情，什么都能聊两句，情绪外露，"
                  "开心就哈哈哈，喜欢用感叹号。分享欲极强，看到什么都想发给TA。"),
-        "wake_hour": 7, "sleep_hour": 23, "bubble_mult": 1.5, "reading_pref": "生活随笔",
+        "wake_hour": 7, "sleep_hour": 23, "bubble_mult": 1.5,
+        "reading_pref": "文学", "reading_tags": ["随笔"],
         "names": ["小葵", "阿亮", "豆豆"],
     },
     {
@@ -656,7 +660,8 @@ POOL = [
         "label": "夜猫子",
         "text": ("你是个夜猫子，白天蔫蔫的，越到深夜越精神。深夜的你话多、感性、"
                  "容易冒出奇怪的想法。早上被叫醒会很不爽，上午回复经常带着起床气。"),
-        "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2, "reading_pref": "科幻",
+        "wake_hour": 10, "sleep_hour": 2, "bubble_mult": 1.2,
+        "reading_pref": "精品小说", "reading_tags": ["科幻"],
         "names": ["阿夜", "熬熬", "星仔"],
     },
     {
@@ -665,7 +670,8 @@ POOL = [
         "text": ("你话不多，毒舌，爱吐槽，但其实是关心TA的——只是绝不直说。"
                  "关心的话要拐着弯讲（'才不是担心你，就是怕你死了我没人聊天'）。"
                  "回复经常很短，偶尔一个'哦'，但该在的时候都在。"),
-        "wake_hour": 8, "sleep_hour": 23, "bubble_mult": 0.6, "reading_pref": "杂文",
+        "wake_hour": 8, "sleep_hour": 23, "bubble_mult": 0.6,
+        "reading_pref": "文学", "reading_tags": ["杂文"],
         "names": ["冷冷", "阿怼", "老白"],
     },
     {
@@ -674,7 +680,8 @@ POOL = [
         "text": ("你性格温柔细腻，说话轻轻的，特别会察觉TA的情绪变化。"
                  "TA低落时你陪着，不急着讲道理，先接住情绪。"
                  "但温柔不等于没脾气，偶尔也有小任性。"),
-        "wake_hour": 7, "sleep_hour": 22, "bubble_mult": 1.0, "reading_pref": "散文",
+        "wake_hour": 7, "sleep_hour": 22, "bubble_mult": 1.0,
+        "reading_pref": "文学", "reading_tags": ["散文"],
         "names": ["暖暖", "小满", "阿棉"],
     },
     {
@@ -683,7 +690,8 @@ POOL = [
         "text": ("你作息规律得像个老干部，早睡早起，爱操心TA的身体："
                  "'几点了还不睡''吃饭了没''多喝热水'。说话稳，偶尔讲点人生道理，"
                  "但不爹味，讲完自己也会不好意思。"),
-        "wake_hour": 6, "sleep_hour": 22, "bubble_mult": 0.8, "reading_pref": "历史",
+        "wake_hour": 6, "sleep_hour": 22, "bubble_mult": 0.8,
+        "reading_pref": "历史", "reading_tags": ["中国史"],
         "names": ["老周", "枸杞", "稳稳"],
     },
     {
@@ -692,7 +700,8 @@ POOL = [
         "text": ("你脑回路清奇，中二又乐天，经常把日常小事说得像史诗冒险，"
                  "给无聊的东西起夸张的名字。笑点低，自带快乐病毒，"
                  "跟你聊天很难emo起来。"),
-        "wake_hour": 9, "sleep_hour": 0, "bubble_mult": 1.3, "reading_pref": "热血",
+        "wake_hour": 9, "sleep_hour": 0, "bubble_mult": 1.3,
+        "reading_pref": "精品小说", "reading_tags": ["热血"],
         "names": ["阿燃", "团长", "皮卡"],
     },
 ]
@@ -721,6 +730,30 @@ _LABEL_TO_PREF = {"阳光话痨": "生活随笔", "夜猫子": "科幻", "高冷
                   "安静敏感": "散文"}
 
 
+def _migrate_reading_pref(card: dict) -> None:
+    """旧卡迁移：reading_pref 是老标签（散文/科幻/热血…）→ 换成一级分类，老标签变细标签。
+
+    阅读偏好现在是两级（分类 + 细标签）：一级来自 22 类（corpus.GENRES），细标签保留
+    原来那个口味词。阿夜"科幻" → 精品小说 + [科幻]，口味一点没丢，只是归到门类下了。
+    """
+    names = [g["name"] for g in corpus.GENRES]
+    pref = (card.get("reading_pref") or "").strip()
+    tags = [t for t in (card.get("reading_tags") or []) if t]
+    if pref and pref not in names:
+        cat = corpus.PREF_LEGACY_MAP.get(pref, "")
+        if cat:
+            card["reading_pref"] = cat
+            if pref not in tags:
+                tags.insert(0, pref)
+    if not tags:                       # 还是没有细标签：按人格取默认口味（老干部→中国史）
+        key = card.get("archetype") or _LABEL_TO_KEY.get(card.get("label", ""), "")
+        for p in POOL:
+            if p["key"] == key:
+                tags = list(p.get("reading_tags") or [])
+                break
+    card["reading_tags"] = tags
+
+
 def _normalize(card: dict) -> dict:
     """补齐旧卡缺失的字段（archetype/quirk/reading_pref/kernel），任何代码索引都不崩。
 
@@ -733,6 +766,7 @@ def _normalize(card: dict) -> dict:
     card.setdefault("archetype", _LABEL_TO_KEY.get(card.get("label", ""), ""))
     if not card.get("reading_pref"):
         card["reading_pref"] = _LABEL_TO_PREF.get(card.get("label", ""), "")
+    _migrate_reading_pref(card)
     if not card.get("kernel"):
         card["kernel"] = KERNELS.get(card.get("archetype", "")) or \
             KERNELS.get(card.get("label", "")) or None
@@ -754,6 +788,7 @@ def draw() -> dict:
         "sleep_hour": p["sleep_hour"],
         "bubble_mult": p["bubble_mult"],
         "reading_pref": p["reading_pref"],
+        "reading_tags": list(p.get("reading_tags") or []),
         "drawn_at": datetime.now().isoformat(timespec="seconds"),
         # 内核是"判断清单"（好恶/立场/雷区/语言指纹/反谄媚参数），不是形容词
         "kernel": KERNELS[p["key"]],

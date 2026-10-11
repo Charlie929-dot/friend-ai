@@ -349,9 +349,11 @@ def behavior_params() -> dict:
     if card:
         return {"wake_hour": card["wake_hour"], "sleep_hour": card["sleep_hour"],
                 "bubble_mult": card.get("bubble_mult", 1.0),
-                "reading_pref": card.get("reading_pref", "")}
+                # 阅读偏好两级：reading_pref=一级分类（22 类之一）+ 细标签（科幻/散文…）
+                "reading_pref": card.get("reading_pref", ""),
+                "reading_tags": list(card.get("reading_tags") or [])}
     return {"wake_hour": config.WAKE_HOUR, "sleep_hour": config.SLEEP_HOUR,
-            "bubble_mult": 1.0, "reading_pref": ""}
+            "bubble_mult": 1.0, "reading_pref": "", "reading_tags": []}
 
 
 def _life_day(now: datetime) -> tuple[datetime, bool]:
