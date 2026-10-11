@@ -271,13 +271,34 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"current": persona.friend_name(),
                             "friends": _cmd.list_friends()})
             elif u.path == "/api/messages":
-                try:
-                    after = int(parse_qs(u.query).get("after", ["0"])[0])
-                except ValueError:
-                    after = 0
-                rows = db.messages_page(after, 200)
-                self._json({"messages": rows,
-                            "last_id": rows[-1]["id"] if rows else after})
+                qs = parse_qs(u.query)
+                # 进页面定位到最后：latest=1 返回最近一批（正序）+ 总数；
+                # 往上翻历史：before=<id> 返回更早一批（正序）；增量轮询走 after。
+                if qs.get("latest", ["0"])[0] in ("1", "true"):
+                    try:
+                        limit = int(qs.get("limit", ["500"])[0])
+                    except ValueError:
+                        limit = 500
+                    rows = db.messages_latest(limit)
+                    self._json({"messages": rows, "total": db.messages_count(),
+                                "has_more": db.messages_count() > len(rows),
+                                "last_id": rows[-1]["id"] if rows else 0})
+                elif "before" in qs:
+                    try:
+                        before = int(qs["before"][0])
+                    except ValueError:
+                        before = 0
+                    rows = db.messages_before(before, 200)
+                    self._json({"messages": rows,
+                                "has_more": bool(rows) and rows[0]["id"] > 1})
+                else:
+                    try:
+                        after = int(qs.get("after", ["0"])[0])
+                    except ValueError:
+                        after = 0
+                    rows = db.messages_page(after, 200)
+                    self._json({"messages": rows,
+                                "last_id": rows[-1]["id"] if rows else after})
             elif u.path == "/api/memories":
                 # 「最近记住的事」卡片（右侧洞察栏）：TA 记住的事，最近几条 + 总数。
                 # 排除自我记忆（self_*，那是"我说过的话"，归意识流面板）和待删除项。

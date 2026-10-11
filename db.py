@@ -234,6 +234,39 @@ def messages_page(after_id: int, limit: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def messages_latest(limit: int) -> list[dict]:
+    """最近 limit 条聊天消息，正序返回（网页端进页面直接定位到最后一次聊天）。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, ts, role, content, quote_id, quote_role, quote_content FROM messages "
+            "WHERE kind IN ('chat','proactive') ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    rows.reverse()
+    return [dict(r) for r in rows]
+
+
+def messages_before(before_id: int, limit: int) -> list[dict]:
+    """before_id 之前的更早一批（正序），供网页端往上翻历史。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, ts, role, content, quote_id, quote_role, quote_content FROM messages "
+            "WHERE kind IN ('chat','proactive') AND id < ? ORDER BY id DESC LIMIT ?",
+            (before_id, limit),
+        ).fetchall()
+    rows.reverse()
+    return [dict(r) for r in rows]
+
+
+def messages_count() -> int:
+    """聊天消息总数（chat + proactive），网页端判断还有没有更早历史。"""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE kind IN ('chat','proactive')"
+        ).fetchone()
+        return row["n"] if row else 0
+
+
 def last_user_message_ts() -> datetime | None:
     with _conn() as c:
         row = c.execute(
