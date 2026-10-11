@@ -444,7 +444,10 @@ class Engine:
         else:
             db.incr_counter("proactive_count")
         db.incr_counter("unanswered_proactive")
-        self._send(reply, kind="proactive")
+        # 分段连发：主动消息没走 _generate_reply 的分段，LLM 会用换行把两段话并成一条
+        # （如"热粥"+"《左传》"黏一起）。按换行拆开逐条发，像真人连发几条。
+        for seg in (s.strip() for s in reply.split("\n") if s.strip()):
+            self._send(seg, kind="proactive")
         return True
 
     # --- 初见阶段的冒泡机制：空闲 30-60 分钟没聊就冒个泡 ---

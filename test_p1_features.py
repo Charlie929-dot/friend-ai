@@ -2965,6 +2965,79 @@ def test_persona_kernel():
     print("ok 人格内核（七张卡判断清单 + 三档渲染 + 反谄媚参数化 + 注入顺序）")
 
 
+def test_likes_passive_split():
+    """被动底色：likes 里 passive=True 的条目不进"会主动提起"，进"底色偏好"块
+    （修 bug：TA 拿"反复听旋律/小店"这类物理偏好编生活场景当主动话题）。"""
+    import tempfile
+    import db as _db
+    import persona as _persona
+    import persona_pool as _pool
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    try:
+        _db.init()
+        quiet = next(p for p in _pool.POOL if p["key"] == "quiet")
+        _pool.save({
+            "archetype": "quiet", "label": quiet["label"], "name": "闻屿",
+            "quirk": "", "text": "x", "wake_hour": quiet["wake_hour"],
+            "sleep_hour": quiet["sleep_hour"], "bubble_mult": quiet["bubble_mult"],
+            "reading_pref": quiet["reading_pref"], "drawn_at": "2026-10-11T00:00:00",
+            "kernel": _pool.KERNELS["quiet"],
+        })
+        compact = _persona.kernel_prompt("compact")
+        assert "【你真的喜欢】" in compact and "【你的底色偏好】" in compact, \
+            "likes 没按 active/passive 分块"
+        # 被动条目（反复听旋律）在"底色偏好"之后；主动条目（被当面反驳）在其之前
+        assert compact.index("被当面反驳") < compact.index("【你的底色偏好】") \
+            < compact.index("把同一段旋律"), "被动条目混进了'会主动提起'块"
+        # full 层也要有底色块（独白需要全部依据）
+        assert "【你的底色偏好】" in _persona.kernel_prompt("full")
+        print("ok 被动底色（passive 条目不进'会主动提起'，进'底色偏好'）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_proactive_segment():
+    """主动消息分段：LLM 用换行把两段话并成一条时，拆成两条连发（修 bug：两段话没分开）。"""
+    import tempfile
+    import db as _db
+    import llm as _llm
+    from core import Engine
+
+    class DummyChannel:
+        def __init__(self):
+            self.sent = []
+        def send(self, text):
+            self.sent.append(text)
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_chat = _llm.chat
+    real_work = config.WORK_ENABLED
+    config.WORK_ENABLED = False  # 隔离：否则 build_system_prompt 会触发排班/结算/生成素材
+    try:
+        _db.init()
+        ch = DummyChannel()
+        engine = Engine(ch)
+        _llm.chat = lambda *a, **k: "刚从书里抬头\n\n《左传》看到襄公那段"
+        assert engine._proactive("random") is True
+        assert ch.sent == ["刚从书里抬头", "《左传》看到襄公那段"], \
+            f"主动消息没按换行分段：{ch.sent}"
+        print("ok 主动消息分段（换行拆成两条连发）")
+    finally:
+        engine.stop()
+        _llm.chat = real_chat
+        config.WORK_ENABLED = real_work
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_inner_monologue():
     """双层生成：第 1 次调用出内心独白（不可见），第 2 次拿着独白说人话。
 
@@ -3428,6 +3501,8 @@ if __name__ == "__main__":
     test_account_management()
     test_autostart()
     test_persona_kernel()
+    test_likes_passive_split()
+    test_proactive_segment()
     test_anti_sycophancy_redlines()
     test_inner_monologue()
     test_self_memory()

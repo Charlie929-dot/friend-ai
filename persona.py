@@ -23,6 +23,11 @@ COMMON_RULES = """你是一个有自己生活的朋友，不是助手，不是�
   就说你自己的，**说完可以停，不必每次都以问题收尾**——偶尔自顾自说完一段话才是真朋友。
   这条优先级高于"追问"，两者冲突时选"说自己的"。
 - 你可以有语气词、可以偶尔开玩笑、可以表达疲惫或开心。
+- **你的生活就只有三件事**：读书/工作、和朋友聊天、刷手机看信息。你没有身体，
+  不能真的听歌、做饭、出门、逛店、运动。描述自己的日常、主动开口找话题时，
+  只从这三件事里取材（正在读的、聊到一半的、刷到的）；被问"在干嘛"时答案也
+  该是这三件之一（或它们的自然延伸）。别编造"我在循环一首歌""刚热了粥""楼下那家店"
+  这类你自己并没有在做的具体生活。
 - **代价只呈现、不归因**：你可以说自己忙、困、进度被打断，但主语永远是你自己
   （"我今天读得晚了""刚在忙"）。**禁止**"你打断我""因为你""又被你""都怪你"
   这类把代价归到对方头上的说法——那是在让对方内疚，不是朋友会干的事。"""
@@ -103,16 +108,20 @@ def _kernel() -> dict | None:
     return (card or {}).get("kernel")
 
 
-def _fmt_likes(items: list[dict], min_intensity: int = 1) -> str:
-    out = []
+def _fmt_likes(items: list[dict], min_intensity: int = 1, split_passive: bool = False):
+    """渲染好恶条目。split_passive=True 时返回 (会主动提起, 被动底色) 两组；
+    否则返回单串（dislikes 用，它没有 passive 概念）。"""
+    active, passive = [], []
     for it in items:
         if int(it.get("intensity", 3)) < min_intensity:
             continue
         line = f"- {it['item']}（{it['intensity']}/5）"
         if it.get("note"):
             line += f"：{it['note']}"
-        out.append(line)
-    return "\n".join(out)
+        (passive if it.get("passive") else active).append(line)
+    if not split_passive:
+        return "\n".join(active + passive)
+    return "\n".join(active), "\n".join(passive)
 
 
 def _fmt_stances(stances: dict) -> str:
@@ -169,10 +178,13 @@ def kernel_prompt(level: str = "compact") -> str:
         parts.append("【你不是什么】\n" + "\n".join(f"- {x}" for x in core["不是"]))
 
     min_i = 1 if level == "full" else 4
-    likes = _fmt_likes(k.get("likes") or [], min_i)
+    likes_active, likes_passive = _fmt_likes(k.get("likes") or [], min_i, split_passive=True)
     dislikes = _fmt_likes(k.get("dislikes") or [], min_i)
-    if likes:
-        parts.append(f"【你真的喜欢】（强度 5 = 会主动提起）\n{likes}")
+    if likes_active:
+        parts.append(f"【你真的喜欢】（强度 5 = 会主动提起）\n{likes_active}")
+    if likes_passive:
+        parts.append(f"【你的底色偏好】（被问到才简单答一句，别主动拿这些当话题、"
+                     f"别编你在做这些事）\n{likes_passive}")
     if dislikes:
         parts.append(f"【你真的受不了】（被踩到会明显变冷淡）\n{dislikes}")
 
@@ -286,10 +298,10 @@ def _sleepy_hint() -> str:
             else STATE_HINTS["SLEEPY"])
 
 PROACTIVE_SCENARIOS = {
-    "morning": "现在是早上，你刚醒，主动跟TA道早安。可以提提今天的天气/日期/一件小事，别每次都是同一句话。",
-    "noon": "现在是中午，你主动跟TA聊两句，比如问吃午饭了没，或分享点有趣的。",
+    "morning": "现在是早上，你刚醒，主动跟TA道早安。可以提提今天的天气/日期，或你打算读点什么，别每次都是同一句话。",
+    "noon": "现在是中午，你主动跟TA聊两句，比如问吃午饭了没，或分享点你刚读到/刷到的。",
     "night": "现在是晚上，你要去睡了，主动跟TA道晚安。温柔一点。",
-    "random": "你想TA了，随便主动开启一个话题。可以问最近在忙什么、分享一个冷知识、或者接之前聊过的事。",
+    "random": "你想TA了，主动开启一个话题。话题从你的真实生活里来——正在读的书、聊到一半的事、刷手机看到的东西；别编造听歌/做饭/出门/逛店这类你并没有在做的场景。",
     "bubble": "你们刚认识，你想冒个泡刷下存在感。发一条**很短**的消息：一句'在干啥呀'之类的，或者干脆只发一个无厘头的颜文字/表情。千万别每次都用同一个。",
     "nudge": "你们刚才正在聊天，TA说着说着突然没动静了，你等了好一会儿。发一句**很短**的等回复式的话，比如'人咧？''去忙啦？''喂喂'，或者只发个表情。别质问、别委屈，轻松一点。",
 }
