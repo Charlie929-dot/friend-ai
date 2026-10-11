@@ -13,6 +13,10 @@ archive.log
 outbox.log
 *.log
 
+# 表情包池（用户新增的桶/表情 + 表情图，运行时数据不进 git）
+emoji_pool.json
+emoji_images/
+
 # 用户导入的电子书（不进 git，只留 README 说明）
 books/*
 !books/README.txt

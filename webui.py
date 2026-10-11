@@ -315,6 +315,16 @@ def _make_handler(channel: WebChannel, on_message):
                 # 表情包池（E 模块）：分桶表情库存，前端「表情」面板渲染用。
                 import emoji_pool
                 self._json({"buckets": emoji_pool.payload()})
+            elif u.path == "/api/emoji_img":
+                # 表情图（v0.70）：按文件名吐 emoji_images/ 里的图，防穿越只认纯文件名。
+                import emoji_pool
+                from urllib.parse import unquote
+                name = unquote(parse_qs(u.query).get("name", [""])[0])
+                p = emoji_pool.img_file(name)
+                if not p:
+                    self._json({"error": "没有这张表情图"}, 404)
+                    return
+                self._send_body(p.read_bytes(), emoji_pool.img_type(p.name))
             elif u.path == "/api/stream":
                 # 意识流（S4「完全自我意识」）：TA 脑子里那条第一人称自我叙事。
                 # 网页端原本看不到，这里吐出来给「查看意识流」面板用。
@@ -500,9 +510,16 @@ def _make_handler(channel: WebChannel, on_message):
             if action == "add_bucket":
                 ok, err = emoji_pool.add_bucket(data.get("name") or "")
             elif action == "add_emoji":
+                img = ""
+                img_data = data.get("img_data") or ""
+                if img_data:
+                    img, err = emoji_pool.save_img(img_data)
+                    if not img:
+                        self._json({"ok": False, "error": err})
+                        return
                 ok, err = emoji_pool.add_emoji(
                     data.get("bucket") or "", data.get("text") or "",
-                    data.get("emotion") or "")
+                    data.get("emotion") or "", img)
             elif action == "remove_emoji":
                 ok, err = emoji_pool.remove_emoji(
                     data.get("bucket") or "", data.get("text") or "")

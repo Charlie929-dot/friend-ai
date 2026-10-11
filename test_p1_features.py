@@ -3230,6 +3230,53 @@ def test_emoji_pool():
         _db.init()
 
 
+def test_emoji_img():
+    """表情图（v0.70）：save_img 魔数判型 + add_emoji 带图 + 删表情/删桶连带删图 + 防目录穿越。"""
+    import base64
+    import tempfile
+    import emoji_pool as _ep
+
+    real_base = config.BASE_DIR
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    try:
+        # 1) 合法 PNG（1x1）存进去，文件名按内容 md5 + .png，文件真的落盘
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+        name, err = _ep.save_img(base64.b64encode(png).decode())
+        assert not err and name.endswith(".png"), f"存 PNG 失败：{name} {err}"
+        assert _ep.img_file(name) is not None, "图片文件没落盘"
+        assert _ep.img_type(name) == "image/png", "PNG 的 Content-Type 不对"
+
+        # 2) 同图去重（md5 同名）+ 非法数据拒绝 + 目录穿越拒绝
+        name2, _ = _ep.save_img(base64.b64encode(png).decode())
+        assert name2 == name, "同图该去重同名"
+        assert not _ep.save_img("not-base64!!")[0], "非法 base64 该被拒"
+        assert not _ep.save_img(base64.b64encode(b"<script>evil").decode())[0], "非图片魔数该被拒"
+        assert _ep.img_file("../emoji_pool.json") is None, "目录穿越该被拒"
+        assert _ep.img_file("不存在的.png") is None
+
+        # 3) add_emoji 带图 → payload 能看到；删表情连带删图文件
+        ok, err = _ep.add_emoji(" test-bucket ", "熊猫头", "无语", name)
+        assert ok, f"带图表情没存上：{err}"
+        item = next(it for it in _ep.items("test-bucket") if it["text"] == "熊猫头")
+        assert item["img"] == name, "表情的 img 字段不对"
+        assert any(it.get("img") for b in _ep.payload() for it in b["items"] if it["text"] == "熊猫头")
+        ok, _ = _ep.remove_emoji("test-bucket", "熊猫头")
+        assert ok and _ep.img_file(name) is None, "删带图表情没连带删图文件"
+
+        # 4) 删桶也连带删图
+        ok, err = _ep.add_emoji("图桶", "再来一张", "", _ep.save_img(base64.b64encode(png).decode())[0])
+        assert ok, err
+        leftover = next(it["img"] for it in _ep.items("图桶"))
+        ok, _ = _ep.remove_bucket("图桶")
+        assert ok and _ep.img_file(leftover) is None, "删桶没连带删图文件"
+
+        print("ok 表情图（save_img 魔数判型 + 维护连带删图 + 防目录穿越）")
+    finally:
+        config.BASE_DIR = real_base
+
+
 def test_inner_monologue():
     """双层生成：第 1 次调用出内心独白（不可见），第 2 次拿着独白说人话。
     验证三件事：①独白真的被调用且输出不进聊天；②第 2 层的 messages 里带着独白
@@ -3696,6 +3743,7 @@ if __name__ == "__main__":
     test_proactive_segment()
     test_interest_cultivation()
     test_emoji_pool()
+    test_emoji_img()
     test_anti_sycophancy_redlines()
     test_inner_monologue()
     test_self_memory()

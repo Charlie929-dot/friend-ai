@@ -4,11 +4,15 @@
 - **内置默认桶 + 表情**在 `corpus.EMOJI_POOL`（所有朋友的共同起点，不可删）。
 - **用户新增的桶/表情**存 `emoji_pool.json`（项目根，全局共享——换朋友不换表情库，
   与 `friend.db` 一样是本机运行时数据、不进 git）。
-- 每个表情 = {"text": 表情本身, "emotion": 情绪状态描述, "img": 预留真图链接}。
+- 每个表情 = {"text": 表情本身, "emotion": 情绪状态描述, "img": 表情图文件名（可空，
+  v0.70 落地：用户新增表情可传图，存 `emoji_images/`，聊天里整条只发这个表情时渲染成图）}。
 - **防重样**：`recent_seen()` 扫最近几条 TA 消息，提取已经用过的表情，注入时提醒别重复。
 - **注入**：`prompt_hint()` 让 TA 聊天前"翻看库存"，允许只甩一个表情当懒人回应，
   并尊重人格 `voice.emoji` 的频率/禁止（几乎不用 emoji 的人格不注入；禁止的排除）。
 """
+import base64
+import binascii
+import hashlib
 import json
 import random
 import threading
@@ -19,9 +23,72 @@ import db
 
 _lock = threading.Lock()
 
+# 表情图：只认这几种格式（按文件魔数判，不信扩展名）
+_IMG_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+              "gif": "image/gif", "webp": "image/webp"}
+_IMG_MAX_BYTES = 2 * 1024 * 1024   # 单张限 2MB，表情包足够了
+
 
 def _custom_path():
     return config.BASE_DIR / "emoji_pool.json"
+
+
+def _img_dir():
+    """表情图目录（项目根 emoji_images/，运行时数据、不进 git）。"""
+    d = config.BASE_DIR / "emoji_images"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def save_img(data_b64: str) -> tuple[str, str]:
+    """存一张表情图（base64，可带 data: 前缀）。返回 (文件名, 错误)。
+    文件名 = 内容 md5 前 16 位 + 按魔数判出的扩展名（同图去重）。"""
+    raw = None
+    if data_b64:
+        s = data_b64.strip()
+        if s.startswith("data:") and "," in s:
+            s = s.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(s, validate=True)
+        except (binascii.Error, ValueError):
+            return "", "图片数据不是合法的 base64"
+    if not raw:
+        return "", "图片数据是空的"
+    if len(raw) > _IMG_MAX_BYTES:
+        return "", "图片太大（限 2MB）"
+    ext = ""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        ext = "png"
+    elif raw.startswith(b"\xff\xd8\xff"):
+        ext = "jpg"
+    elif raw.startswith((b"GIF87a", b"GIF89a")):
+        ext = "gif"
+    elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        ext = "webp"
+    if not ext:
+        return "", "只支持 png / jpg / gif / webp 图片"
+    name = hashlib.md5(raw).hexdigest()[:16] + "." + ext
+    try:
+        (_img_dir() / name).write_bytes(raw)
+    except OSError as e:
+        return "", f"图片写不进去：{e}"
+    return name, ""
+
+
+def img_file(name: str):
+    """按文件名取表情图路径。名字不合法或文件不存在返回 None（防目录穿越）。"""
+    name = (name or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
+    if not name or "." not in name or ".." in name:
+        return None
+    if name.rsplit(".", 1)[-1].lower() not in _IMG_TYPES:
+        return None
+    p = _img_dir() / name
+    return p if p.is_file() else None
+
+
+def img_type(name: str) -> str:
+    return _IMG_TYPES.get((name or "").rsplit(".", 1)[-1].lower(),
+                          "application/octet-stream")
 
 
 def _load_custom() -> dict:
@@ -117,13 +184,15 @@ def add_bucket(name: str) -> tuple[bool, str]:
     return True, ""
 
 
-def add_emoji(bucket: str, text: str, emotion: str = "") -> tuple[bool, str]:
+def add_emoji(bucket: str, text: str, emotion: str = "", img: str = "") -> tuple[bool, str]:
     """往某个桶加一个表情（内置桶或已存在的自定义桶都行；桶不存在自动新建）。
-    text/emotion 会去首尾空白。同桶内 text 重复返回 (False, 原因)。"""
+    text/emotion 会去首尾空白。同桶内 text 重复返回 (False, 原因)。
+    img 是 `save_img()` 存好的文件名（可空；内置桶不允许带图——内置库存只有文字）。"""
     bucket = (bucket or "").strip()
     text = (text or "").strip()
     if not bucket or not text:
         return False, "桶名和表情都不能为空"
+    img = (img or "").strip()
     with _lock:
         data = _load_custom()
         lst = data["buckets"].setdefault(bucket, [])
@@ -131,23 +200,32 @@ def add_emoji(bucket: str, text: str, emotion: str = "") -> tuple[bool, str]:
             or any(it.get("text") == text for it in corpus.EMOJI_POOL.get(bucket, []))
         if exists:
             return False, "这个表情已经在这个桶里了"
-        lst.append({"text": text, "emotion": (emotion or "").strip(), "img": ""})
+        lst.append({"text": text, "emotion": (emotion or "").strip(), "img": img})
         _save_custom(data)
     return True, ""
 
 
 def remove_emoji(bucket: str, text: str) -> tuple[bool, str]:
-    """删一个**自定义**表情（内置表情不可删）。"""
+    """删一个**自定义**表情（内置表情不可删）。带图的一并删图文件。"""
     bucket = (bucket or "").strip()
     text = (text or "").strip()
     with _lock:
         data = _load_custom()
         lst = data["buckets"].get(bucket, [])
-        new = [it for it in lst if it.get("text") != text]
-        if len(new) == len(lst):
+        gone = [it for it in lst if it.get("text") == text]
+        if not gone:
             return False, "没找到这个表情（内置表情不可删）"
-        data["buckets"][bucket] = new
+        data["buckets"][bucket] = [it for it in lst if it.get("text") != text]
         _save_custom(data)
+    for it in gone:
+        img = (it.get("img") or "").strip()
+        if img:
+            p = img_file(img)
+            if p:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
     return True, ""
 
 
@@ -160,8 +238,17 @@ def remove_bucket(name: str) -> tuple[bool, str]:
         data = _load_custom()
         if name not in data["buckets"]:
             return False, "没有这个桶"
-        del data["buckets"][name]
+        gone = data["buckets"].pop(name)
         _save_custom(data)
+    for it in gone:   # 连带删掉桶里自定义表情的图文件
+        img = (it.get("img") or "").strip()
+        if img:
+            p = img_file(img)
+            if p:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
     return True, ""
 
 

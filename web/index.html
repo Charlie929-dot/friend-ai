@@ -78,11 +78,12 @@
     cursor: pointer; z-index: 20; transition: width .22s ease; }
   .outline:hover { width: 200px; }
   .outline-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 16px;
-    display: flex; flex-direction: column; align-items: center; padding: 12px 0;
+    display: flex; flex-direction: column; align-items: flex-start; padding: 12px 0 12px 2px;
     overflow: hidden; transition: opacity .18s ease; }
-  .outline-rail i { flex: 1 1 0; min-height: 1px; max-height: 3px; width: 6px; border-radius: 99px;
+  .outline-rail i { flex: 1 1 0; min-height: 1px; max-height: 3px; width: 9px; border-radius: 99px;
     background: color-mix(in srgb, var(--muted) 50%, transparent); }
-  .outline-rail i.l1 { width: 12px; }
+  .outline-rail i.l1 { width: 13px; }
+  .outline-rail i.cur { width: 13px; background: var(--accent); }
   .outline-panel { position: absolute; left: 0; top: 0; bottom: 0; width: 200px;
     overflow-y: auto; padding: 10px 10px 12px 12px; opacity: 0; pointer-events: none;
     transition: opacity .16s ease; scrollbar-width: none; }
@@ -102,10 +103,12 @@
   .ol-item .ol-txt { overflow: hidden; text-overflow: ellipsis; }
   .ol-empty { font-size: 11px; color: var(--muted); padding: 6px 2px; line-height: 1.6; }
 
-  /* 跳转高亮 */
+  /* 跳转高亮：入场闪一下 + 柔和常亮整行（点任意处才消，jumpToMsg 加 / clearMsgHl 清） */
   .msg.flash .bubble { animation: flashPulse 1.2s ease; }
   @keyframes flashPulse { 0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 65%, transparent); }
     100% { box-shadow: 0 0 0 0 transparent; } }
+  .msg.hl .bubble { background: var(--accent-soft);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 
   /* 加载更早 */
   .load-more { display: block; margin: 2px auto 10px; padding: 7px 16px; border-radius: 99px;
@@ -399,6 +402,10 @@
     padding: 8px 4px; border-radius: 10px; cursor: pointer; transition: background .15s; }
   .ep-item:hover { background: var(--surface-2); }
   .ep-item .ep-char { font-size: 22px; line-height: 1.1; }
+  .ep-item .ep-img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px;
+    background: var(--surface-2); }
+  .bubble .bubble-img { display: block; max-width: 160px; max-height: 160px;
+    border-radius: 10px; }
   .ep-item .ep-emo { font-size: 9.5px; color: var(--muted); text-align: center; line-height: 1.25;
     max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
     -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -416,6 +423,10 @@
   .ep-add input:focus { border-color: var(--accent); }
   .ep-add .ep-row { display: flex; gap: 7px; }
   .ep-add .ep-row .btn { flex: 1; }
+  .ep-img-pick { font-size: 11px; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .ep-img-pick b { font-weight: 500; color: var(--accent); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
 
   @media (max-width: 640px) { .outline { display: none; } }
 
@@ -514,8 +525,9 @@
       </div>
       <div class="ep-add" id="epAddForm">
         <input id="epBucket" placeholder="所属桶（可填新桶名）">
-        <input id="epText" placeholder="表情文字（emoji / 颜文字）">
+        <input id="epText" placeholder="表情文字（emoji / 颜文字；带图时是图片的名字）">
         <input id="epEmotion" placeholder="情绪描述（如：开心到笑出泪）">
+        <label class="ep-img-pick">🖼 <span id="epImgHint">选图片（可选，png/jpg/gif/webp ≤2MB）</span><b id="epImgName"></b><input type="file" id="epImg" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
         <div class="ep-row"><button class="btn" id="epSave">保存</button><button class="btn" id="epCancel">取消</button></div>
       </div>
     </div>
@@ -856,6 +868,15 @@ function onMsgContext(e, id, m){
 document.addEventListener('click', hideCtx);
 document.addEventListener('contextmenu', e=>{ if(!e.target.closest('.msg')) hideCtx(); });
 
+/* 带图表情：整条消息内容恰好是某个带图表情的文字（比如只发了一个"熊猫头"）
+   → 气泡渲染成那张图，文字作 alt/悬浮说明；混在长句里则照常显示文字 */
+function msgBodyHtml(content){
+  const img = emojiImgMap.get(content);
+  if(img) return '<img class="bubble-img" src="/api/emoji_img?name='+encodeURIComponent(img)
+    +'" alt="'+esc(content)+'" title="'+esc(content)
+    +'" onerror="this.replaceWith(document.createTextNode(this.alt))">';
+  return esc(content);
+}
 function buildMsgNode(m, id){
   if(id){
     if(shownIds.has(id)) return null;
@@ -872,7 +893,7 @@ function buildMsgNode(m, id){
     +'<button class="ma-btn" data-act="copy" title="复制"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>'
     +(m.role==='user'?'<button class="ma-btn danger" data-act="revoke" title="撤回"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button>':'')
     +'</div>' : '';
-  d.innerHTML='<div class="bubble-row"><div class="bubble">'+q+esc(m.content)+'</div>'+acts+'</div>'+(t?'<div class="mtime">'+t+'</div>':'');
+  d.innerHTML='<div class="bubble-row"><div class="bubble">'+q+msgBodyHtml(m.content)+'</div>'+acts+'</div>'+(t?'<div class="mtime">'+t+'</div>':'');
   if(id){
     msgMeta.set(id, {role:m.role, content:m.content, ts:m.ts});
     const row=d.querySelector('.bubble-row');
@@ -1024,6 +1045,7 @@ function rebuildOutline(){
     const newDay = day && day !== curDay;
     const line = document.createElement('i');
     line.className = newDay ? 'l1' : 'l2';
+    line.dataset.mid = id;          // 细线 ↔ 消息对应，滚动时高亮当前位置用
     rail.appendChild(line);
     if(newDay){
       curDay = day;
@@ -1039,16 +1061,45 @@ function rebuildOutline(){
     it.onclick = ()=>jumpToMsg(id);
     panel.appendChild(it);
   });
+  updateRailCur();
 }
+/* 细栏高亮线跟随阅读位置：视口上部 40% 处正在显示的那条消息，细线点亮（minimap 的"你在哪"） */
+function updateRailCur(){
+  const lines=[...$('outlineRail').children];
+  if(!lines.length) return;
+  const chatEl=$('chat');
+  const midY=chatEl.getBoundingClientRect().top + chatEl.clientHeight*0.4;
+  let curLine='';
+  document.querySelectorAll('#chatInner .msg[data-mid]').forEach(el=>{
+    if(el.getBoundingClientRect().top <= midY) curLine=el.dataset.mid;
+  });
+  lines.forEach(l=>l.classList.toggle('cur', l.dataset.mid===curLine));
+}
+(function(){   // 聊天流滚动 → 细线高亮跟着走（rAF 节流）
+  const c=$('chat');
+  let ticking=false;
+  c.addEventListener('scroll',()=>{
+    if(ticking) return;
+    ticking=true;
+    requestAnimationFrame(()=>{ updateRailCur(); ticking=false; });
+  },{passive:true});
+})();
+function clearMsgHl(){ document.querySelectorAll('#chatInner .msg.hl').forEach(el=>el.classList.remove('hl')); }
 function jumpToMsg(id){
   const el = document.querySelector('#chatInner .msg[data-mid="'+id+'"]');
   if(!el) return;
   el.scrollIntoView({block:'center', behavior:'smooth'});
+  clearMsgHl();
   el.classList.remove('flash');
   void el.offsetWidth;   // 重启动画
   el.classList.add('flash');
+  el.classList.add('hl');   // 柔和常亮，点页面任意处才消（目录里点别的条目算"换目标"不算取消）
   setTimeout(()=>el.classList.remove('flash'), 1300);
 }
+document.addEventListener('click',e=>{
+  if(e.target.closest('.outline')) return;
+  clearMsgHl();
+});
 
 /* ===== 加载更早的历史 ===== */
 function updateLoadMore(){
@@ -1240,8 +1291,15 @@ $('streamCopy').onclick=()=>{ if(!streamRows.length){ toast('还没有意识流�
 let emojiData = null;   // {buckets:[{name,builtin,items:[{text,emotion,img,builtin}]}]}
 let emojiCur = '';      // 当前选中的桶名
 let emojiAddMode = false; // true = 新增表情表单，false = 普通选择
+const emojiImgMap = new Map();  // 表情文字 → 图文件名（整条消息就是这串文字时，聊天气泡渲染成图）
 async function loadEmoji(){
-  try{ const d=await (await fetch('/api/emoji')).json(); emojiData=d.buckets||[]; renderEmojiTabs(); renderEmojiGrid(); }
+  try{
+    const d=await (await fetch('/api/emoji')).json();
+    emojiData=d.buckets||[];
+    emojiImgMap.clear();
+    emojiData.forEach(b=>(b.items||[]).forEach(it=>{ if(it.img) emojiImgMap.set(it.text, it.img); }));
+    renderEmojiTabs(); renderEmojiGrid();
+  }
   catch(e){ /* 静默 */ }
 }
 function renderEmojiTabs(){
@@ -1284,7 +1342,10 @@ function renderEmojiGrid(){
     const d=document.createElement('div');
     d.className='ep-item';
     d.title=it.emotion||'';
-    d.innerHTML='<span class="ep-char">'+esc(it.text)+'</span>'
+    const face = it.img
+      ? '<img class="ep-img" loading="lazy" src="/api/emoji_img?name='+encodeURIComponent(it.img)+'" alt="'+esc(it.text)+'">'
+      : '<span class="ep-char">'+esc(it.text)+'</span>';
+    d.innerHTML=face
       +(it.emotion?'<span class="ep-emo">'+esc(it.emotion)+'</span>':'')
       +(it.builtin?'':'<span class="ep-del" title="删除">×</span>');
     d.onclick=async()=>{
@@ -1323,8 +1384,15 @@ function showEmojiAdd(){
   $('epAddForm').classList.add('show');
   $('epBucket').value=emojiCur||'';
   $('epText').value=''; $('epEmotion').value='';
+  $('epImg').value=''; $('epImgName').textContent='';
+  $('epImgHint').textContent='选图片（可选，png/jpg/gif/webp ≤2MB）';
 }
 function hideEmojiAdd(){ emojiAddMode=false; $('epAddForm').classList.remove('show'); }
+$('epImg').addEventListener('change',()=>{
+  const f=$('epImg').files[0];
+  $('epImgName').textContent=f?f.name:'';
+  $('epImgHint').textContent=f?'已选图，发送后整条消息会显示成这张图':'选图片（可选，png/jpg/gif/webp ≤2MB）';
+});
 /* 打开/关闭：hover 图标自动展开（可持久），点击切换开关；只在点面板外/关按钮/选中表情时关 */
 let emojiTimer = null;
 function openEmoji(){ clearTimeout(emojiTimer); loadEmoji(); $('emojiPanel').classList.add('show'); }
@@ -1353,28 +1421,32 @@ $('epAddBucket').onclick=async()=>{
 $('epSave').onclick=async()=>{
   const bucket=$('epBucket').value.trim(), text=$('epText').value.trim(), emotion=$('epEmotion').value.trim();
   if(!bucket||!text){ toast('桶名和表情都不能为空'); return; }
+  const body={action:'add_emoji',bucket,text,emotion};
+  const f=$('epImg').files[0];
+  if(f){
+    if(f.size>2*1024*1024){ toast('图片太大（限 2MB）'); return; }
+    const dataUrl=await new Promise((res,rej)=>{
+      const r=new FileReader();
+      r.onload=()=>res(r.result); r.onerror=()=>rej(r.error);
+      r.readAsDataURL(f);
+    }).catch(()=>null);
+    if(dataUrl===null){ toast('图片读不出来'); return; }
+    body.img_data=dataUrl;
+  }
   const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({action:'add_emoji',bucket,text,emotion})})).json();
+    body:JSON.stringify(body)})).json();
   if(!r.ok){ toast(r.error||'保存失败'); return; }
   hideEmojiAdd(); emojiCur=bucket; await loadEmoji();
 };
 /* 点面板外关闭（按钮和面板内部除外） */
 document.addEventListener('click',e=>{ if(!e.target.closest('.emoji-panel') && !e.target.closest('#btnEmoji')) closeEmoji(); });
-/* 标签溢出：贴左边缘往右滑、贴右边缘往左滑（自动滚动，露出被遮的桶） */
+/* 标签溢出：鼠标在标签行上移动就跟着移——往右移标签就往左滑（露出右边的桶），
+   快慢跟手（movementX = 本次鼠标位移）；移出即停。不是贴边才滚。 */
 (function(){
   const tabsEl=$('epTabs');
-  let tabScrollTimer=null;
   tabsEl.addEventListener('mousemove',e=>{
-    const r=tabsEl.getBoundingClientRect();
-    const x=e.clientX-r.left, w=r.width, edge=48;
-    let dir=0;
-    if(x<edge) dir=-1;            // 左靠 → 标签往右滑
-    else if(x>w-edge) dir=1;      // 右靠 → 标签往左滑
-    if(dir){
-      if(!tabScrollTimer) tabScrollTimer=setInterval(()=>{ tabsEl.scrollLeft+=dir*24; },30);
-    } else { clearInterval(tabScrollTimer); tabScrollTimer=null; }
+    if(e.movementX) tabsEl.scrollLeft += e.movementX;
   });
-  tabsEl.addEventListener('mouseleave',()=>{ clearInterval(tabScrollTimer); tabScrollTimer=null; });
 })();
 
 /* ===== 输入框自适应 + 发送 ===== */
@@ -1390,6 +1462,7 @@ $('send').onclick=send;
 initialLoad();
 loadFriends();
 loadMemories();
+loadEmoji();          // 预载表情库（带图表情的「文字→图」映射要在渲染气泡前就位）
 setInterval(poll,900);
 setInterval(loadMemories,30000);
 </script>
