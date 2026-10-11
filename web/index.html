@@ -112,8 +112,9 @@
     100% { box-shadow: 0 0 0 0 transparent; } }
   .msg.hl .bubble { background: var(--accent-soft);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
-  /* 细栏滑动实时定位：鼠标沿细栏移动，所指消息临时框出深色描边（移出细栏即消） */
-  .msg.preview .bubble { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--muted) 60%, transparent); }
+  /* 细栏滑动定位：右边目录里被指到的条目深色框高亮 */
+  .ol-item.ol-cur { background: var(--surface-2); color: var(--ink);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent); }
 
   /* 加载更早 */
   .load-more { display: block; margin: 2px auto 10px; padding: 7px 16px; border-radius: 99px;
@@ -1090,34 +1091,32 @@ function updateRailCur(){
     requestAnimationFrame(()=>{ updateRailCur(); ticking=false; });
   },{passive:true});
 })();
-/* 细栏滑动实时定位：鼠标沿细线上下移动 → 聊天流滚到对应消息并框出深色描边；
-   细线与消息一一对应（rebuildOutline 里按顺序生成），按纵向比例映射条目序号。
-   移出细栏即消；点击条目仍走 jumpToMsg 的常亮高亮。 */
-let previewMid = 0;
-function clearRailPreview(){
-  if(!previewMid) return;
-  const el=document.querySelector('#chatInner .msg[data-mid="'+previewMid+'"]');
-  if(el) el.classList.remove('preview');
-  previewMid=0;
+/* 细栏滑动 → 定位右边展开的文字目录：鼠标在细线哪个位置，右边目录就按纵向比例
+   滚到「第几个条目」并深色框高亮（细线↔条目 1:1 对应，重建时同序生成）；聊天流不动。
+   只有在目录里**点击**条目才会跳转聊天流（jumpToMsg）。移出细栏/进入目录即取消高亮。 */
+let railCurItem = null;
+function clearRailCur(){
+  if(railCurItem){ railCurItem.classList.remove('ol-cur'); railCurItem=null; }
 }
 $('outlineRail').addEventListener('mousemove', e=>{
-  const lines=[...$('outlineRail').children];
-  if(!lines.length) return;
+  const items=[...$('outlinePanel').querySelectorAll('.ol-item')];
+  if(!items.length) return;
   const r=$('outlineRail').getBoundingClientRect();
   const pad=12;   // 与 rail 的上下 padding 一致
   const frac=(e.clientY-r.top-pad)/(r.height-pad*2);
-  const idx=Math.max(0, Math.min(lines.length-1, Math.floor(frac*lines.length)));
-  const id=parseInt(lines[idx].dataset.mid);
-  if(!id || id===previewMid) return;
-  clearRailPreview();
-  const el=document.querySelector('#chatInner .msg[data-mid="'+id+'"]');
-  if(!el) return;
-  previewMid=id;
-  el.classList.add('preview');
-  el.scrollIntoView({block:'center'});   // 即时定位（smooth 会跟不上滑动）
+  const idx=Math.max(0, Math.min(items.length-1, Math.floor(frac*items.length)));
+  const it=items[idx];
+  if(it===railCurItem) return;
+  clearRailCur();
+  railCurItem=it;
+  it.classList.add('ol-cur');
+  // 让该条目在目录浮层里居中可见
+  const pr=$('outlinePanel').getBoundingClientRect();
+  const ir=it.getBoundingClientRect();
+  $('outlinePanel').scrollTop += (ir.top + ir.height/2) - (pr.top + pr.height/2);
 });
-$('outlineRail').addEventListener('mouseleave', clearRailPreview);
-$('outlinePanel').addEventListener('mouseenter', clearRailPreview);
+$('outlineRail').addEventListener('mouseleave', clearRailCur);
+$('outlinePanel').addEventListener('mouseenter', clearRailCur);
 function clearMsgHl(){ document.querySelectorAll('#chatInner .msg.hl').forEach(el=>el.classList.remove('hl')); }
 function jumpToMsg(id){
   const el = document.querySelector('#chatInner .msg[data-mid="'+id+'"]');
