@@ -1015,7 +1015,10 @@ def test_diary_purge_reviewed_messages():
         class _Clock:
             @classmethod
             def now(cls):
-                return _dt.fromisoformat(day + "T12:00:00")
+                # 用零点而非中午：purge 的 cutoff 用真实墙钟 now()（未 mock），
+                # 若 mock 成"当天 12:00"而真实时间在上午，12:00 > now → 删不掉、误挂。
+                # 零点一定早于当天任意真实时刻，保证"回顾线删干净"断言稳定。
+                return _dt.fromisoformat(day + "T00:00:00")
 
         real_dt = _db.datetime
         _db.datetime = _Clock
@@ -2304,11 +2307,11 @@ def test_webui():
         _db.init()
         _webui.WEB_DIR = Path(real_base) / "web"     # 页面文件仍留在项目里
 
-        def fake_engine(text):
+        def fake_engine(text, quote=None):
             """替身引擎：命令返回输出，普通消息入库并返回消息 id（真引擎同款契约）。"""
             if text.startswith("/"):
                 return _cmds.handle(text)
-            return _db.add_message("user", text)
+            return _db.add_message("user", text, quote=quote)
 
         ch = _webui.WebChannel()
         srv = ThreadingHTTPServer(("127.0.0.1", 0), _webui._make_handler(ch, fake_engine))
@@ -2325,6 +2328,11 @@ def test_webui():
             # 「最近记住的事」卡片 + 左右抽屉（v0.61 单栏极简重做）
             assert 'id="memList"' in html and 'id="drawerL"' in html and 'id="drawerR"' in html, \
                 "页面缺记忆卡/抽屉结构"
+            # 直达底部 + 新消息提示 + 引用（v0.62 交互优化）
+            assert 'id="toBottom"' in html and 'id="newMsgToast"' in html and 'id="quoteBar"' in html, \
+                "页面缺直达底部/新消息提示/引用条"
+            assert 'e.isComposing' in html and 'nativeEvent.isComposing' not in html, \
+                "Enter 发送的按键判断仍有 bug（残留 nativeEvent.isComposing）"
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
@@ -2345,6 +2353,19 @@ def test_webui():
             msgs = c.get(base + "/api/messages?after=0").json()["messages"]
             assert any(m["role"] == "user" and m["content"] == "你好呀" for m in msgs), \
                 f"消息没进库（网页端会看不到自己发的）：{msgs}"
+
+            # 对话引用：带 quote 发送要落库（quote_id/role/content），供前端回显 + 后端对齐
+            rq = c.post(base + "/api/send", json={
+                "text": "对，就这句", "quote": {"id": 7, "role": "assistant", "content": "被引的那句"}}).json()
+            assert rq["echo"] is True, f"带引用的消息也应回显：{rq}"
+            qmsgs = c.get(base + "/api/messages?after=0").json()["messages"]
+            qm = next(m for m in qmsgs if m["content"] == "对，就这句")
+            assert qm["quote_id"] == 7 and qm["quote_role"] == "assistant" \
+                and qm["quote_content"] == "被引的那句", f"引用没落库：{qm}"
+            # 不带 quote 的普通消息，引用字段应是空
+            plain = next(m for m in qmsgs if m["content"] == "你好呀")
+            assert plain["quote_id"] in (0, "") and not plain["quote_content"], \
+                f"无引用消息不应带引用字段：{plain}"
 
             # 手动安全阀：页面上勾"紧急"要能开窗口
             c.post(base + "/api/send", json={"text": "在吗", "urgent": True})

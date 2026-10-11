@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS messages (
     ts TEXT NOT NULL,          -- ISO 时间
     role TEXT NOT NULL,        -- user / assistant
     kind TEXT NOT NULL,        -- chat / proactive / system
-    content TEXT NOT NULL
+    content TEXT NOT NULL,
+    quote_id INTEGER NOT NULL DEFAULT 0,       -- 引用回复：被引消息 id（0=无引用）
+    quote_role TEXT NOT NULL DEFAULT '',       -- 被引消息角色（user/assistant）
+    quote_content TEXT NOT NULL DEFAULT ''     -- 被引消息原文（展示 + 兜底）
 );
 CREATE TABLE IF NOT EXISTS counters (
     date TEXT NOT NULL,        -- YYYY-MM-DD
@@ -114,6 +117,14 @@ def init():
             c.execute("ALTER TABLE memories ADD COLUMN decay_level INTEGER NOT NULL DEFAULT 0")
         if "pinned" not in cols:
             c.execute("ALTER TABLE memories ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        # 旧库迁移：对话引用（前端"引用回复"，quote_id/quote_role/quote_content）
+        mcols = [r["name"] for r in c.execute("PRAGMA table_info(messages)")]
+        if "quote_id" not in mcols:
+            c.execute("ALTER TABLE messages ADD COLUMN quote_id INTEGER NOT NULL DEFAULT 0")
+        if "quote_role" not in mcols:
+            c.execute("ALTER TABLE messages ADD COLUMN quote_role TEXT NOT NULL DEFAULT ''")
+        if "quote_content" not in mcols:
+            c.execute("ALTER TABLE messages ADD COLUMN quote_content TEXT NOT NULL DEFAULT ''")
 
 
 def clear_all():
@@ -156,13 +167,23 @@ def set_kv(key: str, value: str):
 
 
 # --- 消息记录 ---
-def add_message(role: str, content: str, kind: str = "chat") -> int:
+def add_message(role: str, content: str, kind: str = "chat", quote: dict | None = None) -> int:
     """落一条消息，返回它的 id（前端回显后靠它推进轮询游标——
-    不然手动回显的消息 900ms 后又被轮询渲染一遍，出现"发送两次"，实测 #25）。"""
+    不然手动回显的消息 900ms 后又被轮询渲染一遍，出现"发送两次"，实测 #25）。
+
+    quote：可选，引用回复。契约 = {"id": 被引消息 id, "role": "user"|"assistant",
+    "content": 被引消息原文}。这里只存不解释——"让 TA 回复时知道你在引用哪句"
+    属于后端对齐（LLM 上下文注入），尚未接。"""
+    q = quote or {}
+    qid = int(q.get("id") or 0)
+    qrole = str(q.get("role") or "")
+    qcontent = str(q.get("content") or "")
     with _conn() as c:
         cur = c.execute(
-            "INSERT INTO messages(ts, role, kind, content) VALUES(?, ?, ?, ?)",
-            (datetime.now().isoformat(timespec="seconds"), role, kind, content),
+            "INSERT INTO messages(ts, role, kind, content, quote_id, quote_role, quote_content) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (datetime.now().isoformat(timespec="seconds"), role, kind, content,
+             qid, qrole, qcontent),
         )
         return int(cur.lastrowid or 0)
 
@@ -182,7 +203,7 @@ def messages_page(after_id: int, limit: int) -> list[dict]:
     """按 id 顺序取历史消息（记忆回填用），after_id 之后的一批。"""
     with _conn() as c:
         rows = c.execute(
-            "SELECT id, ts, role, content FROM messages "
+            "SELECT id, ts, role, content, quote_id, quote_role, quote_content FROM messages "
             "WHERE kind IN ('chat','proactive') AND id > ? ORDER BY id LIMIT ?",
             (after_id, limit),
         ).fetchall()

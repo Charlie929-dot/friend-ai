@@ -355,6 +355,11 @@ def _make_handler(channel: WebChannel, on_message):
             if not text:
                 self._json({"error": "消息是空的"}, 400)
                 return
+            # 对话引用：前端把被引消息 {id, role, content} 传上来。只认 dict，
+            # 结构不对就丢弃（不阻断发送）；"让 TA 知道在引用哪句"待后端对齐。
+            quote = data.get("quote")
+            if not isinstance(quote, dict):
+                quote = None
             # 手动安全阀：勾选"紧急"直接开窗口（也可以直接说"有急事"，它自己认）
             if data.get("urgent"):
                 guard.open_urgent_window()
@@ -363,7 +368,7 @@ def _make_handler(channel: WebChannel, on_message):
                 self._restart()
                 return
             with db.SEND_LOCK:      # 只与切库互斥；不等回复生成（否则消息全卡到 TA 回完，实测 #30）
-                out = on_message(text)
+                out = on_message(text, quote)
             is_cmd = isinstance(out, str)   # 命令：输出走返回值；普通消息：out 是消息 id
             self._json({
                 "echo": not is_cmd,   # 普通消息回显用户输入；命令只把输出显示出来

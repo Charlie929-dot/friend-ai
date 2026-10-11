@@ -76,14 +76,19 @@ class Engine:
         self._stopped = True
 
     # --- 收到用户消息 ---
-    def on_user_message(self, text: str) -> int:
+    def on_user_message(self, text: str, quote: dict | None = None) -> int:
         """处理一条用户消息，返回它落库后的 id（前端靠它推进轮询游标，
-        避免手动回显的消息又被轮询渲染一遍——实测 #25 发送出现两次）。"""
+        避免手动回显的消息又被轮询渲染一遍——实测 #25 发送出现两次）。
+
+        quote：可选，引用回复（{"id","role","content"}）。已随消息落库；
+        TODO(引用后端对齐)：还没把被引内容注入回复上下文——要让 TA 回复时
+        知道你在引用哪句，需在 _reply_worker 生成回复前把 quote_content 拼进
+        context.build 的最近对话（或单独塞一条 system 提示）。"""
         text = text.strip()
         if not text:
             return 0
         self._flush_outbox()  # 你回来了：先把离开期间 TA 的留言重放给你
-        mid = db.add_message("user", text)
+        mid = db.add_message("user", text, quote=quote)
         # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
         if guard.is_urgent(text):
             guard.open_urgent_window()
