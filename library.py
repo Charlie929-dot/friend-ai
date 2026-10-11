@@ -226,29 +226,35 @@ def _parse_epub(path: Path) -> dict | None:
         opf_path = m.group(1)
         opf = z.read(opf_path).decode("utf-8", "ignore")
         root = ET.fromstring(opf)
-        OPF = "{http://www.idpf.org/2007/opf}"
-        DC = "{http://purl.org/dc/elements/1.1/}"
-        title_el = root.find(f".//{DC}title")
-        creator_el = root.find(f".//{DC}creator")
+        # ⚠️ 一律按"标签本地名"找元素，不要拼命名空间：
+        # 掌上书苑(epubBuilder) 生成的一批书把 <package xmlns=...> 拼成了 mlns=...，
+        # 整份 OPF 因此没有命名空间，按 {opf}item 找会一个都找不到 → 正文 0 段、
+        # 整本书在书架里凭空消失（实测 v0.79：《再穷也要去旅行》《圣经》都中招）。
+        def _find_all(local: str):
+            return [el for el in root.iter() if _local(el.tag) == local]
+
+        title_el = next(iter(_find_all("title")), None)
+        creator_el = next(iter(_find_all("creator")), None)
         title = (title_el.text or "").strip() if title_el is not None else ""
         author = (creator_el.text or "").strip() if creator_el is not None else ""
         # dc:subject 是出版方自己标的题材（"科幻小说"/"Fiction"），比猜书名准得多
-        subjects = [(el.text or "").strip() for el in root.findall(f".//{DC}subject")
-                    if (el.text or "").strip()]
+        # ——但国内盗版转换本里塞站名/URL/书名的极多，先洗一遍（v0.79）
+        subjects = _clean_subjects([(el.text or "").strip()
+                                    for el in _find_all("subject")], title)
         manifest = {it.get("id"): it.get("href")
-                    for it in root.iter(f"{OPF}item") if it.get("id")}
-        spine = [it.get("idref") for it in root.iter(f"{OPF}itemref") if it.get("idref")]
+                    for it in _find_all("item") if it.get("id")}
+        spine = [it.get("idref") for it in _find_all("itemref") if it.get("idref")]
         # 封面（v0.78）：两种标准写法都认——① OPF <meta name="cover" content="封面itemId">
         # ② manifest 里 <item properties="cover-image">。找到就记下 zip 内路径，书架显示用。
         cover_href = ""
         meta_cover = ""
-        for el in root.iter(f"{OPF}meta"):
+        for el in _find_all("meta"):
             if (el.get("name") or "").lower() == "cover":
                 meta_cover = el.get("content") or ""
         if meta_cover and meta_cover in manifest:
             cover_href = manifest[meta_cover]
         if not cover_href:
-            for it in root.iter(f"{OPF}item"):
+            for it in _find_all("item"):
                 if "cover-image" in (it.get("properties") or ""):
                     cover_href = it.get("href") or ""
                     break
@@ -275,6 +281,35 @@ def _parse_epub(path: Path) -> dict | None:
                 "subject": " ".join(subjects), "cover": cover_path}
     except (ET.ParseError, KeyError, OSError):
         return None
+
+
+_JUNK_RE = [re.compile(p, re.I) for p in corpus.SUBJECT_JUNK]
+
+
+def _local(tag: str) -> str:
+    """XML 标签的本地名（去掉 {命名空间}）。OPF 有没有命名空间都得能解析。"""
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
+
+
+def _clean_subjects(raw: list[str], title: str = "") -> list[str]:
+    """洗一遍 epub 自带的 dc:subject，只留真像题材的。
+
+    脏值三类（实测这批书全都撞上）：源站域名（ibook.178.com）、URL、
+    拿书名本身当题材（《活着》的 subject 就是"活着"）。留着它们会让分类
+    凭空拿到 6 分，把书带偏——比如《时间简史》被 "lcsh: Novel" 带成小说。
+    """
+    norm_title = _norm(title)
+    out = []
+    for s in raw or []:
+        s = (s or "").strip()
+        if not s or len(s) > 40:
+            continue
+        if any(r.search(s) for r in _JUNK_RE):
+            continue
+        if norm_title and _norm(s) == norm_title:
+            continue
+        out.append(s)
+    return out
 
 
 def _parsed(path: Path) -> dict | None:

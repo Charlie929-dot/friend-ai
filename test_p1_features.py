@@ -2085,6 +2085,115 @@ def test_epub_cover():
         _db.init()
 
 
+def test_persona_pool_expanded():
+    """人格骨架扩充到 15 张（v0.79）：抽卡池、内核、两级阅读偏好、旧卡反推四处必须同步。
+
+    加骨架最容易漏的是 `_LABEL_TO_KEY`——漏了旧卡反推不出 archetype，
+    `/persona` 会显示空内核。这张测试就是防那个。
+    """
+    import corpus as _corpus
+    import persona_pool as _pool
+
+    names = [g["name"] for g in _corpus.GENRES]
+    assert len(_pool.POOL) >= 15, f"骨架数量不够：{len(_pool.POOL)}"
+    keys = [p["key"] for p in _pool.POOL]
+    labels = [p["label"] for p in _pool.POOL]
+    assert len(set(keys)) == len(keys) and len(set(labels)) == len(labels), "key/label 不能撞"
+    for p in _pool.POOL:
+        assert p["key"] in _pool.KERNELS, f"{p['key']} 缺内核"
+        assert p["reading_pref"] in names, f"{p['key']} 的一级分类不在 22 类里：{p['reading_pref']}"
+        assert p.get("reading_tags"), f"{p['key']} 缺细标签"
+        assert len(p.get("names") or []) >= 3, f"{p['key']} 名字池太小"
+        # 每张内核都必须带「不能有的」事实卡——那是防止它借对方经历给自己捏人设的护栏
+        k = _pool.KERNELS[p["key"]]
+        assert any("不能有的" in (f.get("id") or "") + (f.get("fact") or "")
+                   for f in k.get("facts") or []), f"{p['key']} 缺「不能有的」事实卡"
+
+    # 反推表：每张卡都要能按 label 找回 archetype，并按 label 拿到一个合法分类
+    for p in _pool.POOL:
+        assert _pool._LABEL_TO_KEY.get(p["label"]) == p["key"], f"反推表漏了 {p['label']}"
+        pref = _pool._LABEL_TO_PREF.get(p["label"], "")
+        assert pref in names or pref in _corpus.PREF_LEGACY_MAP, \
+            f"{p['label']} 的兜底偏好既不属 22 类也不是旧标签：{pref}"
+
+    # 抽一张出来必须是完整卡（含内核 + 两级偏好）
+    card = _pool.draw()
+    assert card["kernel"] is card["kernel"] and card["kernel"], "抽卡必须带内核"
+    assert card["reading_pref"] in names and card["reading_tags"]
+
+    print(f"ok 人格池扩充（{len(_pool.POOL)} 张骨架 · 内核/反推表/两级偏好同步）")
+
+
+def test_library_epub_metadata():
+    """epub 元数据的两个坑（v0.79 实测）：①OPF 命名空间拼错 ②dc:subject 是脏值。
+
+    ① 掌上书苑(epubBuilder) 一批书把 <package xmlns=...> 写成 mlns=...，整份 OPF
+       没有命名空间 → manifest/spine 全读不出来 → 正文 0 段 → 书在书架里凭空消失。
+    ② 盗版转换本爱往 dc:subject 里塞源站名（ibook.178.com）/URL/书名本身，
+       不洗掉会给分类凭空加 6 分，把书带偏（《时间简史》被 "lcsh: Novel" 带成小说）。
+    """
+    import tempfile
+    import zipfile
+
+    import config as _cfg
+    import db as _db
+    import library as _lib
+
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
+    try:
+        _db.init()
+        books = config.BOOKS_DIR
+        books.mkdir(parents=True)
+        container = ('<?xml version="1.0"?><container version="1.0" '
+                     'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                     '<rootfile full-path="OPS/fb.opf" '
+                     'media-type="application/oebps-package+xml"/></rootfiles></container>')
+
+        def _epub(path, pkg_attr: str, subject: str):
+            opf = ('<?xml version="1.0"?><package version="2.0" ' + pkg_attr + '>'
+                   '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                   '<dc:title>时间简史</dc:title><dc:creator>霍金</dc:creator>'
+                   '<dc:subject>' + subject + '</dc:subject></metadata>'
+                   '<manifest><item id="chapter1" href="chapter1.html" '
+                   'media-type="application/xhtml+xml"/></manifest>'
+                   '<spine><itemref idref="chapter1"/></spine></package>')
+            with zipfile.ZipFile(path, "w") as z:
+                z.writestr("mimetype", "application/epub+zip")
+                z.writestr("META-INF/container.xml", container)
+                z.writestr("OPS/fb.opf", opf)
+                z.writestr("OPS/chapter1.html",
+                           "<html><body><p>" + "宇宙的起源与黑洞的蒸发。" * 30 + "</p></body></html>")
+
+        # ① 命名空间拼错成 mlns（= 整份 OPF 无命名空间）
+        _epub(books / "拼错命名空间.epub", 'mlns="http://www.idpf.org/2007/opf"', "科普")
+        broke = _lib._parsed(books / "拼错命名空间.epub")
+        assert broke and broke["passages"], "OPF 没命名空间也得解析出正文（否则书会消失）"
+        assert broke["title"] == "时间简史", f"书名也该读到：{broke}"
+        ids = {b["id"] for b in _lib.books()}
+        assert "拼错命名空间.epub" in ids, "正文为 0 的书会被 _scan 丢掉——这就是那个 bug"
+
+        # ② 脏 subject：站名 / URL / 国会图书馆前缀 / 跟书名同值
+        assert _lib._clean_subjects(["ibook.178.com"], "某书") == [], "源站名要洗掉"
+        assert _lib._clean_subjects(["http://x.com/a"], "某书") == [], "URL 要洗掉"
+        assert _lib._clean_subjects(["lcsh: Novel"], "某书") == [], "lcsh 前缀是噪声"
+        assert _lib._clean_subjects(["活着"], "活着") == [], "拿书名当题材等于没标"
+        assert _lib._clean_subjects(["科幻小说", "ibook.178.com"], "某书") == ["科幻小说"], \
+            "脏的丢、好的留"
+
+        # 干净 subject 仍然生效（同一本书，脏值 → 靠书名/正文认成科学技术）
+        _epub(books / "脏标签.epub", 'xmlns="http://www.idpf.org/2007/opf"', "ibook.178.com")
+        assert not (_lib._parsed(books / "脏标签.epub") or {}).get("subject"), "脏 subject 不该留下"
+
+        print("ok epub 元数据（OPF 命名空间容错 + dc:subject 洗脏值）")
+    finally:
+        config.BOOKS_DIR = real_books
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_reading_pref_two_level():
     """阅读偏好两级（一级分类 + 细标签）：旧标签自动迁移，内置书摘翻译到同一套分类。"""
     import json
@@ -3130,7 +3239,7 @@ def test_persona_kernel():
     import persona as _persona
     import persona_pool as _pool
 
-    # 1) 七张卡都有内核，且没有空字段凑数
+    # 1) 每张卡都有内核（v0.79 起 15 张），且没有空字段凑数
     assert len(_pool.KERNELS) == len(_pool.POOL), "每张人格卡都必须配一份内核"
     for k_name, k in _pool.KERNELS.items():
         assert k.get("core", {}).get("一句话"), f"{k_name} 缺内核一句话"
@@ -3918,6 +4027,8 @@ if __name__ == "__main__":
     test_user_library()
     test_library_categories()
     test_epub_cover()
+    test_persona_pool_expanded()
+    test_library_epub_metadata()
     test_reading_pref_two_level()
     test_legacy_persona_card_compat()
     test_care_events()
