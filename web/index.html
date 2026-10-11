@@ -11,16 +11,19 @@
     /* --- 晨雾（默认，治愈奶油绿） --- */
     --bg: #f3f1ea; --surface: #fbfaf6; --surface-2: #efede4; --line: #e4e1d5;
     --ink: #40473f; --muted: #98a096; --accent: #83a585; --accent-soft: #e3ebe1;
+    --hl: #f3ecc8;   /* 跳转高亮：柔和显眼（奶油黄） */
     --me: #83a585; --me-ink: #fff; --shadow: 0 16px 48px rgba(90,104,80,.12);
   }
   .skin-peach {
     --bg: #fbf0e7; --surface: #fffaf5; --surface-2: #f7e9de; --line: #f0ded1;
     --ink: #54473d; --muted: #b09a8d; --accent: #d89a80; --accent-soft: #f6dfd1;
+    --hl: #f9e6c0;   /* 暖杏黄 */
     --me: #d89a80; --me-ink: #fff; --shadow: 0 16px 48px rgba(150,105,80,.12);
   }
   .skin-night {
     --bg: #1c2127; --surface: #262c33; --surface-2: #2e3540; --line: #39424d;
     --ink: #edf0ea; --muted: #9ca8a6; --accent: #a3c2a0; --accent-soft: #364439;
+    --hl: #454026;   /* 暗金褐（暗底上显眼柔和） */
     --me: #a3c2a0; --me-ink: #16200f; --shadow: 0 16px 48px rgba(0,0,0,.35);
   }
   html, body { height: 100%; }
@@ -106,12 +109,12 @@
   .ol-item .ol-txt { overflow: hidden; text-overflow: ellipsis; }
   .ol-empty { font-size: 11px; color: var(--muted); padding: 6px 2px; line-height: 1.6; }
 
-  /* 跳转高亮：入场闪一下 + 柔和常亮整行（点任意处才消，jumpToMsg 加 / clearMsgHl 清） */
+  /* 跳转高亮：入场闪一下 + 柔和显眼色整行常亮（点任意处才消，jumpToMsg 加 / clearMsgHl 清） */
   .msg.flash .bubble { animation: flashPulse 1.2s ease; }
   @keyframes flashPulse { 0% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 65%, transparent); }
     100% { box-shadow: 0 0 0 0 transparent; } }
-  .msg.hl .bubble { background: var(--accent-soft);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .msg.hl { background: var(--hl); border-radius: 12px;
+    box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 28%, transparent); }
   /* 细栏滑动定位：右边目录里被指到的条目深色框高亮 */
   .ol-item.ol-cur { background: var(--surface-2); color: var(--ink);
     box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 50%, transparent); }
@@ -1039,6 +1042,7 @@ async function initialLoad(){
 
 /* ===== 左侧目录（markdown 式 outline，hover 展开 / 点击跳转） ===== */
 function rebuildOutline(){
+  railCache = null;   // 细线/条目重建，位置缓存失效
   const panel = $('outlinePanel'), rail = $('outlineRail');
   panel.innerHTML=''; rail.innerHTML='';
   const msgs = [...document.querySelectorAll('#chatInner .msg[data-mid]')];
@@ -1091,22 +1095,36 @@ function updateRailCur(){
     requestAnimationFrame(()=>{ updateRailCur(); ticking=false; });
   },{passive:true});
 })();
-/* 细栏滑动 → 定位右边展开的文字目录：鼠标在细线哪个位置，右边目录就按纵向比例
-   滚到「第几个条目」并深色框高亮（细线↔条目 1:1 对应，重建时同序生成）；聊天流不动。
-   只有在目录里**点击**条目才会跳转聊天流（jumpToMsg）。移出细栏/进入目录即取消高亮。 */
+/* 细栏滑动 → 定位右边展开的文字目录：鼠标靠近哪条细线，右边目录就滚到
+   对应条目并深色框高亮（细线↔条目 1:1 同序生成）；聊天流不动。
+   只有在目录里**点击**条目才会跳转聊天流（jumpToMsg）。移出细栏/进入目录即取消高亮。
+   匹配用「最近细线」而不是按 rail 高度比例——细线有 max-height 限制，消息少时
+   会聚在顶部，比例映射会和实际感应位置对不上。 */
 let railCurItem = null;
+let railCache = null;   // {centers:[线中心y], items:[目录条目]}（rail 固定于视口，仅重建/resize 时失效）
+function railMap(){
+  if(railCache) return railCache;
+  railCache = {
+    centers: [...$('outlineRail').children].map(l=>{
+      const r=l.getBoundingClientRect(); return r.top + r.height/2;
+    }),
+    items: [...$('outlinePanel').querySelectorAll('.ol-item')]
+  };
+  return railCache;
+}
 function clearRailCur(){
   if(railCurItem){ railCurItem.classList.remove('ol-cur'); railCurItem=null; }
 }
 $('outlineRail').addEventListener('mousemove', e=>{
-  const items=[...$('outlinePanel').querySelectorAll('.ol-item')];
-  if(!items.length) return;
-  const r=$('outlineRail').getBoundingClientRect();
-  const pad=12;   // 与 rail 的上下 padding 一致
-  const frac=(e.clientY-r.top-pad)/(r.height-pad*2);
-  const idx=Math.max(0, Math.min(items.length-1, Math.floor(frac*items.length)));
-  const it=items[idx];
-  if(it===railCurItem) return;
+  const {centers, items} = railMap();
+  if(!centers.length || !items.length) return;
+  let best=0, bestD=Infinity;
+  for(let i=0;i<centers.length;i++){
+    const d=Math.abs(e.clientY-centers[i]);
+    if(d<bestD){ bestD=d; best=i; }
+  }
+  const it=items[best];
+  if(!it || it===railCurItem) return;
   clearRailCur();
   railCurItem=it;
   it.classList.add('ol-cur');
@@ -1117,6 +1135,7 @@ $('outlineRail').addEventListener('mousemove', e=>{
 });
 $('outlineRail').addEventListener('mouseleave', clearRailCur);
 $('outlinePanel').addEventListener('mouseenter', clearRailCur);
+window.addEventListener('resize', ()=>{ railCache=null; });
 function clearMsgHl(){ document.querySelectorAll('#chatInner .msg.hl').forEach(el=>el.classList.remove('hl')); }
 function jumpToMsg(id){
   const el = document.querySelector('#chatInner .msg[data-mid="'+id+'"]');
