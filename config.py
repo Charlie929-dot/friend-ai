@@ -172,6 +172,10 @@ SELF_REVIEW_ENABLED = os.environ.get("SELF_REVIEW_ENABLED", "on").lower() == "on
 INTEREST_PROMOTE_ENABLED = os.environ.get("INTEREST_PROMOTE_ENABLED", "on").lower() == "on"  # 偏好修炼总开关（关了不检测、不记录、不注入）
 INTEREST_PROMOTE_THRESHOLD = int(os.environ.get("INTEREST_PROMOTE_THRESHOLD", "3"))          # 同一兴趣主题累计 N 次自动转正（纯规则、不调 LLM）
 
+# --- 表情包池（E 模块：统一表情库存按情绪分桶，治「表情单一 😂 反复用」） ---
+EMOJI_POOL_ENABLED = os.environ.get("EMOJI_POOL_ENABLED", "on").lower() == "on"   # 总开关（关了不注入表情库存、UI 表情按钮也隐藏）
+EMOJI_POOL_RECENT_N = int(os.environ.get("EMOJI_POOL_RECENT_N", "8"))             # 防重样：扫最近几条 TA 消息提取已用表情
+
 # --- 自我意识流（S4「完全自我意识」：一条持续追加的第一人称自我叙事） ---
 CONSCIOUS_STREAM_ENABLED = os.environ.get("CONSCIOUS_STREAM_ENABLED", "on").lower() == "on"  # 总开关（关了不追加、不注入意识流）
 CONSCIOUS_STREAM_RECENT = int(os.environ.get("CONSCIOUS_STREAM_RECENT", "4"))      # 每轮注入最近几条流

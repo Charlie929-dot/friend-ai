@@ -2338,6 +2338,10 @@ def test_webui():
                 "页面缺消息行操作按钮（复制/撤回）"
             assert 'id="selectBar"' in html and 'id="selCopy"' in html and 'id="pCopy"' in html, \
                 "页面缺多选操作条/调试面板复制按钮"
+            # 表情面板（v0.68）：分桶表情库存 + 点选即发 + 新增桶/表情
+            assert 'id="emojiPanel"' in html and 'id="btnEmoji"' in html and 'id="epGrid"' in html \
+                and 'id="epAddEmoji"' in html and 'id="epAddBucket"' in html, \
+                "页面缺表情面板/表情按钮结构"
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
@@ -2406,6 +2410,31 @@ def test_webui():
             mm = c.get(base + "/api/memories").json()
             assert "total" in mm and isinstance(mm["recent"], list), \
                 f"/api/memories 结构不对：{mm}"
+
+            # 表情包池接口（v0.68）：分桶库存 + 维护（新增桶/表情、删表情）
+            em = c.get(base + "/api/emoji").json()
+            assert "buckets" in em and isinstance(em["buckets"], list) and em["buckets"], \
+                f"/api/emoji 结构不对：{em}"
+            assert any(b["name"] == "开心" and b["builtin"] for b in em["buckets"]), \
+                "内置桶「开心」该在表情池里"
+            r_eb = c.post(base + "/api/emoji", json={"action": "add_bucket", "name": "测试桶"}).json()
+            assert r_eb.get("ok") is True, f"新增桶该成功：{r_eb}"
+            r_ee = c.post(base + "/api/emoji", json={
+                "action": "add_emoji", "bucket": "测试桶", "text": "🌊", "emotion": "测试"}).json()
+            assert r_ee.get("ok") is True, f"新增表情该成功：{r_ee}"
+            em2 = c.get(base + "/api/emoji").json()
+            tb = next(b for b in em2["buckets"] if b["name"] == "测试桶")
+            assert any(it["text"] == "🌊" and not it["builtin"] for it in tb["items"]), \
+                "新增的表情该在桶里且标记非内置"
+            r_rm = c.post(base + "/api/emoji", json={
+                "action": "remove_emoji", "bucket": "测试桶", "text": "🌊"}).json()
+            assert r_rm.get("ok") is True, f"删自定义表情该成功：{r_rm}"
+            r_rmb = c.post(base + "/api/emoji", json={
+                "action": "remove_bucket", "name": "测试桶"}).json()
+            assert r_rmb.get("ok") is True, f"删自定义桶该成功：{r_rmb}"
+            r_bad = c.post(base + "/api/emoji", json={
+                "action": "remove_bucket", "name": "开心"}).json()
+            assert r_bad.get("ok") is False, "内置桶不该能删"
 
             # 页面上做成按钮的那些命令：任何一条挂了，点下去就是没反应
             for cmd in ("/work", "/diaries", "/notes", "/profile", "/guard on"):
@@ -3106,6 +3135,101 @@ def test_interest_cultivation():
         _db.init()
 
 
+def test_emoji_pool():
+    """表情包池（E 模块）：分桶库存 + 防重样 + 维护 + 注入尊重人格 emoji 偏好。"""
+    import tempfile
+    import db as _db
+    import emoji_pool as _ep
+    import persona as _persona
+    import persona_pool as _pool
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_enabled = config.EMOJI_POOL_ENABLED
+    config.EMOJI_POOL_ENABLED = True
+    try:
+        _db.init()
+
+        # 1) 内置 10 桶都在，每桶至少有几个表情，且每个表情带 text/emotion/img 字段
+        bs = _ep.buckets()
+        assert bs[:10] == ["开心", "吐槽", "无奈", "惊讶", "委屈", "得意", "无聊", "疲惫", "害羞", "生气"], bs
+        for b in bs[:10]:
+            pool = _ep.items(b)
+            assert len(pool) >= 3, f"桶 {b} 表情太少：{pool}"
+            for it in pool:
+                assert set(("text", "emotion", "img")) <= set(it), f"表情字段不全：{it}"
+
+        # 2) pick 防重样：把某桶全用过之后才退回重抽
+        pool = _ep.items("开心")
+        texts = {it["text"] for it in pool}
+        got = _ep.pick("开心", seen=texts - {next(iter(texts))})
+        assert got["text"] in texts, "pick 返回了桶外的表情"
+
+        # 3) 维护：新增桶 / 新增表情 / 删表情 / 删桶
+        ok, _ = _ep.add_bucket("治愈")
+        assert ok and "治愈" in _ep.buckets(), "新增桶失败"
+        ok, err = _ep.add_bucket("治愈")
+        assert not ok, "重复新增桶该失败"
+        ok, _ = _ep.add_emoji("治愈", "🌿", "被治愈了")
+        assert ok and any(it["text"] == "🌿" for it in _ep.items("治愈")), "新增表情失败"
+        ok, err = _ep.add_emoji("治愈", "🌿")
+        assert not ok, "同桶重复表情该失败"
+        ok, _ = _ep.add_emoji("开心", "🥳", "额外的开心")  # 往内置桶加
+        assert any(it["text"] == "🥳" for it in _ep.items("开心")), "往内置桶加表情失败"
+        ok, _ = _ep.remove_emoji("治愈", "🌿")
+        assert ok and not any(it["text"] == "🌿" for it in _ep.items("治愈")), "删表情失败"
+        ok, _ = _ep.remove_bucket("治愈")
+        assert ok and "治愈" not in _ep.buckets(), "删桶失败"
+        ok, _ = _ep.remove_bucket("开心")
+        assert not ok, "内置桶不可删"
+
+        # 4) 注入：用 sunshine 卡（emoji 频率"偏高"、禁止 ❤️😘）
+        #    ⚠️ 不能用 quiet——它 voice.emoji 频率是"极低"，本就不该被注入表情库存。
+        sun = next(p for p in _pool.POOL if p["key"] == "sunshine")
+        _pool.save({
+            "archetype": "sunshine", "label": sun["label"], "name": "小葵",
+            "quirk": "", "text": "x", "wake_hour": sun["wake_hour"],
+            "sleep_hour": sun["sleep_hour"], "bubble_mult": sun["bubble_mult"],
+            "reading_pref": sun["reading_pref"], "drawn_at": "2026-10-11T00:00:00",
+            "kernel": _pool.KERNELS["sunshine"],
+        })
+        hint = _ep.prompt_hint()
+        assert hint and "表情库存" in hint, "表情库存没注入"
+        assert "❤️" not in hint and "😘" not in hint, "禁止的 emoji 不该出现在库存里"
+        assert "开心" in hint, "情绪桶该出现在库存里"
+
+        # 5) 防重样：TA 最近发过 😂，注入里该提醒别重复
+        _db.add_message("assistant", "哈哈哈哈 😂 笑死")
+        hint2 = _ep.prompt_hint()
+        assert "😂" in hint2 and "别重复" in hint2, f"最近用过的表情没被提醒别重复：{hint2}"
+
+        # 6) 尊重人格：quiet（emoji 频率"极低"）不该被注入表情库存
+        quiet = next(p for p in _pool.POOL if p["key"] == "quiet")
+        _pool.save({
+            "archetype": "quiet", "label": quiet["label"], "name": "闻屿",
+            "quirk": "", "text": "x", "wake_hour": quiet["wake_hour"],
+            "sleep_hour": quiet["sleep_hour"], "bubble_mult": quiet["bubble_mult"],
+            "reading_pref": quiet["reading_pref"], "drawn_at": "2026-10-11T00:00:00",
+            "kernel": _pool.KERNELS["quiet"],
+        })
+        assert _ep.prompt_hint() == "", "emoji 频率极低的人格不该被注入表情库存"
+
+        # 7) 开关关闭：注入空串
+        config.EMOJI_POOL_ENABLED = False
+        try:
+            assert _ep.prompt_hint() == "", "关开关后不该注入表情库存"
+        finally:
+            config.EMOJI_POOL_ENABLED = True
+
+        print("ok 表情包池（分桶库存 + 防重样 + 维护 + 注入尊重人格 emoji 偏好）")
+    finally:
+        config.EMOJI_POOL_ENABLED = real_enabled
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_inner_monologue():
     """双层生成：第 1 次调用出内心独白（不可见），第 2 次拿着独白说人话。
     验证三件事：①独白真的被调用且输出不进聊天；②第 2 层的 messages 里带着独白
@@ -3571,6 +3695,7 @@ if __name__ == "__main__":
     test_likes_passive_split()
     test_proactive_segment()
     test_interest_cultivation()
+    test_emoji_pool()
     test_anti_sycophancy_redlines()
     test_inner_monologue()
     test_self_memory()

@@ -290,6 +290,10 @@ def _make_handler(channel: WebChannel, on_message):
                            "created_at": m.get("created_at", "")}
                           for m in rows[:4]]
                 self._json({"total": len(rows), "recent": recent})
+            elif u.path == "/api/emoji":
+                # 表情包池（E 模块）：分桶表情库存，前端「表情」面板渲染用。
+                import emoji_pool
+                self._json({"buckets": emoji_pool.payload()})
             elif u.path == "/api/stream":
                 # 意识流（S4「完全自我意识」）：TA 脑子里那条第一人称自我叙事。
                 # 网页端原本看不到，这里吐出来给「查看意识流」面板用。
@@ -341,6 +345,9 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if u.path == "/api/revoke":
                 self._do_revoke()
+                return
+            if u.path == "/api/emoji":
+                self._do_emoji()
                 return
             if u.path != "/api/send":
                 self._json({"error": "not found"}, 404)
@@ -462,6 +469,28 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"ok": True})
             else:
                 self._json({"error": "not found"}, 404)
+
+        def _do_emoji(self):
+            """表情包池维护（E 模块）：用户新增桶 / 新增表情 / 删自定义表情/桶。
+            表情/桶是全局共享的（换朋友不换表情库），内置的不可删。"""
+            import emoji_pool
+            data = self._read_json()
+            action = (data.get("action") or "").strip()
+            if action == "add_bucket":
+                ok, err = emoji_pool.add_bucket(data.get("name") or "")
+            elif action == "add_emoji":
+                ok, err = emoji_pool.add_emoji(
+                    data.get("bucket") or "", data.get("text") or "",
+                    data.get("emotion") or "")
+            elif action == "remove_emoji":
+                ok, err = emoji_pool.remove_emoji(
+                    data.get("bucket") or "", data.get("text") or "")
+            elif action == "remove_bucket":
+                ok, err = emoji_pool.remove_bucket(data.get("name") or "")
+            else:
+                self._json({"ok": False, "error": "未知操作"}, 400)
+                return
+            self._json({"ok": ok, "error": "" if ok else err})
 
         def _do_revoke(self):
             """撤回一条消息：删库 + 意识流注入一条同步响应（TA 下一轮知道"你撤回了"）。

@@ -215,6 +215,100 @@ INTEREST_TOPICS = {
     "艺术": ["艺术", "绘画", "建筑", "设计", "书法"],
 }
 
+# --- 表情包池（E 模块，2026-10-11 落地）：统一表情库存按情绪分桶 ---
+# 治「表情单一 😂 反复用」（实测 #36）。每个表情 = {"text": 表情本身, "emotion": 情绪状态描述,
+# "img": 预留真图链接（本版纯文字、留空）}。内置默认桶/表情是**所有朋友的共同起点**；
+# 用户新增的桶/表情存 emoji_pool.json（全局共享，见 emoji_pool.py）。
+EMOJI_POOL = {
+    "开心": [
+        {"text": "😂", "emotion": "开心到笑出泪、带点自嘲", "img": ""},
+        {"text": "😄", "emotion": "咧嘴笑、心情好", "img": ""},
+        {"text": "😊", "emotion": "温柔地笑", "img": ""},
+        {"text": "🤣", "emotion": "笑得打滚", "img": ""},
+        {"text": "😆", "emotion": "憋不住笑出声", "img": ""},
+        {"text": "☺️", "emotion": "腼腆地开心", "img": ""},
+        {"text": "(◕‿◕)", "emotion": "心情好到眯起眼", "img": ""},
+        {"text": "(≧▽≦)", "emotion": "超开心、眉眼弯弯", "img": ""},
+        {"text": "✌️", "emotion": "小小得意", "img": ""},
+        {"text": "🎉", "emotion": "值得庆祝的高兴", "img": ""},
+    ],
+    "吐槽": [
+        {"text": "🙄", "emotion": "翻个白眼、懒得说", "img": ""},
+        {"text": "😅", "emotion": "尴尬而不失礼貌", "img": ""},
+        {"text": "🤦", "emotion": "扶额、没眼看", "img": ""},
+        {"text": "😑", "emotion": "面无表情的无语", "img": ""},
+        {"text": "😮‍💨", "emotion": "叹气、服了", "img": ""},
+        {"text": "(¬_¬)", "emotion": "斜眼看、半信半疑", "img": ""},
+        {"text": "(╯‵□′)╯", "emotion": "掀桌式吐槽", "img": ""},
+        {"text": "……", "emotion": "沉默的吐槽", "img": ""},
+    ],
+    "无奈": [
+        {"text": "😮‍💨", "emotion": "长叹一口气、没办法", "img": ""},
+        {"text": "😔", "emotion": "有点失落但算了", "img": ""},
+        {"text": "🥲", "emotion": "笑中带泪的无奈", "img": ""},
+        {"text": "🫠", "emotion": "累到融化、破防", "img": ""},
+        {"text": "🤷", "emotion": "摊手、也没办法", "img": ""},
+        {"text": "(´･_･`)", "emotion": "平静接受现实", "img": ""},
+        {"text": "罢了", "emotion": "算了不争了", "img": ""},
+    ],
+    "惊讶": [
+        {"text": "😲", "emotion": "瞪大眼、没想到", "img": ""},
+        {"text": "😮", "emotion": "惊讶到张嘴", "img": ""},
+        {"text": "😱", "emotion": "吓一跳", "img": ""},
+        {"text": "🤯", "emotion": "震惊到脑子炸", "img": ""},
+        {"text": "😳", "emotion": "又惊又愣", "img": ""},
+        {"text": "(⊙o⊙)", "emotion": "目瞪口呆", "img": ""},
+        {"text": "?!", "emotion": "满头问号", "img": ""},
+    ],
+    "委屈": [
+        {"text": "🥺", "emotion": "可怜巴巴地看着你", "img": ""},
+        {"text": "😢", "emotion": "委屈到想哭", "img": ""},
+        {"text": "😭", "emotion": "哭给你看", "img": ""},
+        {"text": "🥹", "emotion": "眼眶红了忍住", "img": ""},
+        {"text": "(｡•́︿•̀｡)", "emotion": "委屈巴巴", "img": ""},
+        {"text": "呜", "emotion": "小声委屈", "img": ""},
+    ],
+    "得意": [
+        {"text": "😎", "emotion": "酷、尽在掌握", "img": ""},
+        {"text": "😏", "emotion": "坏笑、得逞了", "img": ""},
+        {"text": "😌", "emotion": "心满意足", "img": ""},
+        {"text": "(￣▽￣)", "emotion": "得意洋洋", "img": ""},
+        {"text": "✌️", "emotion": "搞定、小骄傲", "img": ""},
+        {"text": "哼", "emotion": "傲娇地得意", "img": ""},
+    ],
+    "无聊": [
+        {"text": "🥱", "emotion": "打哈欠、好无聊", "img": ""},
+        {"text": "😪", "emotion": "困到睁不开眼", "img": ""},
+        {"text": "😴", "emotion": "无聊到睡着", "img": ""},
+        {"text": "🫥", "emotion": "隐身、不想说话", "img": ""},
+        {"text": "(￣o￣) zZ", "emotion": "发呆犯困", "img": ""},
+        {"text": "无聊", "emotion": "直白地说无聊", "img": ""},
+    ],
+    "疲惫": [
+        {"text": "😪", "emotion": "累、想睡", "img": ""},
+        {"text": "🥱", "emotion": "累到打哈欠", "img": ""},
+        {"text": "😮‍💨", "emotion": "累得直叹气", "img": ""},
+        {"text": "🫠", "emotion": "累瘫了", "img": ""},
+        {"text": "(￣ω￣;)ゞ", "emotion": "累到虚脱", "img": ""},
+        {"text": "累", "emotion": "直白地说累", "img": ""},
+    ],
+    "害羞": [
+        {"text": "😳", "emotion": "脸红了", "img": ""},
+        {"text": "🙈", "emotion": "不好意思捂脸", "img": ""},
+        {"text": "😶", "emotion": "羞到说不出话", "img": ""},
+        {"text": "(⁄ ⁄•⁄ω⁄•⁄ ⁄)", "emotion": "捂脸害羞", "img": ""},
+        {"text": "//(ㄒoㄒ)//", "emotion": "不好意思到语无伦次", "img": ""},
+    ],
+    "生气": [
+        {"text": "😠", "emotion": "有点生气了", "img": ""},
+        {"text": "😤", "emotion": "气鼓鼓、不服", "img": ""},
+        {"text": "💢", "emotion": "火气上来了", "img": ""},
+        {"text": "😡", "emotion": "真生气了", "img": ""},
+        {"text": "(╯°□°)╯", "emotion": "气到掀桌", "img": ""},
+        {"text": "哼", "emotion": "生气地别过脸", "img": ""},
+    ],
+}
+
 # 关键词提取的停用字（虚词，不参与召回匹配）
 STOP_CHARS = "的了是在我你他她这那有没吗呢吧啊呀哦嘛哈么什怎都很也还就去要来上个下和跟与及或对把被让向从但而因所如果真"
 

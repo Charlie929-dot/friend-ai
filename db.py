@@ -212,6 +212,17 @@ def recent_context(turns: int) -> list[dict]:
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
+def recent_assistant_messages(limit: int) -> list[str]:
+    """最近 N 条 TA 发的话（content），表情包池防重样用。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT content FROM messages WHERE role='assistant' "
+            "AND kind IN ('chat','proactive') ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [r["content"] for r in rows]
+
+
 def messages_page(after_id: int, limit: int) -> list[dict]:
     """按 id 顺序取历史消息（记忆回填用），after_id 之后的一批。"""
     with _conn() as c:

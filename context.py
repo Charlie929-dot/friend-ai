@@ -10,6 +10,7 @@ import random
 
 import config
 import db
+import emoji_pool
 import llm
 import memory
 import persona
@@ -98,6 +99,11 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
     shint = stream.prompt_hint()
     if shint:
         messages.append({"role": "system", "content": shint})
+    # 表情包池（E 模块）：让 TA 聊天前"翻看"表情库存、可以只甩一个表情当懒人回应、
+    # 别重复最近用过的（治「表情单一 😂 反复用」，实测 #36）。
+    ehint = emoji_pool.prompt_hint()
+    if ehint:
+        messages.append({"role": "system", "content": ehint})
     if config.SELF_MEMORY_ENABLED:
         self_hint = selfmem.prompt_hint(" ".join(batch))
         if self_hint:

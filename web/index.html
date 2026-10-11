@@ -106,6 +106,9 @@
   .composer textarea { flex: 1; min-height: 24px; max-height: 120px; padding: 6px 0; color: var(--ink);
     background: transparent; border: 0; outline: 0; resize: none; font-size: 14px; }
   .composer textarea::placeholder { color: var(--muted); }
+  .emoji-btn { width: 38px; height: 38px; display: grid; place-items: center; color: var(--muted);
+    border-radius: 12px; flex: 0 0 auto; transition: background .18s, color .18s; font-size: 19px; }
+  .emoji-btn:hover { background: var(--surface-2); color: var(--accent); }
   .send-btn { width: 38px; height: 38px; display: grid; place-items: center; color: #fff; background: var(--accent);
     border-radius: 12px; flex: 0 0 auto; transition: transform .08s, filter .15s; }
   .send-btn:hover { filter: brightness(1.06); }
@@ -328,6 +331,44 @@
     box-shadow: var(--shadow); }
   .toast.show { display: flex; animation: fadeUp .22s ease; }
 
+  /* --- 表情面板 --- */
+  .emoji-panel { position: fixed; z-index: 70; bottom: calc(120px + env(safe-area-inset-bottom));
+    left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 24px));
+    background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: var(--shadow); display: none; flex-direction: column; overflow: hidden;
+    animation: fadeUp .18s ease; }
+  .emoji-panel.show { display: flex; }
+  .ep-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line);
+    font-size: 12.5px; font-weight: 600; }
+  .ep-tabs { display: flex; gap: 5px; overflow-x: auto; padding: 9px 12px 4px; scrollbar-width: none; }
+  .ep-tabs::-webkit-scrollbar { display: none; }
+  .ep-tab { flex: 0 0 auto; padding: 5px 11px; border-radius: 99px; font-size: 11.5px; color: var(--muted);
+    background: var(--surface-2); cursor: pointer; white-space: nowrap; }
+  .ep-tab.cur { background: var(--accent); color: #fff; }
+  .ep-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; padding: 10px 12px;
+    max-height: 240px; overflow-y: auto; }
+  .ep-item { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 8px 4px; border-radius: 10px; cursor: pointer; transition: background .15s; }
+  .ep-item:hover { background: var(--surface-2); }
+  .ep-item .ep-char { font-size: 22px; line-height: 1.1; }
+  .ep-item .ep-emo { font-size: 9.5px; color: var(--muted); text-align: center; line-height: 1.25;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .ep-item .ep-del { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--surface-2); color: var(--muted); font-size: 12px; line-height: 1; display: none;
+    place-items: center; }
+  .ep-item:hover .ep-del { display: grid; }
+  .ep-item .ep-del:hover { background: #f8e4e4; color: #e07a7a; }
+  .ep-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .ep-foot .btn { flex: 1; }
+  .ep-add { padding: 8px; display: none; flex-direction: column; gap: 7px; border-top: 1px solid var(--line); }
+  .ep-add.show { display: flex; }
+  .ep-add input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--surface); color: var(--ink); font-size: 12.5px; outline: 0; }
+  .ep-add input:focus { border-color: var(--accent); }
+  .ep-add .ep-row { display: flex; gap: 7px; }
+  .ep-add .ep-row .btn { flex: 1; }
+
   @media (max-width: 520px) {
     .chat { padding: 14px 12px 6px; }
     .composer-wrap { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
@@ -395,6 +436,7 @@
           <button class="qb-close" id="quoteClose" aria-label="取消引用">×</button>
         </div>
         <div class="composer">
+          <button class="emoji-btn" id="btnEmoji" aria-label="表情">🙂</button>
           <textarea id="txt" rows="1" autocomplete="off" placeholder="写下你此刻想说的话…"></textarea>
           <button class="send-btn" id="send" aria-label="发送"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
         </div>
@@ -404,6 +446,23 @@
         </div>
       </div>
     </footer>
+
+    <!-- 表情面板 -->
+    <div class="emoji-panel" id="emojiPanel">
+      <div class="ep-head"><span>表情</span><span style="flex:1"></span><button class="qb-close" id="epClose" aria-label="关闭">×</button></div>
+      <div class="ep-tabs" id="epTabs"></div>
+      <div class="ep-grid" id="epGrid"></div>
+      <div class="ep-foot">
+        <button class="btn" id="epAddEmoji">＋ 加表情</button>
+        <button class="btn" id="epAddBucket">＋ 新桶</button>
+      </div>
+      <div class="ep-add" id="epAddForm">
+        <input id="epBucket" placeholder="所属桶（可填新桶名）">
+        <input id="epText" placeholder="表情文字（emoji / 颜文字）">
+        <input id="epEmotion" placeholder="情绪描述（如：开心到笑出泪）">
+        <div class="ep-row"><button class="btn" id="epSave">保存</button><button class="btn" id="epCancel">取消</button></div>
+      </div>
+    </div>
 
     <!-- 左抽屉：朋友 -->
     <div class="scrim" id="scrimL"></div>
@@ -977,6 +1036,104 @@ async function loadStream(){
   }catch(e){ $('streamList').innerHTML='<div class="empty">⚠ 拉取意识流失败：'+esc(e.message)+'</div>'; }
 }
 $('foldStream').addEventListener('toggle',()=>{ if($('foldStream').open) loadStream(); });
+
+/* ===== 表情面板 ===== */
+let emojiData = null;   // {buckets:[{name,builtin,items:[{text,emotion,img,builtin}]}]}
+let emojiCur = '';      // 当前选中的桶名
+let emojiAddMode = false; // true = 新增表情表单，false = 普通选择
+async function loadEmoji(){
+  try{ const d=await (await fetch('/api/emoji')).json(); emojiData=d.buckets||[]; renderEmojiPanel(); }
+  catch(e){ /* 静默 */ }
+}
+function renderEmojiPanel(){
+  const tabs=$('epTabs'), grid=$('epGrid');
+  if(!emojiData || !emojiData.length){ tabs.innerHTML=''; grid.innerHTML='<div class="empty">还没有表情</div>'; return; }
+  if(!emojiCur || !emojiData.some(b=>b.name===emojiCur)) emojiCur=emojiData[0].name;
+  tabs.innerHTML='';
+  emojiData.forEach(b=>{
+    const t=document.createElement('button');
+    t.className='ep-tab'+(b.name===emojiCur?' cur':'');
+    t.textContent=b.name+(b.builtin?'':' ×');
+    t.onclick=()=>{ emojiCur=b.name; renderEmojiPanel(); };
+    if(!b.builtin) t.oncontextmenu=async (e)=>{
+      e.preventDefault();
+      if(!confirm('删除「'+b.name+'」这个桶（连同里面的表情）？')) return;
+      const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({action:'remove_bucket',name:b.name})})).json();
+      if(!r.ok){ toast(r.error||'删除失败'); return; }
+      emojiCur=''; await loadEmoji();
+    };
+    tabs.appendChild(t);
+  });
+  const bucket=emojiData.find(b=>b.name===emojiCur);
+  grid.innerHTML='';
+  if(!bucket || !bucket.items.length){ grid.innerHTML='<div class="empty">这个桶还是空的，点下面「加表情」。</div>'; return; }
+  bucket.items.forEach(it=>{
+    const d=document.createElement('div');
+    d.className='ep-item';
+    d.title=it.emotion||'';
+    d.innerHTML='<span class="ep-char">'+esc(it.text)+'</span>'
+      +(it.emotion?'<span class="ep-emo">'+esc(it.emotion)+'</span>':'')
+      +(it.builtin?'':'<span class="ep-del" title="删除">×</span>');
+    d.onclick=async()=>{
+      // 点表情即发（用户点选即发）
+      $('emojiPanel').classList.remove('show');
+      await sendText(it.text);
+    };
+    const del=d.querySelector('.ep-del');
+    if(del) del.onclick=async(e)=>{
+      e.stopPropagation();
+      const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({action:'remove_emoji',bucket:emojiCur,text:it.text})})).json();
+      if(!r.ok){ toast(r.error||'删除失败'); return; }
+      await loadEmoji();
+    };
+    grid.appendChild(d);
+  });
+}
+async function sendText(text){
+  const q=quote; clearQuote();
+  try{
+    const body={text:text, urgent:$('urgent').checked};
+    if(q) body.quote={id:q.id, role:q.role, content:q.content};
+    const r=await (await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    $('urgent').checked=false;
+    if(r.echo!==false){
+      addMsg({role:'user',content:text,ts:r.ts,quote_content:q?q.content:''},r.id||0);
+      if(r.id) lastId=Math.max(lastId,r.id);
+    }
+    if(r.reply) addSys(r.reply);
+    poll();
+  }catch(e){ addSys('⚠ 发送失败：'+e.message); }
+}
+function showEmojiAdd(){
+  emojiAddMode=true;
+  $('epAddForm').classList.add('show');
+  $('epBucket').value=emojiCur||'';
+  $('epText').value=''; $('epEmotion').value='';
+}
+function hideEmojiAdd(){ emojiAddMode=false; $('epAddForm').classList.remove('show'); }
+$('btnEmoji').onclick=async()=>{ await loadEmoji(); $('emojiPanel').classList.toggle('show'); };
+$('epClose').onclick=()=>$('emojiPanel').classList.remove('show');
+$('epAddEmoji').onclick=()=>showEmojiAdd();
+$('epCancel').onclick=()=>hideEmojiAdd();
+$('epAddBucket').onclick=async()=>{
+  const name=(prompt('新桶叫什么名字？')||'').trim();
+  if(!name) return;
+  const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'add_bucket',name})})).json();
+  if(!r.ok){ toast(r.error||'新建失败'); return; }
+  await loadEmoji(); emojiCur=name; renderEmojiPanel();
+};
+$('epSave').onclick=async()=>{
+  const bucket=$('epBucket').value.trim(), text=$('epText').value.trim(), emotion=$('epEmotion').value.trim();
+  if(!bucket||!text){ toast('桶名和表情都不能为空'); return; }
+  const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'add_emoji',bucket,text,emotion})})).json();
+  if(!r.ok){ toast(r.error||'保存失败'); return; }
+  hideEmojiAdd(); await loadEmoji(); emojiCur=bucket; renderEmojiPanel();
+};
+document.addEventListener('click',e=>{ if(!e.target.closest('.emoji-panel') && !e.target.closest('#btnEmoji')) $('emojiPanel').classList.remove('show'); });
 
 /* ===== 输入框自适应 + 发送 ===== */
 const txt=$('txt');
