@@ -281,9 +281,45 @@ LOGIN_PAGE = """<!doctype html>
          background:#fbecec; color:#d97a7a; }
   .err:empty { display:none; }
   .foot { margin:14px 0 0; text-align:center; font-size:12px; color:#b3b9af; }
+  /* --- 皮肤同步：与主页 localStorage('fa-skin') 一致（晨雾默认 / 晚霞 / 月光） --- */
+  body.skin-peach { background:#fbf0e7;
+    background-image:radial-gradient(80%% 60%% at 50%% 0%%, #fffaf5 0%%, #fbf0e7 65%%);
+    color:#54473d; }
+  body.skin-peach .card { background:#fffaf5; border-color:#f0ded1;
+    box-shadow:0 20px 60px rgba(150,105,80,.14); }
+  body.skin-peach .mark { background:#f6dfd1; color:#d89a80; }
+  body.skin-peach .sub, body.skin-peach label, body.skin-peach .peek { color:#b09a8d; }
+  body.skin-peach .field input { border-color:#f0ded1; background:#fff; color:#54473d; }
+  body.skin-peach .field input:focus { border-color:#d89a80; box-shadow:0 0 0 3px rgba(216,154,128,.18); }
+  body.skin-peach .peek:hover { color:#d89a80; }
+  body.skin-peach .row input { accent-color:#d89a80; }
+  body.skin-peach button[type=submit] { background:#d89a80; }
+  body.skin-peach .err { background:#f9e8e2; color:#c96f52; }
+  body.skin-peach .foot { color:#c8b4a7; }
+  body.skin-night { background:#1c2127;
+    background-image:radial-gradient(80%% 60%% at 50%% 0%%, #262c33 0%%, #1c2127 65%%);
+    color:#edf0ea; }
+  body.skin-night .card { background:#262c33; border-color:#39424d;
+    box-shadow:0 20px 60px rgba(0,0,0,.4); }
+  body.skin-night .mark { background:#364439; color:#a3c2a0; }
+  body.skin-night .sub, body.skin-night label, body.skin-night .peek { color:#9ca8a6; }
+  body.skin-night .field input { border-color:#39424d; background:#1c2127; color:#edf0ea; }
+  body.skin-night .field input:focus { border-color:#a3c2a0; box-shadow:0 0 0 3px rgba(163,194,160,.16); }
+  body.skin-night .peek:hover { color:#a3c2a0; }
+  body.skin-night .row input { accent-color:#a3c2a0; }
+  body.skin-night button[type=submit] { background:#a3c2a0; color:#16200f; }
+  body.skin-night .err { background:#3a2626; color:#e08a8a; }
+  body.skin-night .foot { color:#5d6a66; }
 </style>
 </head>
 <body>
+<script>
+  /* 皮肤同步：读主页存的 localStorage('fa-skin')，登录页跟主页面一个皮肤 */
+  try{
+    var sk = localStorage.getItem('fa-skin');
+    if(sk === 'peach' || sk === 'night') document.body.classList.add('skin-' + sk);
+  }catch(e){}
+</script>
   <form class="card" method="post" action="/api/login" id="f">
     <div class="mark">🌱</div>
     <h1>有生活的朋友</h1>

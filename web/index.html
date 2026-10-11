@@ -73,22 +73,25 @@
   /* --- 主区：左目录 + 聊天流 --- */
   .main-row { flex: 1; min-height: 0; display: flex; position: relative; }
 
-  /* --- 左侧目录（markdown 式 outline，hover 展开） --- */
-  .outline { flex: 0 0 auto; width: 16px; height: 100%; position: relative; overflow: hidden;
-    cursor: pointer; z-index: 20; transition: width .22s ease; }
-  .outline:hover { width: 200px; }
+  /* --- 左侧目录（minimap 细线常驻 + hover 右侧浮出文字目录） --- */
+  .outline { flex: 0 0 auto; width: 16px; height: 100%; position: relative;
+    cursor: pointer; z-index: 20; }
+  /* 桥接条：细栏与右侧目录浮层之间的空隙也算 hover 区，移过去浮层不闪断 */
+  .outline::after { content: ''; position: absolute; left: 16px; top: 0; bottom: 0; width: 12px; }
   .outline-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 16px;
     display: flex; flex-direction: column; align-items: flex-start; padding: 12px 0 12px 2px;
-    overflow: hidden; transition: opacity .18s ease; }
+    overflow: hidden; }
   .outline-rail i { flex: 1 1 0; min-height: 1px; max-height: 3px; width: 9px; border-radius: 99px;
     background: color-mix(in srgb, var(--muted) 50%, transparent); }
   .outline-rail i.l1 { width: 13px; }
   .outline-rail i.cur { width: 13px; background: var(--accent); }
-  .outline-panel { position: absolute; left: 0; top: 0; bottom: 0; width: 200px;
-    overflow-y: auto; padding: 10px 10px 12px 12px; opacity: 0; pointer-events: none;
-    transition: opacity .16s ease; scrollbar-width: none; }
+  /* 文字目录浮层：悬在聊天流上方（right of rail），不挤占布局 */
+  .outline-panel { position: absolute; left: 18px; top: 8px; bottom: 8px; width: 212px;
+    overflow-y: auto; padding: 10px 10px 12px 12px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+    opacity: 0; pointer-events: none; transition: opacity .16s ease; z-index: 26;
+    scrollbar-width: none; }
   .outline-panel::-webkit-scrollbar { display: none; }
-  .outline:hover .outline-rail { opacity: 0; }
   .outline:hover .outline-panel { opacity: 1; pointer-events: auto; }
   .ol-day { margin: 10px 0 4px; font-size: 10.5px; font-weight: 700; color: var(--muted);
     letter-spacing: .03em; padding-left: 2px; }
@@ -109,6 +112,8 @@
     100% { box-shadow: 0 0 0 0 transparent; } }
   .msg.hl .bubble { background: var(--accent-soft);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  /* 细栏滑动实时定位：鼠标沿细栏移动，所指消息临时框出深色描边（移出细栏即消） */
+  .msg.preview .bubble { box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--muted) 60%, transparent); }
 
   /* 加载更早 */
   .load-more { display: block; margin: 2px auto 10px; padding: 7px 16px; border-radius: 99px;
@@ -1085,6 +1090,34 @@ function updateRailCur(){
     requestAnimationFrame(()=>{ updateRailCur(); ticking=false; });
   },{passive:true});
 })();
+/* 细栏滑动实时定位：鼠标沿细线上下移动 → 聊天流滚到对应消息并框出深色描边；
+   细线与消息一一对应（rebuildOutline 里按顺序生成），按纵向比例映射条目序号。
+   移出细栏即消；点击条目仍走 jumpToMsg 的常亮高亮。 */
+let previewMid = 0;
+function clearRailPreview(){
+  if(!previewMid) return;
+  const el=document.querySelector('#chatInner .msg[data-mid="'+previewMid+'"]');
+  if(el) el.classList.remove('preview');
+  previewMid=0;
+}
+$('outlineRail').addEventListener('mousemove', e=>{
+  const lines=[...$('outlineRail').children];
+  if(!lines.length) return;
+  const r=$('outlineRail').getBoundingClientRect();
+  const pad=12;   // 与 rail 的上下 padding 一致
+  const frac=(e.clientY-r.top-pad)/(r.height-pad*2);
+  const idx=Math.max(0, Math.min(lines.length-1, Math.floor(frac*lines.length)));
+  const id=parseInt(lines[idx].dataset.mid);
+  if(!id || id===previewMid) return;
+  clearRailPreview();
+  const el=document.querySelector('#chatInner .msg[data-mid="'+id+'"]');
+  if(!el) return;
+  previewMid=id;
+  el.classList.add('preview');
+  el.scrollIntoView({block:'center'});   // 即时定位（smooth 会跟不上滑动）
+});
+$('outlineRail').addEventListener('mouseleave', clearRailPreview);
+$('outlinePanel').addEventListener('mouseenter', clearRailPreview);
 function clearMsgHl(){ document.querySelectorAll('#chatInner .msg.hl').forEach(el=>el.classList.remove('hl')); }
 function jumpToMsg(id){
   const el = document.querySelector('#chatInner .msg[data-mid="'+id+'"]');
@@ -1402,11 +1435,22 @@ $('epImg').addEventListener('change',()=>{
 });
 /* 打开/关闭：hover 图标自动展开（可持久），点击切换开关；只在点面板外/关按钮/选中表情时关 */
 let emojiTimer = null;
-function openEmoji(){ clearTimeout(emojiTimer); loadEmoji(); $('emojiPanel').classList.add('show'); }
+function openEmojiAt(){
+  // 面板锚在表情按钮正上方弹出：left/bottom 每次打开都按按钮实际位置算，transform-origin 指向按钮中心
+  const btn=$('btnEmoji').getBoundingClientRect();
+  const p=$('emojiPanel');
+  const pw=Math.min(420, window.innerWidth-36);
+  const left=Math.max(8, Math.min(btn.left, window.innerWidth-pw-8));
+  p.style.left=left+'px';
+  p.style.bottom=(window.innerHeight-btn.top+8)+'px';
+  p.style.transformOrigin=(btn.left+btn.width/2-left)+'px calc(100% + 10px)';
+  p.classList.add('show');
+}
+function openEmoji(){ clearTimeout(emojiTimer); loadEmoji(); openEmojiAt(); }
 function closeEmoji(){ clearTimeout(emojiTimer); $('emojiPanel').classList.remove('show'); hideEmojiAdd(); }
 $('btnEmoji').addEventListener('mouseenter', ()=>{
   clearTimeout(emojiTimer);
-  emojiTimer = setTimeout(()=>{ loadEmoji(); $('emojiPanel').classList.add('show'); }, 150);
+  emojiTimer = setTimeout(openEmoji, 150);
 });
 $('btnEmoji').addEventListener('mouseleave', ()=>{ clearTimeout(emojiTimer); });
 $('btnEmoji').onclick=(e)=>{
