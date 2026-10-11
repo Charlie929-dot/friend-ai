@@ -54,10 +54,26 @@ def _memory_message(mems: list[dict]) -> dict | None:
 
 # ---------- 私聊回复 ----------
 
+def _quote_hint(quote: dict | None) -> dict | None:
+    """引用回复：让 TA 知道对方这句话在接着谁说的哪句往下聊，避免答非所问。
+
+    quote = {"id","role","content"}，role 决定被引句是谁说的：assistant=TA 自己
+    之前说的、user=对方自己之前说的。content 存的是原文快照（发送时前端带上），
+    所以哪怕被引的那句早于 CONTEXT_TURNS 也能拿到。称呼走动态口（不写死名字）。"""
+    if not quote or not (quote.get("content") or "").strip():
+        return None
+    speaker = (persona.friend_name() if quote.get("role") == "assistant"
+               else persona.user_name())
+    return {"role": "system", "content": (
+        f"【引用回复】对方这句话是在接着 {speaker} 之前说的这句往下聊："
+        f"「{quote['content'].strip()}」。回应时结合这句被引的话来理解对方在接什么。")}
+
+
 def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
-                        inbox: bool = False) -> list[dict]:
+                        inbox: bool = False, quote: dict | None = None) -> list[dict]:
     """私聊回复的完整 messages：system（人设+便签+profile）→ 游戏规则 →
-    相关记忆（system）→ 最近聊天上下文（user）。inbox=True 时带"刚上线看到留言"语境。"""
+    相关记忆（system）→ 最近聊天上下文（user）。inbox=True 时带"刚上线看到留言"语境。
+    quote 非空时额外注入一条【引用回复】说明对方在回哪句。"""
     messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
     if inbox:
         messages.append({"role": "system", "content": (
@@ -107,6 +123,10 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
             memory.recall(combined, expand_long=memory.wants_expansion(combined)))
         if mem_msg:
             messages.append(mem_msg)
+    # 引用回复：放在最近对话之前，让 TA 先知道"对方在回哪句"再读原文
+    qhint = _quote_hint(quote)
+    if qhint:
+        messages.append(qhint)
     messages += db.recent_context(config.CONTEXT_TURNS)
     return messages
 

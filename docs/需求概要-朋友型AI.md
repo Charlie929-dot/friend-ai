@@ -1,4 +1,6 @@
-# 朋友型 AI · 需求概要 v0.64
+# 朋友型 AI · 需求概要 v0.65
+
+> v0.65（2026-10-11）：**补上 UI 设计留下的两条后端 TODO**（引用注入 + 撤回对齐，v0.62/v0.63 前端先做、后端留尾）。①**引用注入 LLM 上下文**：quote 原只落库、前端能回显，但 TA 回复时不知道你在引用哪句（易答非所问）。`core._pending` 从 `list[str]` 改 `list[dict]`（`{"text","quote"}`）让引用随消息走到回复线程，`_reply_worker` 取批时拆出文本 + 抽「最后一条带引用的」quote 传给 `_generate_reply(quote=)`；`context.build_chat_messages` 新增 `_quote_hint()` 把被引句拼成一条 system 注入（说话人用 `persona.friend_name()/user_name()` 动态取，不写死名字）。②**撤回后端对齐**：撤回按钮原只弹占位。新增 `db.delete_message()`（只允许撤回 role=user 消息）+ `/api/revoke` 接口（删库 + 意识流 append 一条 `revoke`「对方撤回了刚才那句，我当没看见」，让 TA 下一轮知道"你撤回了"、不再回那句已没的消息）+ 前端 `revokeMsg` 改 fetch、成功移除该条；`STREAM_LABEL` 加 `revoke:'撤'`。测试 56 项全过（新增 `test_quote_context_injection`，`test_webui` 增撤回断言）。
 
 > v0.64（2026-10-11）：**修复消息行工具条两个 bug**（用户反馈）。①**按钮溢出点不到**：竖排工具条（引用/复制/撤回 3 个按钮）比短消息高、溢出消息行，又被下一条消息的气泡盖住——根因 `.msg` 未提升层叠，DOM 靠后的消息气泡（有背景色）盖住了上一条消息溢出的按钮。修：`.msg:hover { z-index:30 }`（hover 时整条消息提到最上层，溢出的按钮随之盖住下一条消息）+ `.msg-actions { z-index:1 }`。②**鼠标停在按钮整体会消失**：显示条件原只 `.msg:hover`/`:focus-within`，加 `.msg-actions:hover`（鼠标停在按钮群上——含按钮间 gap——也保持显示）。
 

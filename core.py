@@ -63,7 +63,9 @@ class Engine:
         self.channel = channel
         self.sched = None  # main 启动调度器后挂载，用于人格变更时重排作息
         # --- 阅读模拟：攒消息 → 假装在读 → 到点才回复 ---
-        self._pending: list[str] = []
+        # 每条 = {"text": 原文, "quote": 引用回复(或 None)}——引用信息跟着消息走，
+        # 回复线程才能知道"这句话在回哪句"（见 _generate_reply 的注入）。
+        self._pending: list[dict] = []
         self._reading_until = 0.0
         self._reading_deadline = 0.0  # 本轮等待的绝对上限
         self._sending = False
@@ -80,10 +82,8 @@ class Engine:
         """处理一条用户消息，返回它落库后的 id（前端靠它推进轮询游标，
         避免手动回显的消息又被轮询渲染一遍——实测 #25 发送出现两次）。
 
-        quote：可选，引用回复（{"id","role","content"}）。已随消息落库；
-        TODO(引用后端对齐)：还没把被引内容注入回复上下文——要让 TA 回复时
-        知道你在引用哪句，需在 _reply_worker 生成回复前把 quote_content 拼进
-        context.build 的最近对话（或单独塞一条 system 提示）。"""
+        quote：可选，引用回复（{"id","role","content"}）。随消息落库，也随消息
+        进待回复队列——回复线程会把它拼进上下文，让 TA 知道你在引用哪句。"""
         text = text.strip()
         if not text:
             return 0
@@ -112,7 +112,7 @@ class Engine:
 
         with self._lock:
             first = not self._pending
-            self._pending.append(text)
+            self._pending.append({"text": text, "quote": quote})
             delay = min(len(text) * config.READING_SECONDS_PER_CHAR,
                         config.READING_MAX_SECONDS)
             now = _time.time()
@@ -151,24 +151,29 @@ class Engine:
                 if _time.time() < self._reading_until:
                     continue
                 self._sending = True
-                batch = self._pending      # 取走这批消息
+                batch = self._pending      # 取走这批消息（每条 {"text","quote"}）
                 self._pending = []         # 清空，下一批重新计阅读时间
+            texts = [m["text"] for m in batch]
+            # 引用只认"这批里最后一条带引用的"——用户最后那句在回哪句，才是当前语境
+            quote = next((m["quote"] for m in reversed(batch) if m.get("quote")), None)
             try:
                 with db.PATH_LOCK:  # 回复全流程与切换朋友互斥，不写错库
-                    self._generate_reply(batch)
+                    self._generate_reply(texts, quote=quote)
             finally:
                 with self._lock:
                     self._sending = False
 
-    def _generate_reply(self, batch: list[str], from_inbox: bool = False) -> None:
+    def _generate_reply(self, batch: list[str], from_inbox: bool = False,
+                        quote: dict | None = None) -> None:
         state = db.get_state()
         if state == "SLEEPING":
             self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
             return
 
         # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
+        # quote 是引用回复：让 TA 知道这句话在回哪句（拼成一条 system 注入，见 context）
         messages = context.build_chat_messages(state, batch, game.prompt_injection(),
-                                               inbox=from_inbox)
+                                               inbox=from_inbox, quote=quote)
         # 双层生成（人格优化）：先把不可见的内心独白跑出来——立场在这一层定住，
         # 第 2 层只负责"怎么说"，改不了"说什么"。独白拿不到就原样单层生成。
         messages = self._with_inner_monologue(messages, batch)

@@ -649,12 +649,21 @@ async function copyText(text, okMsg){
   }
 }
 
-/* ===== 消息操作：撤回（后端对齐留 TODO） ===== */
-function revokeMsg(id){
+/* ===== 消息操作：撤回（后端已对齐：删库 + 意识流注入同步响应） ===== */
+async function revokeMsg(id){
   if(!confirm('撤回这条消息？')) return;
-  // TODO(后端对齐)：撤回需要删除 messages 表里这条记录，并让 TA 的「意识流」注入一条同步响应
-  //（感知到「你撤回了」），与上轮「引用注入 LLM 上下文」的 TODO 一起留待后端对齐。
-  addSys('⚠ 撤回待后端对齐（需 TA 意识流注入同步响应），这条先保留');
+  try{
+    const r=await (await fetch('/api/revoke',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({id})})).json();
+    if(!r.ok){ addSys('⚠ '+(r.error||'撤回失败')); return; }
+    removeMsg(id);
+  }catch(e){ addSys('⚠ 撤回失败：'+esc(e.message)); }
+}
+function removeMsg(id){
+  const el=document.querySelector('.msg[data-mid="'+id+'"]');
+  if(el) el.remove();
+  shownIds.delete(id);
+  msgMeta.delete(id);
 }
 
 /* ===== 多选模式 ===== */
@@ -950,7 +959,7 @@ $('mMemRefresh').onclick=()=>loadMemories();
 $('mMemAll').onclick=()=>{ $('foldDebug').open=true; runCmd('/memories','TA 记住的事'); };
 
 /* ===== 意识流 ===== */
-const STREAM_LABEL={inbox:'收',reply:'说',monologue:'想',work:'活',sleep:'眠',wake:'醒'};
+const STREAM_LABEL={inbox:'收',reply:'说',monologue:'想',work:'活',sleep:'眠',wake:'醒',revoke:'撤'};
 async function loadStream(){
   try{
     const d=await (await fetch('/api/stream')).json();

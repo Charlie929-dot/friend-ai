@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS consciousness_stream (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,          -- ISO 时间
     day TEXT NOT NULL,         -- 生活日 YYYY-MM-DD（跨天/睡前浓缩用）
-    kind TEXT NOT NULL,        -- 事件类型：wake/sleep/work/inbox/monologue/reply
+    kind TEXT NOT NULL,        -- 事件类型：wake/sleep/work/inbox/monologue/reply/revoke
     text TEXT NOT NULL         -- 第一人称行（"我起床了 / 我在想：… / 我说：…"）
 );
 """
@@ -172,8 +172,8 @@ def add_message(role: str, content: str, kind: str = "chat", quote: dict | None 
     不然手动回显的消息 900ms 后又被轮询渲染一遍，出现"发送两次"，实测 #25）。
 
     quote：可选，引用回复。契约 = {"id": 被引消息 id, "role": "user"|"assistant",
-    "content": 被引消息原文}。这里只存不解释——"让 TA 回复时知道你在引用哪句"
-    属于后端对齐（LLM 上下文注入），尚未接。"""
+    "content": 被引消息原文}。这里只存——"让 TA 回复时知道你在引用哪句"已由
+    core._generate_reply 透传给 context.build_chat_messages 注入回复上下文。"""
     q = quote or {}
     qid = int(q.get("id") or 0)
     qrole = str(q.get("role") or "")
@@ -186,6 +186,19 @@ def add_message(role: str, content: str, kind: str = "chat", quote: dict | None 
              qid, qrole, qcontent),
         )
         return int(cur.lastrowid or 0)
+
+
+def delete_message(msg_id: int) -> dict | None:
+    """撤回一条消息：只允许撤回对方自己发的（role='user'），返回被删消息
+    {id, role, content} 供上层记意识流；没有这条 / 不是 user 消息返回 None。"""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT id, role, content FROM messages WHERE id=?", (msg_id,)
+        ).fetchone()
+        if not row or row["role"] != "user":
+            return None
+        c.execute("DELETE FROM messages WHERE id=?", (msg_id,))
+        return dict(row)
 
 
 def recent_context(turns: int) -> list[dict]:

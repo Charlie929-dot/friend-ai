@@ -2372,6 +2372,22 @@ def test_webui():
             assert plain["quote_id"] in (0, "") and not plain["quote_content"], \
                 f"无引用消息不应带引用字段：{plain}"
 
+            # 撤回（后端对齐）：删库 + 意识流注入一条同步响应（TA 下一轮知道"你撤回了"）
+            uid = _db.add_message("user", "这条待撤回")
+            aid = _db.add_message("assistant", "TA 的回复不能撤回")
+            rv = c.post(base + "/api/revoke", json={"id": uid}).json()
+            assert rv.get("ok") is True, f"撤回自己的消息该成功：{rv}"
+            left = c.get(base + "/api/messages?after=0").json()["messages"]
+            assert not any(m["content"] == "这条待撤回" for m in left), \
+                "撤回后消息还在库里（前端还会看到）"
+            streams = _db.recent_stream(20)
+            assert any(r["kind"] == "revoke" and "这条待撤回" in r["text"]
+                       for r in streams), f"撤回没进意识流：{streams}"
+            rv2 = c.post(base + "/api/revoke", json={"id": aid}).json()
+            assert rv2.get("ok") is False, f"不该能撤回 TA 的消息：{rv2}"
+            rv3 = c.post(base + "/api/revoke", json={"id": 999999}).json()
+            assert rv3.get("ok") is False, f"撤回不存在的消息该失败：{rv3}"
+
             # 手动安全阀：页面上勾"紧急"要能开窗口
             c.post(base + "/api/send", json={"text": "在吗", "urgent": True})
             assert _guard.in_urgent_window(), "网页端勾了紧急却没开窗口"
@@ -2674,6 +2690,53 @@ def test_proactive_context_injection():
         assert msgs[0]["role"] == "system", f"第一条应是 system：{msgs[0]['role']}"
         assert "好久没聊" in msgs[-1]["content"], "规则应贴在最后的指令里"
         print("ok 主动消息上下文（带最近聊天 + 别瞎编开场规则）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_quote_context_injection():
+    """引用回复后端对齐：带 quote 时注入被引句，让 TA 知道这句话在回哪句。"""
+    import tempfile
+
+    import context as _ctx
+    import db as _db
+    import persona as _persona
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+
+        def _quote_msg(messages):
+            return next((m for m in messages if m["role"] == "system"
+                         and "引用回复" in (m.get("content") or "")), None)
+
+        # 1) 不带 quote：不该注入
+        assert _quote_msg(_ctx.build_chat_messages("AWAKE", ["在吗"])) is None, \
+            "没引用不该出现【引用回复】注入"
+
+        # 2) 引用 TA 的话（role=assistant）：注入被引原文 + TA 自己的名字
+        q = {"id": 7, "role": "assistant", "content": "我最近在读《雾都孤儿》"}
+        hint = _quote_msg(_ctx.build_chat_messages("AWAKE", ["继续讲讲"], quote=q))
+        assert hint and "我最近在读《雾都孤儿》" in hint["content"], \
+            f"被引原文没注入：{hint}"
+        assert _persona.friend_name() in hint["content"], \
+            f"引用 TA 的话该用 TA 的名字：{hint}"
+
+        # 3) 引用对方自己的话（role=user）：用 TA 对对方的称呼
+        q2 = {"id": 3, "role": "user", "content": "我明天考试"}
+        hint2 = _quote_msg(_ctx.build_chat_messages("AWAKE", ["对对"], quote=q2))
+        assert hint2 and "我明天考试" in hint2["content"], f"被引原文没注入：{hint2}"
+        assert _persona.user_name() in hint2["content"], \
+            f"引用对方的话该用 TA 对对方的称呼：{hint2}"
+
+        # 4) content 为空：视为无引用，不注入
+        assert _quote_msg(_ctx.build_chat_messages(
+            "AWAKE", ["在吗"], quote={"id": 1, "role": "user", "content": "  "})) is None, \
+            "空引用不该注入"
+        print("ok 引用回复上下文（带引用注入被引句 / 无引用不注入 / 说话人名字正确）")
     finally:
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
@@ -3358,6 +3421,7 @@ if __name__ == "__main__":
     test_tone_main_track()
     test_random_memory_about_user()
     test_proactive_context_injection()
+    test_quote_context_injection()
     test_work_content_injection()
     test_material_share_injection()
     test_webui()

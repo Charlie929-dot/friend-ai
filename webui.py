@@ -339,6 +339,9 @@ def _make_handler(channel: WebChannel, on_message):
             if u.path.startswith("/api/account/"):
                 self._do_account(u.path)
                 return
+            if u.path == "/api/revoke":
+                self._do_revoke()
+                return
             if u.path != "/api/send":
                 self._json({"error": "not found"}, 404)
                 return
@@ -459,6 +462,24 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"ok": True})
             else:
                 self._json({"error": "not found"}, 404)
+
+        def _do_revoke(self):
+            """撤回一条消息：删库 + 意识流注入一条同步响应（TA 下一轮知道"你撤回了"）。
+            只允许撤回自己（role=user）发的；撤回的是"外部记录"，意识流是 TA 的
+            "内部感知"——只删库不改感知，TA 会对着空气回那句已经没了的消息。"""
+            data = self._read_json()
+            try:
+                mid = int(data.get("id") or 0)
+            except (ValueError, TypeError):
+                self._json({"ok": False, "error": "消息 id 不对"})
+                return
+            removed = db.delete_message(mid)
+            if not removed:
+                self._json({"ok": False, "error": "这条消息不能撤回（可能不是你的，或已撤回）"})
+                return
+            import stream
+            stream.append("revoke", f"对方撤回了刚才那句「{removed['content']}」，我当没看见")
+            self._json({"ok": True, "id": mid})
 
         def _restart(self):
             import autostart

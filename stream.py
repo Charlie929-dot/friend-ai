@@ -12,6 +12,7 @@ TA 脑子里应该有一条持续更新、第一人称的自我叙事——像�
 - 作息切换 → "我伸了懒腰，起床了 / 我困了，去睡了"（core._do_wake/_do_sleep）
 - 工作结算 → "忙完第 X 件，攒了 Z 块，剩 W 精力"（work._settle）
 - 收到留言 → "TA 给我发消息了"（core.on_user_message）
+- 对方撤回 → "对方撤回了刚才那句，我当没看见"（webui._do_revoke）
 - 内心独白 → "我在想：…"（core._inner_monologue，持久化不再用完就扔）
 - 回复 → "我说：…"（core._generate_reply）
 
