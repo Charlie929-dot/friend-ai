@@ -2333,6 +2333,11 @@ def test_webui():
                 "页面缺直达底部/新消息提示/引用条"
             assert 'e.isComposing' in html and 'nativeEvent.isComposing' not in html, \
                 "Enter 发送的按键判断仍有 bug（残留 nativeEvent.isComposing）"
+            # 消息行操作按钮（引用/复制/撤回 hover 整行出现）+ 右键多选 + 调试面板复制（v0.63）
+            assert 'class="msg-actions"' in html and 'data-act="copy"' in html and 'data-act="revoke"' in html, \
+                "页面缺消息行操作按钮（复制/撤回）"
+            assert 'id="selectBar"' in html and 'id="selCopy"' in html and 'id="pCopy"' in html, \
+                "页面缺多选操作条/调试面板复制按钮"
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
