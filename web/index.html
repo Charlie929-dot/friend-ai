@@ -276,11 +276,14 @@
     max-height: 60px; overflow: hidden; }
   .msg.user .bubble .bubble-quote { border-left-color: rgba(255,255,255,.75);
     background: rgba(255,255,255,.22); color: var(--me-ink); }
+  /* 消息行 hover 时整条消息提到最上层：工具条会溢出短消息的高度（竖排按钮更高），
+     不提升 z-index 会被下一条消息的气泡盖住、点不到 */
+  .msg:hover { z-index: 30; }
   .msg-actions { position: absolute; top: 0; display: flex; flex-direction: column; gap: 4px;
-    opacity: 0; pointer-events: none; transition: opacity .15s; }
+    opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 1; }
   .msg.ai .msg-actions { left: calc(100% + 6px); }
   .msg.user .msg-actions { right: calc(100% + 6px); }
-  .msg:hover .msg-actions, .msg-actions:focus-within { opacity: 1; pointer-events: auto; }
+  .msg:hover .msg-actions, .msg-actions:hover, .msg-actions:focus-within { opacity: 1; pointer-events: auto; }
   .ma-btn { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
     background: var(--surface); border: 1px solid var(--line); color: var(--muted);
     box-shadow: 0 2px 6px rgba(0,0,0,.08); transition: color .15s, border-color .15s, background .15s; }
