@@ -383,12 +383,13 @@
   .toast.show { display: flex; animation: fadeUp .22s ease; }
 
   /* --- 表情面板 --- */
-  .emoji-panel { position: fixed; z-index: 70; bottom: calc(120px + env(safe-area-inset-bottom));
-    left: 50%; transform: translateX(-50%); width: min(420px, calc(100vw - 24px));
+  .emoji-panel { position: fixed; z-index: 70; bottom: calc(112px + env(safe-area-inset-bottom));
+    left: 18px; width: min(420px, calc(100vw - 36px));
     background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
     box-shadow: var(--shadow); display: none; flex-direction: column; overflow: hidden;
-    animation: fadeUp .18s ease; }
-  .emoji-panel.show { display: flex; }
+    transform-origin: 18px calc(100% + 6px); }
+  .emoji-panel.show { display: flex; animation: popIn .2s cubic-bezier(.18,.9,.28,1.28); }
+  @keyframes popIn { from { opacity: 0; transform: scale(.62); } to { opacity: 1; transform: scale(1); } }
   .ep-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line);
     font-size: 12.5px; font-weight: 600; }
   .ep-tabs { display: flex; gap: 5px; overflow-x: auto; padding: 9px 12px 4px; scrollbar-width: none; }
@@ -1150,6 +1151,7 @@ async function send(){
       if(r.id) lastId=Math.max(lastId,r.id);
     }
     if(r.reply) addSys(r.reply);
+    scrollToBottom(false);   // 自己发的消息（含点表情）：无论之前翻到哪，都定位回最底部
     poll();
   }catch(e){ addSys('⚠ 发送失败：'+e.message); }
 }
@@ -1289,15 +1291,19 @@ $('streamCopy').onclick=()=>{ if(!streamRows.length){ toast('还没有意识流�
 
 /* ===== 表情面板 ===== */
 let emojiData = null;   // {buckets:[{name,builtin,items:[{text,emotion,img,builtin}]}]}
+let emojiLoaded = false; // 表情库是否已拉取过（打开面板不重复 fetch，避免卡顿；增删后 force 刷新）
 let emojiCur = '';      // 当前选中的桶名
 let emojiAddMode = false; // true = 新增表情表单，false = 普通选择
 const emojiImgMap = new Map();  // 表情文字 → 图文件名（整条消息就是这串文字时，聊天气泡渲染成图）
-async function loadEmoji(){
+async function loadEmoji(force){
   try{
-    const d=await (await fetch('/api/emoji')).json();
-    emojiData=d.buckets||[];
-    emojiImgMap.clear();
-    emojiData.forEach(b=>(b.items||[]).forEach(it=>{ if(it.img) emojiImgMap.set(it.text, it.img); }));
+    if(force || !emojiLoaded){
+      const d=await (await fetch('/api/emoji')).json();
+      emojiData=d.buckets||[];
+      emojiImgMap.clear();
+      emojiData.forEach(b=>(b.items||[]).forEach(it=>{ if(it.img) emojiImgMap.set(it.text, it.img); }));
+      emojiLoaded=true;
+    }
     renderEmojiTabs(); renderEmojiGrid();
   }
   catch(e){ /* 静默 */ }
@@ -1321,7 +1327,7 @@ function renderEmojiTabs(){
       const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({action:'remove_bucket',name:b.name})})).json();
       if(!r.ok){ toast(r.error||'删除失败'); return; }
-      emojiCur=''; await loadEmoji();
+      emojiCur=''; await loadEmoji(true);
     };
     tabs.appendChild(t);
   });
@@ -1359,7 +1365,7 @@ function renderEmojiGrid(){
       const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({action:'remove_emoji',bucket:emojiCur,text:it.text})})).json();
       if(!r.ok){ toast(r.error||'删除失败'); return; }
-      await loadEmoji();
+      await loadEmoji(true);
     };
     grid.appendChild(d);
   });
@@ -1376,6 +1382,7 @@ async function sendText(text){
       if(r.id) lastId=Math.max(lastId,r.id);
     }
     if(r.reply) addSys(r.reply);
+    scrollToBottom(false);   // 自己发的消息（含点表情）：无论之前翻到哪，都定位回最底部
     poll();
   }catch(e){ addSys('⚠ 发送失败：'+e.message); }
 }
@@ -1416,7 +1423,7 @@ $('epAddBucket').onclick=async()=>{
   const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({action:'add_bucket',name})})).json();
   if(!r.ok){ toast(r.error||'新建失败'); return; }
-  emojiCur=name; await loadEmoji();
+  emojiCur=name; await loadEmoji(true);
 };
 $('epSave').onclick=async()=>{
   const bucket=$('epBucket').value.trim(), text=$('epText').value.trim(), emotion=$('epEmotion').value.trim();
@@ -1436,17 +1443,25 @@ $('epSave').onclick=async()=>{
   const r=await (await fetch('/api/emoji',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(body)})).json();
   if(!r.ok){ toast(r.error||'保存失败'); return; }
-  hideEmojiAdd(); emojiCur=bucket; await loadEmoji();
+  hideEmojiAdd(); emojiCur=bucket; await loadEmoji(true);
 };
 /* 点面板外关闭（按钮和面板内部除外） */
 document.addEventListener('click',e=>{ if(!e.target.closest('.emoji-panel') && !e.target.closest('#btnEmoji')) closeEmoji(); });
-/* 标签溢出：鼠标在标签行上移动就跟着移——往右移标签就往左滑（露出右边的桶），
-   快慢跟手（movementX = 本次鼠标位移）；移出即停。不是贴边才滚。 */
+/* 标签溢出滚动：鼠标在标签行**中间**保持不动（看当前标签），移到**左右边缘**才自动
+   缓慢滑向对应方向（左边缘→往右滑露出左边、右边缘→往左滑露出右边）；移出即停 */
 (function(){
   const tabsEl=$('epTabs');
+  let timer=null;
   tabsEl.addEventListener('mousemove',e=>{
-    if(e.movementX) tabsEl.scrollLeft += e.movementX;
+    const r=tabsEl.getBoundingClientRect();
+    const x=e.clientX-r.left, w=r.width, edge=52;
+    let dir=0;
+    if(x<edge) dir=-1;
+    else if(x>w-edge) dir=1;
+    if(dir){ if(!timer) timer=setInterval(()=>{ tabsEl.scrollLeft += dir*6; },30); }
+    else { clearInterval(timer); timer=null; }
   });
+  tabsEl.addEventListener('mouseleave',()=>{ clearInterval(timer); timer=null; });
 })();
 
 /* ===== 输入框自适应 + 发送 ===== */
