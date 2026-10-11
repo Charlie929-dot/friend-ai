@@ -185,6 +185,12 @@ def kernel_prompt(level: str = "compact") -> str:
     if likes_passive:
         parts.append(f"【你的底色偏好】（被问到才简单答一句，别主动拿这些当话题、"
                      f"别编你在做这些事）\n{likes_passive}")
+    # 兴趣修炼（S4）：动态养成的新偏好（读/聊/刷里长出来的），和内核好恶并列注入。
+    # 内核钉死不动，这里只「追加」——是 TA 最近长出来的兴趣，不是"改了你是谁"。
+    import interests
+    ihint = interests.prompt_hint()
+    if ihint:
+        parts.append(ihint)
     if dislikes:
         parts.append(f"【你真的受不了】（被踩到会明显变冷淡）\n{dislikes}")
 

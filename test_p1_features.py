@@ -3038,9 +3038,76 @@ def test_proactive_segment():
         _db.init()
 
 
+def test_interest_cultivation():
+    """兴趣修炼（S4）：偏好从读/聊/刷三源动态养成，内核钉死不动。
+    纯规则：信号词+主题词共现记线索，同一主题累计 N 次自动转正，不调 LLM。
+    """
+    import tempfile
+    import db as _db
+    import interests as _int
+    import persona as _persona
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR = tmp
+    config.DB_PATH = tmp / "friend.db"
+    real_enabled = config.INTEREST_PROMOTE_ENABLED
+    config.INTEREST_PROMOTE_ENABLED = True
+    try:
+        _db.init()
+
+        # 1) detect 保守：信号词 + 主题词共现才命中；只有主题词、或信号词带非兴趣对象不命中
+        assert "历史" in _int.detect("我最近对历史挺感兴趣的，越看越上头"), \
+            "信号+主题共现没命中"
+        assert _int.detect("今天读了三章历史") == [], \
+            "只有主题词没信号词不该算兴趣（防止把'读书'当'喜欢上'）"
+        assert _int.detect("我有点上头") == [], \
+            "只有信号词没主题对象不该命中"
+
+        # 2) record 累计 + 阈值转正（默认 3 次）
+        assert _int.record("科幻") is False and _int.record("科幻") is False
+        assert _int.record("科幻") is True, "第 3 次该转正"
+        assert _int.promoted() == [{"topic": "科幻", "count": 3}], _int.promoted()
+
+        # 3) 转正后的兴趣进内核 prompt（追加，不是改内核）
+        #    用真实内核渲染验证注入块，需要一张 persona 卡
+        import persona_pool as _pool
+        quiet = next(p for p in _pool.POOL if p["key"] == "quiet")
+        _pool.save({
+            "archetype": "quiet", "label": quiet["label"], "name": "闻屿",
+            "quirk": "", "text": "x", "wake_hour": quiet["wake_hour"],
+            "sleep_hour": quiet["sleep_hour"], "bubble_mult": quiet["bubble_mult"],
+            "reading_pref": quiet["reading_pref"], "drawn_at": "2026-10-11T00:00:00",
+            "kernel": _pool.KERNELS["quiet"],
+        })
+        compact = _persona.kernel_prompt("compact")
+        assert "【你最近喜欢上的】科幻" in compact, \
+            "转正的兴趣没进内核 prompt：" + compact[:120]
+        assert "别把它们编成'你正在做的事'" in compact, "缺防编造生活约束"
+
+        # 4) 未转正的主题不渲染
+        _int.record("历史")  # 1 次，未到阈值
+        assert "【你最近喜欢上的】" not in _persona.kernel_prompt("compact") \
+            or "历史" not in _persona.kernel_prompt("compact"), "未转正的主题不该渲染"
+
+        # 5) 开关关闭：检测/记录/渲染全部失效（保留旧行为）
+        config.INTEREST_PROMOTE_ENABLED = False
+        try:
+            assert _int.detect("我对历史挺感兴趣") == []
+            assert _int.record("历史") is False
+            assert _int.prompt_hint() == ""
+        finally:
+            config.INTEREST_PROMOTE_ENABLED = True
+
+        print("ok 兴趣修炼（词表检测 + 阈值转正 + 内核追加注入 + 防编造 + 开关）")
+    finally:
+        config.INTEREST_PROMOTE_ENABLED = real_enabled
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_inner_monologue():
     """双层生成：第 1 次调用出内心独白（不可见），第 2 次拿着独白说人话。
-
     验证三件事：①独白真的被调用且输出不进聊天；②第 2 层的 messages 里带着独白
     （立场在这一层定住）；③独白失败时**必须**退化成单层，不能把话说不出来。
     """
@@ -3503,6 +3570,7 @@ if __name__ == "__main__":
     test_persona_kernel()
     test_likes_passive_split()
     test_proactive_segment()
+    test_interest_cultivation()
     test_anti_sycophancy_redlines()
     test_inner_monologue()
     test_self_memory()

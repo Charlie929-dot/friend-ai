@@ -165,7 +165,8 @@ def build_proactive_messages(state: str, scenario: str) -> list[dict]:
 def _inject_random_topic(prompt: list[dict]) -> None:
     """random 场景的话题弹药：一半概率翻一条攒下的素材（工作=读书的读后感），
     没有素材（或没抽中）才退回翻一条关于TA的旧记忆。素材攒了就要用得起来，
-    否则 TA 闷头读书、攒一堆感想却从来不跟人聊（实测 #28）。"""
+    否则 TA 闷头读书、攒一堆感想却从来不跟人聊（实测 #28）。
+    兴趣修炼（S4）：转正的新偏好也是话题弹药——TA 最近喜欢上的东西，比旧记忆更鲜活。"""
     if random.random() < 0.5:
         import work
         mat = work.take_shareable()
@@ -175,6 +176,13 @@ def _inject_random_topic(prompt: list[dict]) -> None:
                 f"「{mat}」。可以自然跟TA聊起它——比如提一句你最近在读什么书、"
                 f"读到哪句挺有感觉。想聊别的也行。）")
             return
+    import interests
+    topic = interests.random_promoted()
+    if topic:
+        prompt[-1]["content"] += (
+            f"\n（你最近对「{topic}」挺来劲——这是你从读/聊/刷里慢慢喜欢上的。"
+            f"可以自然跟TA提起它，聊一两句；想聊别的也行。）")
+        return
     mem = memory.random_memory()
     if mem:
         anchor = mem.get("time_label") or ""

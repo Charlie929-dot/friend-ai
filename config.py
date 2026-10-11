@@ -168,6 +168,10 @@ SELF_MEMORY_ENABLED = os.environ.get("SELF_MEMORY_ENABLED", "on").lower() == "on
 SELF_MEMORY_MAX = int(os.environ.get("SELF_MEMORY_MAX", "5"))                       # 每轮最多注入几条关于我自己的记忆
 SELF_REVIEW_ENABLED = os.environ.get("SELF_REVIEW_ENABLED", "on").lower() == "on"   # 睡前自我复盘（挂每天一次的日记复盘，写回自我记忆）
 
+# --- 兴趣修炼（S4 人格连续性：偏好从读/聊/刷三源动态养成，内核钉死不动） ---
+INTEREST_PROMOTE_ENABLED = os.environ.get("INTEREST_PROMOTE_ENABLED", "on").lower() == "on"  # 偏好修炼总开关（关了不检测、不记录、不注入）
+INTEREST_PROMOTE_THRESHOLD = int(os.environ.get("INTEREST_PROMOTE_THRESHOLD", "3"))          # 同一兴趣主题累计 N 次自动转正（纯规则、不调 LLM）
+
 # --- 自我意识流（S4「完全自我意识」：一条持续追加的第一人称自我叙事） ---
 CONSCIOUS_STREAM_ENABLED = os.environ.get("CONSCIOUS_STREAM_ENABLED", "on").lower() == "on"  # 总开关（关了不追加、不注入意识流）
 CONSCIOUS_STREAM_RECENT = int(os.environ.get("CONSCIOUS_STREAM_RECENT", "4"))      # 每轮注入最近几条流

@@ -12,6 +12,7 @@ import db
 import events
 import game
 import guard
+import interests
 import llm
 import memory
 import offline
@@ -216,6 +217,10 @@ class Engine:
                 break
             self._send(seg, kind="chat")
 
+        # 兴趣修炼（S4）：聊天源——回复里也表达兴趣（"最近有点迷上X"），一并记线索。
+        for t in interests.detect_and_record(reply):
+            print(f"[兴趣] 转正：{t}")
+
         # 自我意识流（S4）：记下"我说了什么"（摘要）——让流里有一条完整的自我叙事。
         # 全文在 messages 表里，这里只存摘要供注入；"我在想/我说"是每轮对话的锚点。
         said = " ".join(reply.split())
@@ -287,6 +292,11 @@ class Engine:
         if len(raw) < 8:     # 空转/ stub 文案都视为没读到人
             return ""
         print(f"[独白] {raw[:120].replace(chr(10), ' / ')}…")
+        # 兴趣修炼（S4）：聊天源——独白里流露"感兴趣"的想法，即时用词表记一条兴趣线索
+        # （纯规则、不调 LLM）。同一主题累计到阈值会转正，转正时打一条日志。
+        promoted_now = interests.detect_and_record(raw)
+        for t in promoted_now:
+            print(f"[兴趣] 转正：{t}")
         # 自我意识流（S4）：内心独白持久化——不再用完就扔，跨轮有连续性。
         # 每轮注入时只取摘要，全文留在这里供睡前复盘浓缩。
         stream.append("monologue", f"我在想：{raw}")

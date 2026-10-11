@@ -179,6 +179,12 @@ def _settle(state: dict, now: datetime) -> bool:
             if article is None:
                 import reading
                 article = reading.next_article()      # 没导入书才读内置书摘
+        # 兴趣修炼（S4）：阅读源——读完一篇，它的 genre 就是一次兴趣信号（确定性最强，
+        # 不经过词表匹配）。读历史读得多 → 历史偏好慢慢长出来、累计转正。
+        if article and article.get("genre"):
+            import interests
+            if interests.record(article["genre"]):
+                print(f"[兴趣] 转正：{article['genre']}")
         _produce_shareable(state["day"], state["settled"] + 1, article)
         state["settled"] += 1
         changed = True
