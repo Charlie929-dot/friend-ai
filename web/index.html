@@ -116,7 +116,7 @@
   .msg.hl { background: var(--hl); border-radius: 12px;
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   /* 高亮时气泡也蒙进整行：气泡去掉自己的底色，别像补丁一样单独露出来 */
-  .msg.hl .bubble { background: transparent; border-color: transparent; }
+  .msg.hl .bubble, .msg.hl.ai .bubble { background: transparent; border-color: transparent; box-shadow: none; }
   .msg.hl.user .bubble { background: transparent; color: var(--ink); }
   .msg.hl.user .bubble .bubble-quote { border-left-color: color-mix(in srgb, var(--muted) 55%, transparent); }
   /* 细栏滑动定位：右边目录里被指到的条目深色框高亮 */
