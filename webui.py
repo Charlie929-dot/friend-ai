@@ -329,6 +329,15 @@ def _make_handler(channel: WebChannel, on_message):
                                          "tags": p.get("reading_tags") or []}})
                 except Exception as e:
                     self._json({"error": f"书架读不出来：{e}"}, 500)
+            elif u.path == "/api/books/cover":
+                # 书封（v0.78）：epub 里解析出的封面图。只认书架里的书 id，防穿越。
+                import library as _lib
+                bid = unquote(parse_qs(u.query).get("id", [""])[0])
+                got = _lib.cover_bytes(bid)
+                if not got:
+                    self._json({"error": "没有封面"}, 404)
+                    return
+                self._send_body(got[0], got[1])
             elif u.path == "/api/emoji":
                 # 表情包池（E 模块）：分桶表情库存，前端「表情」面板渲染用。
                 import emoji_pool
@@ -336,7 +345,6 @@ def _make_handler(channel: WebChannel, on_message):
             elif u.path == "/api/emoji_img":
                 # 表情图（v0.70）：按文件名吐 emoji_images/ 里的图，防穿越只认纯文件名。
                 import emoji_pool
-                from urllib.parse import unquote
                 name = unquote(parse_qs(u.query).get("name", [""])[0])
                 p = emoji_pool.img_file(name)
                 if not p:

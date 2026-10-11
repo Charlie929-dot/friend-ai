@@ -2023,6 +2023,68 @@ def test_library_categories():
         _db.init()
 
 
+def test_epub_cover():
+    """epub 封面解析（v0.78）：两种标准写法都认（meta name=cover / properties=cover-image）。"""
+    import tempfile
+    import zipfile
+
+    import config as _cfg
+    import db as _db
+    import library as _lib
+
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
+    try:
+        _db.init()
+        books = config.BOOKS_DIR
+        books.mkdir(parents=True)
+        jpg = b"\xff\xd8\xff\xe0" + b"fakecover" * 8      # 假图（只验抽取，不解码）
+
+        def _epub(path, cover_meta: bool):
+            container = ('<?xml version="1.0"?><container version="1.0" '
+                         'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                         '<rootfile full-path="OEBPS/content.opf" '
+                         'media-type="application/oebps-package+xml"/></rootfiles></container>')
+            cover_item = ('<item id="cover-img" href="images/cover.jpg" media-type="image/jpeg"'
+                          + (' properties="cover-image"/>' if not cover_meta else '/>'))
+            meta = ('<meta name="cover" content="cover-img"/>' if cover_meta else "")
+            opf = ('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+                   '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                   '<dc:title>封面测试书</dc:title><dc:creator>某人</dc:creator>'
+                   + meta + '</metadata>'
+                   '<manifest><item id="c0" href="chapter0.xhtml" '
+                   'media-type="application/xhtml+xml"/>' + cover_item + '</manifest>'
+                   '<spine><itemref idref="c0"/></spine></package>')
+            with zipfile.ZipFile(path, "w") as z:
+                z.writestr("mimetype", "application/epub+zip")
+                z.writestr("META-INF/container.xml", container)
+                z.writestr("OEBPS/content.opf", opf)
+                z.writestr("OEBPS/chapter0.xhtml",
+                           "<html><body><p>" + "这是一段足够长的正文内容。" * 5 + "</p></body></html>")
+                z.writestr("OEBPS/images/cover.jpg", jpg)
+
+        _epub(books / "甲书.epub", cover_meta=True)       # 写法① meta name=cover
+        _epub(books / "乙书.epub", cover_meta=False)      # 写法② properties=cover-image
+        (books / "丙书.txt").write_text("没有封面的 txt 书。\n\n" * 20, encoding="utf-8")
+
+        got = {b["id"]: b["has_cover"] for b in _lib.books()}
+        assert got["甲书.epub"] and got["乙书.epub"], f"两种封面的写法都要认出来：{got}"
+        assert not got["丙书.txt"], "txt 不该有封面"
+
+        data, ctype = _lib.cover_bytes("甲书.epub")
+        assert ctype == "image/jpeg" and data == jpg, "封面应原样抽出、媒体类型按扩展名判"
+        assert _lib.cover_bytes("丙书.txt") is None, "txt 没有封面"
+        assert _lib.cover_bytes("不存在.epub") is None, "不存在的书不该抛异常"
+
+        print("ok epub 封面（meta/properties 两种写法 + 无封面兜底 + 防越界）")
+    finally:
+        config.BOOKS_DIR = real_books
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 def test_reading_pref_two_level():
     """阅读偏好两级（一级分类 + 细标签）：旧标签自动迁移，内置书摘翻译到同一套分类。"""
     import json
@@ -3855,6 +3917,7 @@ if __name__ == "__main__":
     test_reading_system()
     test_user_library()
     test_library_categories()
+    test_epub_cover()
     test_reading_pref_two_level()
     test_legacy_persona_card_compat()
     test_care_events()

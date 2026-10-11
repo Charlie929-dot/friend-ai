@@ -238,7 +238,28 @@ def _parse_epub(path: Path) -> dict | None:
         manifest = {it.get("id"): it.get("href")
                     for it in root.iter(f"{OPF}item") if it.get("id")}
         spine = [it.get("idref") for it in root.iter(f"{OPF}itemref") if it.get("idref")]
+        # 封面（v0.78）：两种标准写法都认——① OPF <meta name="cover" content="封面itemId">
+        # ② manifest 里 <item properties="cover-image">。找到就记下 zip 内路径，书架显示用。
+        cover_href = ""
+        meta_cover = ""
+        for el in root.iter(f"{OPF}meta"):
+            if (el.get("name") or "").lower() == "cover":
+                meta_cover = el.get("content") or ""
+        if meta_cover and meta_cover in manifest:
+            cover_href = manifest[meta_cover]
+        if not cover_href:
+            for it in root.iter(f"{OPF}item"):
+                if "cover-image" in (it.get("properties") or ""):
+                    cover_href = it.get("href") or ""
+                    break
         base = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
+        cover_path = ""
+        if cover_href:
+            cover_path = f"{base}/{cover_href}" if base and "/" not in cover_href \
+                else cover_href
+            if cover_path not in z.namelist():     # href 可能是相对 opf 的短路径
+                alt = f"{base}/{cover_href}"
+                cover_path = alt if alt in z.namelist() else ""
         passages = []
         for idref in spine:
             href = manifest.get(idref)
@@ -251,7 +272,7 @@ def _parse_epub(path: Path) -> dict | None:
                 continue
             passages.extend(_split_passages(_strip_html(html)))
         return {"title": title or path.stem, "author": author, "passages": passages,
-                "subject": " ".join(subjects)}
+                "subject": " ".join(subjects), "cover": cover_path}
     except (ET.ParseError, KeyError, OSError):
         return None
 
@@ -328,14 +349,16 @@ def _scan() -> list[dict]:
         books.append({"id": str(rel), "title": parsed["title"], "author": parsed["author"],
                       "category": got["category"], "tags": got["tags"], "by": got["by"],
                       "genre": got["category"],          # 兼容旧字段（work/interests 用）
+                      "cover": parsed.get("cover", ""),
                       "passages": parsed["passages"]})
     return books
 
 
 def books() -> list[dict]:
-    """书架摘要（id/title/author/category/tags/by/count），供 /books 与网页端展示。"""
+    """书架摘要（id/title/author/category/tags/by/count/has_cover），供 /books 与网页端展示。"""
     return [{"id": b["id"], "title": b["title"], "author": b["author"],
              "category": b["category"], "tags": b["tags"], "by": b["by"],
+             "has_cover": bool(b.get("cover")),
              "count": len(b["passages"])} for b in _scan()]
 
 
@@ -459,6 +482,30 @@ def save_upload(filename: str, payload: bytes) -> dict | None:
     return {"id": str(rel), "title": parsed["title"], "author": parsed["author"],
             "category": category, "tags": [], "by": "auto",
             "count": len(parsed["passages"])}
+
+
+def cover_bytes(book_id: str) -> tuple[bytes, str] | None:
+    """取一本书的封面图（原图字节 + 媒体类型）。没封面返回 None。
+
+    只在 epub 里找（txt 没有图）；从 zip 直接抽原图不转码——书架缩略图交给浏览器缩。
+    路径从 ID 重新解一次（防客户端传任意 zip 内路径进来）。
+    """
+    path = config.BOOKS_DIR / book_id
+    if path.suffix.lower() != ".epub" or not path.is_file():
+        return None
+    try:
+        parsed = _parsed(path)
+        if not parsed or not parsed.get("cover"):
+            return None
+        with zipfile.ZipFile(path) as z:
+            data = z.read(parsed["cover"])
+    except (zipfile.BadZipFile, KeyError, OSError):
+        return None
+    ext = parsed["cover"].rsplit(".", 1)[-1].lower() if "." in parsed["cover"] else "jpeg"
+    ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+             "gif": "image/gif", "webp": "image/webp", "svg": "image/svg+xml"}.get(
+                 ext, "image/jpeg")
+    return data, ctype
 
 
 # ---------- 阅读进度 ----------

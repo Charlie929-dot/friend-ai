@@ -446,36 +446,74 @@
     text-overflow: ellipsis; white-space: nowrap; }
 
   /* ===== 书架（S4 用户书库）=====
-     书平铺在 books/ 根目录，分类由后端映射表管 —— 这里只负责「选/改」，不碰文件目录 */
-  .bk-drop { border: 1.5px dashed var(--line); border-radius: 12px; padding: 12px 10px;
-    text-align: center; font-size: 12px; color: var(--muted); transition: border-color .18s, background .18s; }
+     书平铺在 books/ 根目录，分类由后端映射表管 —— 这里只负责「选/改」，不碰文件目录。
+     v0.78：从右抽屉折叠项改成网页中间的大弹窗（书多了抽屉里放不下） */
+  .bk-modal { position: fixed; inset: 0; z-index: 80; display: none; }
+  .bk-modal.open { display: block; }
+  .bk-back { position: absolute; inset: 0; background: rgba(30,36,28,.4);
+    backdrop-filter: blur(2px); }
+  .bk-dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: min(880px, 94vw); height: min(78vh, 720px); display: flex; flex-direction: column;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 18px; box-shadow: var(--shadow); overflow: hidden;
+    animation: bkPop .22s cubic-bezier(.18,.9,.28,1.2); }
+  @keyframes bkPop { from { opacity: 0; transform: translate(-50%,-48%) scale(.96); } }
+  .bk-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .bk-head h3 { font-size: 15px; font-weight: 600; }
+  .bk-head .bk-sub { font-size: 11.5px; color: var(--muted); flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bk-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 18px; }
+  .bk-drop { border: 1.5px dashed var(--line); border-radius: 12px; padding: 14px 10px;
+    text-align: center; font-size: 12.5px; color: var(--muted); transition: border-color .18s, background .18s; }
   .bk-drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-  .bk-new { margin-top: 8px; padding: 9px 10px; border: 1px solid var(--accent); border-radius: 12px;
+  .bk-new { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 12px;
     background: var(--accent-soft); }
-  .bk-new-t { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 7px;
+  .bk-new-t { font-size: 12.5px; font-weight: 600; color: var(--ink); margin-bottom: 8px;
     display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-  .bk-row { display: flex; gap: 7px; align-items: center; padding: 5px 0; }
+  /* 每本书一行：封面 + 文字块 + 控件；控件用固定宽度，书名列 flex:1 且强制省略，
+     否则长书名（"侠盗若昂三部曲（量子窃贼…"）会把行压到逐字竖排 */
+  .bk-row { display: flex; gap: 10px; align-items: center; padding: 8px 0; }
   .bk-row + .bk-row { border-top: 1px solid var(--line); }
-  .bk-name { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; }
-  .bk-name b { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .bk-name small { color: var(--muted); font-size: 11px; }
-  .bk-row select, .bk-row input { flex: 0 0 auto; padding: 5px 7px; border: 1px solid var(--line);
-    border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 11.5px; outline: 0; }
-  .bk-row select { max-width: 108px; }
-  .bk-row input { width: 92px; }
+  .bk-cover { flex: 0 0 auto; width: 34px; height: 46px; border-radius: 5px; overflow: hidden;
+    background: var(--surface-2); display: grid; place-items: center; color: var(--muted);
+    font-size: 9px; border: 1px solid var(--line); }
+  .bk-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .bk-name { flex: 1 1 auto; min-width: 0; font-size: 12.5px; line-height: 1.4; }
+  .bk-name b { font-weight: 600; display: block; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .bk-name small { display: block; color: var(--muted); font-size: 11px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  .bk-ctl { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
+  .bk-row select, .bk-row input { padding: 5px 7px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--surface); color: var(--ink); font-size: 11.5px; outline: 0;
+    min-width: 0; }
+  .bk-row select { width: 104px; }
+  .bk-row input { width: 96px; }
   .bk-row select:focus, .bk-row input:focus { border-color: var(--accent); }
-  .bk-grp { margin-top: 10px; }
-  .bk-grp-t { font-size: 11px; font-weight: 600; color: var(--muted); display: flex;
-    align-items: center; gap: 6px; margin-bottom: 5px; }
+  .bk-grp { margin-top: 12px; }
+  .bk-grp-t { font-size: 11.5px; font-weight: 600; color: var(--muted); display: flex;
+    align-items: center; gap: 6px; margin-bottom: 4px; position: sticky; top: 0;
+    background: var(--surface); padding: 3px 0; z-index: 1; }
   .bk-grp-t .n { font-weight: 400; opacity: .8; }
   .bk-grp-t .pin { color: var(--accent); font-weight: 600; }
-  .bk-del { flex: 0 0 auto; width: 22px; height: 22px; border-radius: 6px; color: var(--muted);
-    font-size: 15px; line-height: 1; display: grid; place-items: center; }
+  .bk-del { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px; color: var(--muted);
+    font-size: 16px; line-height: 1; display: grid; place-items: center; }
   .bk-del:hover { background: #f8e4e4; color: #e07a7a; }
   .bk-tag { display: inline-block; padding: 1px 6px; border-radius: 6px; background: var(--surface-2);
     color: var(--muted); font-size: 10.5px; margin-right: 4px; }
   .bk-reading { color: var(--accent); font-weight: 600; }
+  .bk-foot { flex: 0 0 auto; display: flex; gap: 8px; align-items: center;
+    padding: 10px 16px; border-top: 1px solid var(--line); }
+  @media (max-width: 640px) {
+    .bk-row { flex-wrap: wrap; }
+    .bk-name { flex-basis: 100%; }
+    .bk-ctl { flex: 1 1 auto; }
+    .bk-row select { flex: 1 1 auto; width: auto; }
+    .bk-row input { flex: 1 1 auto; width: auto; }
+  }
 
+  /* 跳转高亮（outline 用）保持原样 */
   @media (max-width: 640px) { .outline { display: none; } }
 
   @media (max-width: 520px) {
@@ -638,22 +676,7 @@
           </div>
         </details>
 
-        <details class="fold" id="foldBooks">
-          <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5V6a2 2 0 0 1 2-2h11a1 1 0 0 1 1 1v14"/><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M8 7h7M8 11h5"/></svg>书架<span class="ec-sub" id="booksCount"></span></summary>
-          <div class="fold-body">
-            <div class="bk-drop" id="bkDrop">
-              <input type="file" id="bkFile" multiple accept=".txt,.epub" hidden>
-              把 txt / epub 拖到这里，或
-              <button class="btn" id="bkPick" style="padding:3px 10px;margin-top:6px">选书（可多选）</button>
-              <div style="margin-top:6px;font-size:11px">上传后平铺存根目录，分类在下面选，不用建文件夹</div>
-            </div>
-            <div id="bkNew"></div>
-            <div class="btnrow" style="margin-top:8px">
-              <button class="btn" id="bkReindex">重新自动分类</button>
-            </div>
-            <div id="bkList"><div class="empty">展开时加载…</div></div>
-          </div>
-        </details>
+        <button class="btn" id="btnBooks">我的书架</button>
 
         <details class="fold" id="foldDebug">
           <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/></svg>调试面板</summary>
@@ -678,6 +701,33 @@
         </details>
       </div>
     </aside>
+
+    <!-- 书架弹窗（v0.78：书多了抽屉放不下，改成网页中间的大窗） -->
+    <div class="bk-modal" id="bkModal">
+      <div class="bk-back" id="bkBack"></div>
+      <div class="bk-dialog">
+        <div class="bk-head">
+          <h3>我的书架</h3>
+          <span class="bk-sub" id="bkSub"></span>
+          <button class="icon-btn" id="bkClose" aria-label="关闭"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="bk-body">
+          <div class="bk-drop" id="bkDrop">
+            <input type="file" id="bkFile" multiple accept=".txt,.epub" hidden>
+            把 txt / epub 拖到这里，或
+            <button class="btn" id="bkPick" style="padding:3px 10px;margin-top:6px">选书（可多选）</button>
+            <div style="margin-top:6px;font-size:11px">上传后平铺存根目录，分类在下面选，不用建文件夹</div>
+          </div>
+          <div id="bkNew"></div>
+          <div id="bkList"><div class="empty">加载中…</div></div>
+        </div>
+        <div class="bk-foot">
+          <button class="btn" id="bkReindex">重新自动分类</button>
+          <span style="flex:1"></span>
+          <span class="bk-sub" id="bkPref"></span>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -1382,7 +1432,12 @@ let bkData = {categories:[], books:[], progress:{}, pref:{category:'',tags:[]}};
 async function loadBooks(){
   try{ bkData = await (await fetch('/api/books')).json(); }
   catch(e){ $('bkList').innerHTML='<div class="empty">书架加载失败</div>'; return; }
-  $('booksCount').textContent = (bkData.books||[]).length ? (' · '+(bkData.books||[]).length+' 本') : '';
+  const n=(bkData.books||[]).length;
+  const pref=bkData.pref||{};
+  $('bkSub').textContent = n ? (n+' 本书') : '';
+  $('bkPref').textContent = pref.category
+    ? ('TA 的口味：'+pref.category+((pref.tags&&pref.tags.length)?(' · '+pref.tags.join('/')):''))
+    : '';
   renderBooks();
 }
 function bkTagsOf(cat){
@@ -1405,13 +1460,25 @@ async function bkDel(b){
 }
 function bkRow(b){
   const row=document.createElement('div'); row.className='bk-row';
-  const name=document.createElement('div'); name.className='bk-name';
   const reading = bkData.progress && bkData.progress.book_id===b.id;
-  name.innerHTML = '<b>'+esc(b.title||b.id)+(reading?' <span class="bk-reading">正在读</span>':'')+'</b>'
-    + '<small>'+esc(b.author||'佚名')+' · '+(b.count||0)+' 段'
+  // 封面（v0.78：epub 解析出封面就显示，没有就占位）
+  const cov=document.createElement('div'); cov.className='bk-cover';
+  if(b.has_cover){
+    const img=document.createElement('img');
+    img.loading='lazy'; img.alt='';
+    img.src='/api/books/cover?id='+encodeURIComponent(b.id);
+    img.onerror=()=>{ img.remove(); cov.textContent='书'; };
+    cov.appendChild(img);
+  } else { cov.textContent='书'; }
+  const name=document.createElement('div'); name.className='bk-name';
+  name.innerHTML = '<b title="'+esc(b.title||b.id)+'">'+esc(b.title||b.id)
+    +(reading?' <span class="bk-reading">正在读</span>':'')+'</b>'
+    + '<small title="'+esc(b.author||'佚名')+'">'+esc(b.author||'佚名')+' · '+(b.count||0)+' 段'
     + ((b.tags&&b.tags.length)?' · '+b.tags.map(t=>'<span class="bk-tag">'+esc(t)+'</span>').join(''):'')
     + (b.by==='manual'?' · 手动':'')+'</small>';
+  const ctl=document.createElement('div'); ctl.className='bk-ctl';
   const sel=document.createElement('select');
+  sel.title='分类';
   (bkData.categories||[]).forEach(c=>{
     const o=document.createElement('option'); o.value=c.name;
     o.textContent=c.name+(c.count?'（'+c.count+'）':'');
@@ -1429,7 +1496,8 @@ function bkRow(b){
   inp.onchange=()=>bkSave(b.id, sel.value, inp.value);
   const del=document.createElement('button'); del.className='bk-del'; del.textContent='×';
   del.title='从书架删掉'; del.onclick=()=>bkDel(b);
-  row.append(name, sel, inp, dl, del);
+  ctl.append(sel, inp, dl, del);
+  row.append(cov, name, ctl);
   return row;
 }
 function renderBooks(){
@@ -1481,6 +1549,11 @@ function renderNew(added, failed){
   ok.onclick=()=>{ box.innerHTML=''; };
   card.appendChild(ok); box.appendChild(card);
 }
+function openBooks(){
+  $('bkModal').classList.add('open');
+  loadBooks();
+}
+function closeBooks(){ $('bkModal').classList.remove('open'); }
 (function(){
   const drop=$('bkDrop');
   ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.add('over'); }));
@@ -1493,7 +1566,12 @@ function renderNew(added, failed){
       headers:{'Content-Type':'application/json'},body:'{}'})).json().catch(()=>({changed:0}));
     loadBooks(); alert('重新分类完成，改了 '+(d.changed||0)+' 本（手动指定的没动）');
   };
-  $('foldBooks').addEventListener('toggle', ()=>{ if($('foldBooks').open) loadBooks(); });
+  $('btnBooks').onclick=openBooks;
+  $('bkClose').onclick=closeBooks;
+  $('bkBack').onclick=closeBooks;
+  document.addEventListener('keydown', e=>{
+    if(e.key==='Escape' && $('bkModal').classList.contains('open')) closeBooks();
+  });
 })();
 
 /* ===== 意识流 ===== */
