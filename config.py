@@ -199,6 +199,32 @@ CONSCIOUS_STREAM_LINE_CHARS = int(os.environ.get("CONSCIOUS_STREAM_LINE_CHARS", 
 # --- 待办队列（v0.80：脑子里想说、还没说的事，说过就打勾；治"素材颠来倒去就一句"） ---
 TODOS_ENABLED = os.environ.get("TODOS_ENABLED", "on").lower() == "on"   # 总开关（关了不入队、不注入）
 
+# --- 世界观（§1 架空设定：外来者困在程序里、靠读书成长） ---
+LORE_ENABLED = os.environ.get("LORE_ENABLED", "on").lower() == "on"   # 总开关（关了不注入来历/canon 设定集）
+
+# --- 阅读真读（§3 v1.0 整体设计：上课作息 + 整数章节圈定 + 思考即笔记 + 章节末结算） ---
+# 工作=读书从"每单元读 N 段"升级为"真读"：按整数章节圈定当日任务，均分到 8 个半节，
+# 边读边想（reasoning_content 攒思考 buffer），章节末结算产出读书笔记 alpha/beta 双库。
+TRUE_READ_ENABLED = os.environ.get("TRUE_READ_ENABLED", "on").lower() == "on"   # 真读总开关
+READING_DAILY_CHARS = int(os.environ.get("READING_DAILY_CHARS", "10000"))   # 当日字数上限（非空白字符，宁少勿超）
+READING_DAILY_CHARS_MIN = int(os.environ.get("READING_DAILY_CHARS_MIN", "200"))  # 当日圈定下限（一本书首章都不足则读完首章）
+# 上课作息（24 小时制 HH:MM；默认值均可调）
+SCHED_WORK_START = os.environ.get("SCHED_WORK_START", "08:30")   # 上班
+SCHED_LUNCH_START = os.environ.get("SCHED_LUNCH_START", "12:00")  # 午休开始
+SCHED_LUNCH_END = os.environ.get("SCHED_LUNCH_END", "14:00")      # 午休结束
+SCHED_WORK_END = os.environ.get("SCHED_WORK_END", "17:30")        # 下班
+SCHED_HALF_PERIOD_MIN = int(os.environ.get("SCHED_HALF_PERIOD_MIN", "40"))  # 半节时长
+SCHED_INTRA_BREAK_MIN = int(os.environ.get("SCHED_INTRA_BREAK_MIN", "15"))  # 节内休
+SCHED_INTER_BREAK_MIN = int(os.environ.get("SCHED_INTER_BREAK_MIN", "20"))  # 节间休
+SCHED_MORNING_PERIODS = int(os.environ.get("SCHED_MORNING_PERIODS", "2"))   # 上午节数
+SCHED_AFTERNOON_PERIODS = int(os.environ.get("SCHED_AFTERNOON_PERIODS", "2"))  # 下午节数
+# 章节解析：txt 优先"第X章"正则，fallback 按累计字数切章（不按段数）
+READING_TXT_FALLBACK_MIN = int(os.environ.get("READING_TXT_FALLBACK_MIN", "4000"))  # txt fallback 切章字数下限
+READING_TXT_FALLBACK_MAX = int(os.environ.get("READING_TXT_FALLBACK_MAX", "6000"))  # 上限
+# 读书笔记双库注入节奏
+READING_SUMMARY_THRESHOLD = int(os.environ.get("READING_SUMMARY_THRESHOLD", "15000"))  # 阶段性大总结触发（累计字数）
+READING_CROSS_BOOK_COUNT = int(os.environ.get("READING_CROSS_BOOK_COUNT", "3"))        # 跨书梳理触发（读满几本）
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

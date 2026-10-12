@@ -89,6 +89,27 @@ CREATE TABLE IF NOT EXISTS consciousness_stream (
     kind TEXT NOT NULL,        -- 事件类型：wake/sleep/work/inbox/monologue/reply/revoke
     text TEXT NOT NULL         -- 第一人称行（"我起床了 / 我在想：… / 我说：…"）
 );
+CREATE TABLE IF NOT EXISTS reading_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,        -- 书 id（相对 books/ 路径 或内置 key）
+    book_title TEXT NOT NULL,     -- 书名
+    chapter TEXT NOT NULL,        -- 章节标识（"第X章 标题" 或 toc 标题）
+    kind TEXT NOT NULL,           -- alpha（短概述）/ beta（完整转述）
+    summary TEXT NOT NULL,        -- alpha：短概述正文；beta：概述标题（一行）
+    content TEXT NOT NULL,        -- beta：完整转述（alpha 为空）
+    refs TEXT NOT NULL DEFAULT '',-- beta：章节引用（不存原文）
+    char_count INTEGER NOT NULL DEFAULT 0,   -- 该章节字数（累计窗口用）
+    long_id INTEGER NOT NULL DEFAULT 0,      -- alpha → beta 链接（记忆 A/B 库同款）
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_vectors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,        -- stream（意识流）/ note_beta（读书笔记 beta）/ dialog（对话摘要）
+    ref_id INTEGER NOT NULL,     -- 源条目 id（consciousness_stream.id / reading_notes.id / messages.id）
+    text TEXT NOT NULL,          -- 索引文本
+    ts TEXT NOT NULL,            -- 时间戳（相似度打平时近者赢）
+    vec BLOB NOT NULL            -- float32 向量（本地 bge-small-zh-v1.5）
+);
 """
 
 
@@ -101,6 +122,9 @@ def _conn():
 def init():
     with _conn() as c:
         c.executescript(_SCHEMA)
+        # 统一向量索引：同 (source, ref_id) 幂等（意识流/beta 转述/对话摘要各一条）
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_event_vectors_src "
+                  "ON event_vectors(source, ref_id)")
         # 旧库迁移：记忆五维标签（时间/地点/人物/主题）后加的列
         cols = [r["name"] for r in c.execute("PRAGMA table_info(memories)")]
         for col in ("time_label", "place", "person", "theme"):
@@ -131,7 +155,8 @@ def clear_all():
     """清空所有数据（/new-friend 用），保留表结构。"""
     with _conn() as c:
         for table in ("kv", "messages", "counters", "memories", "long_memories",
-                      "memory_vectors", "consciousness_stream"):
+                      "memory_vectors", "consciousness_stream", "reading_notes",
+                      "event_vectors"):
             c.execute(f"DELETE FROM {table}")
 
 
@@ -704,3 +729,92 @@ def purge_stream_before(day: str) -> int:
     with _conn() as c:
         cur = c.execute("DELETE FROM consciousness_stream WHERE day < ?", (day,))
         return cur.rowcount
+
+
+# --- 读书笔记双库（§4 alpha/beta，v1.0 整体设计） ---
+# alpha = 短概述（挂 long_id → beta）；beta = 完整转述 + 章节引用（不存原文）。
+# 与记忆 A/B 库**同名不同物**：记忆 A/B 是记忆摘要/长文，读书笔记 alpha/beta 是
+# 读书的短概述/完整转述。分表存，互不干扰。
+def add_reading_note(book_id: str, book_title: str, chapter: str, kind: str,
+                     summary: str, content: str = "", refs: str = "",
+                     char_count: int = 0, long_id: int = 0) -> int:
+    """落一条读书笔记。kind: alpha(短概述)/beta(完整转述)。返回 id。"""
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO reading_notes(book_id, book_title, chapter, kind, summary,"
+            " content, refs, char_count, long_id, created_at)"
+            " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (book_id, book_title, chapter, kind, summary, content, refs,
+             int(char_count or 0), int(long_id or 0),
+             datetime.now().isoformat(timespec="seconds")),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def add_reading_note_pair(book_id: str, book_title: str, chapter: str,
+                          alpha_summary: str, beta_content: str, refs: str = "",
+                          char_count: int = 0) -> tuple[int, int]:
+    """alpha + beta 一起落：beta 先落拿 id，alpha 挂 long_id → beta。返回 (alpha_id, beta_id)。"""
+    beta_id = add_reading_note(book_id, book_title, chapter, "beta",
+                               summary=alpha_summary, content=beta_content,
+                               refs=refs, char_count=char_count)
+    alpha_id = add_reading_note(book_id, book_title, chapter, "alpha",
+                                summary=alpha_summary, char_count=char_count,
+                                long_id=beta_id)
+    return alpha_id, beta_id
+
+
+def reading_notes_by_book(book_id: str = "", kind: str = "",
+                          limit: int = 200) -> list[dict]:
+    """读书笔记（按书过滤；kind: alpha/beta；不传返回全部）。"""
+    q = "SELECT * FROM reading_notes WHERE 1=1"
+    args: list = []
+    if book_id:
+        q += " AND book_id=?"
+        args.append(book_id)
+    if kind:
+        q += " AND kind=?"
+        args.append(kind)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with _conn() as c:
+        rows = c.execute(q, args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def reading_note_count() -> int:
+    with _conn() as c:
+        return c.execute("SELECT COUNT(*) AS n FROM reading_notes").fetchone()["n"]
+
+
+def get_reading_note(note_id: int) -> dict | None:
+    with _conn() as c:
+        row = c.execute("SELECT * FROM reading_notes WHERE id=?", (note_id,)).fetchone()
+    return dict(row) if row else None
+
+
+# --- 统一向量索引（§5：意识流条目 + beta 转述 + 对话摘要，近者赢） ---
+def set_event_vector(source: str, ref_id: int, text: str, ts: str, vec: bytes):
+    """写入/更新一条统一向量索引。同 (source, ref_id) 幂等覆盖。"""
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO event_vectors(source, ref_id, text, ts, vec) VALUES(?, ?, ?, ?, ?) "
+            "ON CONFLICT(source, ref_id) DO UPDATE SET text=excluded.text, "
+            "ts=excluded.ts, vec=excluded.vec",
+            (source, ref_id, text, ts, vec),
+        )
+
+
+def event_vectors_all(limit: int = 2000) -> list[dict]:
+    """取全部统一向量索引条目（文本 + 向量，供召回算余弦）。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM event_vectors ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_event_vector(source: str, ref_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM event_vectors WHERE source=? AND ref_id=?",
+                  (source, ref_id))

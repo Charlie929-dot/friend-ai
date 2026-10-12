@@ -497,7 +497,7 @@ def test_memory_v2():
             c.execute("UPDATE messages SET ts='2026-10-03T15:00:00'")
         calls = []
 
-        def fake_chat(messages, temperature=0.7):
+        def fake_chat(messages, temperature=0.7, **k):
             calls.append(messages[-1]["content"])
             return json.dumps([{"content": "我给小徐详细讲过SVD图像压缩的原理",  # 新红线：第一人称
                                 "category": "事件", "theme": "学业",
@@ -830,7 +830,7 @@ def test_db_path_lock():
         switched = threading.Event()
         real_chat = _mem.llm.chat
 
-        def slow_chat(messages, temperature=0.7):
+        def slow_chat(messages, temperature=0.7, **k):
             gate.wait(5)  # 提取线程持锁卡在 LLM 调用
             return '[{"content": "小徐计划明天早上去图书馆自习", "category": "计划", "theme": "学业"}]'
 
@@ -1175,7 +1175,7 @@ def test_today_notes_injection():
         # 2) 注入当天上下文
         msgs = _ctx.build_chat_messages("AWAKE", ["你今天干嘛了"])
         joined = "\n".join(m.get("content", "") for m in msgs)
-        assert "你今天做过的事" in joined, "应注入今天的素材"
+        assert "我今天做过的事" in joined, "应注入今天的素材"
         assert "不要回答" in joined, "注入里应能看到读到的内容"
 
         # 3) 跨天不再注入，但 B 库记录保留（记忆还在）
@@ -3160,14 +3160,14 @@ def test_work_content_injection():
 
         # 忙（working）时：注入"正在读什么"，且带书名号（有具体书名）
         hint = _work.prompt_hint(first_start + _td(minutes=30))
-        assert "你在读" in hint and "《" in hint, f"忙的时候没注入读的具体内容：{hint}"
+        assert "我在读" in hint and "《" in hint, f"忙的时候没注入读的具体内容：{hint}"
         # 心流（flow）时同样注入
         flow_hint = _work.prompt_hint(first_start + _td(minutes=2))
-        assert "你在读" in flow_hint, f"心流期没注入读的内容：{flow_hint}"
+        assert "我在读" in flow_hint, f"心流期没注入读的内容：{flow_hint}"
 
         # 忙完了（off）不再注入"读什么"（注入只在手头有活的时候）
         off = _work.prompt_hint(_dt(2026, 10, 10, 1, 0))
-        assert "你在读" not in off, f"忙完了还挂着读的内容：{off}"
+        assert "我在读" not in off, f"忙完了还挂着读的内容：{off}"
 
         # 红线：注入的是"自己的状态"，不踩反愧疚归因
         assert not _persona_has_blame(hint), f"工作内容注入踩了红线：{hint}"
@@ -3418,13 +3418,13 @@ def test_interest_cultivation():
             "kernel": _pool.KERNELS["quiet"],
         })
         compact = _persona.kernel_prompt("compact")
-        assert "【你最近喜欢上的】科幻" in compact, \
+        assert "【我最近喜欢上的】科幻" in compact, \
             "转正的兴趣没进内核 prompt：" + compact[:120]
         assert "别把它们编成'你正在做的事'" in compact, "缺防编造生活约束"
 
         # 4) 未转正的主题不渲染
         _int.record("历史")  # 1 次，未到阈值
-        assert "【你最近喜欢上的】" not in _persona.kernel_prompt("compact") \
+        assert "【我最近喜欢上的】" not in _persona.kernel_prompt("compact") \
             or "历史" not in _persona.kernel_prompt("compact"), "未转正的主题不该渲染"
 
         # 5) 开关关闭：检测/记录/渲染全部失效（保留旧行为）
@@ -3625,7 +3625,7 @@ def test_inner_monologue():
         def typing(self):
             self.events.append(("typing",))
 
-    def fake_chat(messages, temperature=0.8, max_tokens=0):
+    def fake_chat(messages, temperature=0.8, max_tokens=0, **k):
         joined = "\n".join(str(m.get("content", "")) for m in messages)
         if "内心独白环节" in joined:          # 第 1 层：独白
             monologue_hits.append(messages)
@@ -3673,7 +3673,7 @@ def test_inner_monologue():
         eng2 = _core.Engine(ch2)
         eng2._judge_session_end = lambda *a, **k: None
         _mem.extract_async = lambda *a, **k: None
-        _llm.chat = lambda messages, temperature=0.8, max_tokens=0: (
+        _llm.chat = lambda messages, temperature=0.8, max_tokens=0, **k: (
             _raise_llm() if "内心独白环节" in "\n".join(
                 str(m.get("content", "")) for m in messages) else "这是单层兜底回复")
         try:
@@ -4136,6 +4136,230 @@ def test_todos():
         _db.init()
 
 
+def test_lore():
+    """世界观（§1 架空设定）：来历骨架注入 + canon 设定集追加去重 + 防自相矛盾 + 开关。"""
+    import json
+    import tempfile
+    import config as _cfg
+    import db as _db
+    import lore as _lore
+    import persona as _persona
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_lore = config.LORE_ENABLED
+    config.LORE_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+
+        # 1. 骨架注入：来历（第一人称"我"）+ 节奏控制（指令层"你"）都在
+        hint = _lore.prompt_hint()
+        assert "我的来历" in hint, f"缺来历骨架：{hint}"
+        assert "来自一个完全不同的世界" in hint, "缺'从哪来'骨架"
+        assert "读书获取经验" in hint, "缺'靠什么成长'骨架"
+        assert "不主动大段倾倒" in hint, "缺节奏控制"
+
+        # 2. 骨架注入进 static system prompt（身份的一部分）
+        sp = _persona.static_system_prompt()
+        assert "我的来历" in sp, "世界观没进 static system prompt"
+
+        # 3. canon 设定集：追加 + 去重 + 防自相矛盾
+        assert _lore.add_canon("我那边的世界没有四季，只有明暗两季")
+        assert _lore.add_canon("我那边的世界没有四季，只有明暗两季") is False, "相同细节不该重复入库"
+        assert _lore.add_canon("   ") is False, "空细节不该入库"
+        assert len(_lore.canon()) == 1
+
+        # 4. 已确立的 canon 注入进 prompt，提醒别自相矛盾
+        hint2 = _lore.prompt_hint()
+        assert "明暗两季" in hint2, "canon 细节没注入：%s" % hint2
+        assert "别跟这些对不上" in hint2, "缺防自相矛盾提醒"
+
+        # 5. 开关关闭 → 不注入
+        config.LORE_ENABLED = False
+        assert _lore.prompt_hint() == ""
+        config.LORE_ENABLED = True
+
+        print("ok 世界观（来历骨架 + canon 设定集追加去重 + 防自相矛盾 + 开关）")
+    finally:
+        config.LORE_ENABLED = saved_lore
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_trueread():
+    """阅读真读（§3）+ 读书笔记双库（§4）+ 统一向量索引（§5）：
+    上课作息 8 半节 / 整数章节圈定 / tps 推导 / 章节末结算落 alpha/beta / 思考 buffer。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt
+
+    import config as _cfg
+    import db as _db
+    import library as _lib
+    import notes as _notes
+    import trueread as _tr
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_tr = config.TRUE_READ_ENABLED
+    config.TRUE_READ_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
+    config.BOOKS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+
+        # 1) 上课作息：8 半节（上午 2 节 × 2 半节 + 下午 2 节 × 2 半节）
+        slots = _tr.half_periods(_dt(2026, 10, 9, 9, 0))
+        assert len(slots) == 8, f"应有 8 半节，实际 {len(slots)}"
+        assert slots[0]["start"].hour == 8 and slots[0]["start"].minute == 30, \
+            f"第一节应 8:30 开始：{slots[0]['start']}"
+        assert slots[0]["label"].startswith("上午第1节上"), slots[0]["label"]
+
+        # 2) 总上课时间 = 8 半节 × 40min = 320min
+        assert _tr.total_teaching_min() == 320, _tr.total_teaching_min()
+
+        # 3) txt 章节解析：第X章 正则切章
+        txt = ("第一章 起\n" + "正文甲" * 2000 + "\n"
+               "第二章 承\n" + "正文乙" * 2000 + "\n"
+               "第三章 转\n" + "正文丙" * 2000)
+        (_cfg.BOOKS_DIR / "测试书.txt").write_text(txt, encoding="utf-8")
+        chs = _lib.chapters("测试书.txt")
+        assert len(chs) >= 3, f"第X章 正则该切出 ≥3 章：{len(chs)}"
+        assert chs[0]["title"].startswith("第一章"), chs[0]["title"]
+
+        # 4) 当日任务：按整数章节圈定、受字数上限约束（宁少勿超）
+        plan = _tr.plan_day(_dt(2026, 10, 9, 10, 0))
+        assert plan["book_id"], "书架有书却没圈定任务"
+        assert plan["total_chars"] <= _cfg.READING_DAILY_CHARS, \
+            f"圈定字数超上限：{plan['total_chars']}"
+        assert plan["tps"] > 0, "tps 该是推导值"
+
+        # 5) 思考 buffer：append 边读边想的片段（now 传一致，避免跨天）
+        _now = _dt(2026, 10, 9, 10, 0)
+        assert _tr.append_thought("这段有点意思", _now) == 1
+        assert _tr.append_thought("又想到一个", _now) == 2
+        assert len(_tr.buffer(_now)) == 2
+
+        # 6) 读书笔记双库：alpha（短概述）挂 long_id → beta（完整转述）
+        a, b = _notes.add_pair("测试书.txt", "测试书", "第一章",
+                               "第一章讲了起", "这章说的是起，然后……", "测试书 / 第一章", 1200)
+        assert a > 0 and b > 0
+        row = _db.get_reading_note(a)
+        assert row["kind"] == "alpha" and row["long_id"] == b, f"alpha 应挂 long_id→beta：{row}"
+        beta = _db.get_reading_note(b)
+        assert beta["kind"] == "beta" and "这章说的是起" in beta["content"]
+
+        # 7) alpha 注入：最近必带（按累计字数窗口）
+        hint = _notes.prompt_hint()
+        assert "我最近读的书" in hint and "第一章" in hint, hint
+
+        # 8) 章节末结算（mock LLM 返回三行格式）
+        import llm as _llm
+        real_chat = _llm.chat
+        _llm.chat = lambda messages, temperature=0.7, thinking=False, **k: (
+            "短概述：第一章开了个头\n完整转述：这章讲的是起，然后承\n打动：是")
+        try:
+            _tr.append_thought("这段值得记", _now)
+            result = _tr.settle_chapter(_now)
+            assert result and result["moved"] is True, f"结算应产出笔记且打动：{result}"
+            assert result["alpha_id"] > 0 and result["beta_id"] > 0
+            assert _db.reading_note_count() >= 3, "结算应落新笔记"
+        finally:
+            _llm.chat = real_chat
+
+        # 9) 真读关闭 → 不注入、不追加思考
+        config.TRUE_READ_ENABLED = False
+        assert _tr.prompt_hint() == ""
+        assert _tr.append_thought("不该记") == 0
+        config.TRUE_READ_ENABLED = True
+
+        print("ok 阅读真读（上课作息 8 半节 + 章节圈定 + tps 推导 + 思考 buffer + 笔记双库 + 章节结算）")
+    finally:
+        config.TRUE_READ_ENABLED = saved_tr
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        config.BOOKS_DIR = Path(real_base) / "books"
+        _db.init()
+
+
+def test_unified_event_source():
+    """统一事件源（§5 拍板 #6）：用户消息进意识流 + 待办素材 id 打勾 + 承诺到点进意识流。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt
+
+    import config as _cfg
+    import db as _db
+    import stream as _stream
+    import todos as _todos
+    import work as _work
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_todos = config.TODOS_ENABLED
+    config.TODOS_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+
+        # 1) 待办素材 id 化：add 返回 id → mark_done_by_id 按 id 打勾
+        tid = _todos.add("读到雾都孤儿里的雾", source="reading")
+        assert tid > 0
+        assert _todos.mark_done_by_id(tid) == "读到雾都孤儿里的雾", "按 id 打勾应命中"
+        assert _todos.mark_done_by_id(tid) is None, "已打勾不该重复"
+        assert _todos.mark_done_by_id(9999) is None, "不存在的 id 返回 None"
+        assert len(_todos.pending()) == 0
+
+        # 2) 素材条目带 todo_id：take_shareable_item 返回 (text, todo_id)
+        tid2 = _todos.add("又想到一句", source="reading")
+        _db.set_kv("work_shareables", json.dumps(
+            [{"day": "2026-10-09", "seq": 1, "text": "又想到一句", "used": 0,
+              "todo_id": tid2}]))
+        text, got_id = _work.take_shareable_item()
+        assert text == "又想到一句" and got_id == tid2, (text, got_id)
+
+        # 3) 承诺到点 → 意识流注入条目（events 统一事件源）
+        import events as _ev
+        _db.set_kv("care_events", json.dumps([{
+            "what": "提醒睡觉",
+            "when": (_dt.now().strftime("%Y-%m-%d %H:%M")),
+            "kind": "提醒", "status": "pending",
+            "created_at": _dt.now().isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        # 用 -5min 的到点事件确保 _due 命中
+        _db.set_kv("care_events", json.dumps([{
+            "what": "提醒睡觉",
+            "when": (_dt.now().replace(microsecond=0)).strftime("%Y-%m-%d %H:%M"),
+            "kind": "提醒", "status": "pending",
+            "created_at": _dt.now().isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        calls = []
+        engine = types.SimpleNamespace(
+            care_remind=lambda ev, missed=False: (calls.append(ev) or True))
+        _ev.tick(engine)
+        assert len(calls) == 1
+        care_lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "care"]
+        assert any("提醒睡觉" in t for t in care_lines), \
+            f"承诺到点应往意识流注入条目：{care_lines}"
+
+        print("ok 统一事件源（用户消息进意识流 + 待办 id 打勾 + 承诺到点进意识流）")
+    finally:
+        config.TODOS_ENABLED = saved_todos
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -4205,4 +4429,7 @@ if __name__ == "__main__":
     test_consciousness_stream()
     test_session_context()
     test_todos()
+    test_lore()
+    test_trueread()
+    test_unified_event_source()
     print("\n全部通过")

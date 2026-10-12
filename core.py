@@ -91,6 +91,9 @@ class Engine:
             return 0
         self._flush_outbox()  # 你回来了：先把离开期间 TA 的留言重放给你
         mid = db.add_message("user", text, quote=quote)
+        # 统一事件源（§5 拍板 #6①）：用户消息作为独立事件进意识流——记法"XX说：…"。
+        # TA 的脑子里，别人说的话和 TA 自己的事一样，都是"今天发生的事"。
+        stream.append("user", f"{persona.user_name()}说：{text}")
         # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
         if guard.is_urgent(text):
             guard.open_urgent_window()
@@ -294,6 +297,7 @@ class Engine:
                     + f"【TA刚才说的】\n{' '.join(batch)}"}],
                 temperature=config.INNER_MONOLOGUE_TEMPERATURE,
                 max_tokens=config.INNER_MONOLOGUE_MAX_TOKENS,
+                thinking=False,   # 独白要采样多样性（temperature 生效），关思考
             )
         except llm.LLMUnavailable as e:
             print(f"[独白] 跳过（LLM 不可用：{e}）")
@@ -346,12 +350,16 @@ class Engine:
             final_text = msg.get("content") or ""
             if not tool_calls:
                 return final_text  # 不调工具：直接用这轮的文本
-            # 回填 assistant 的工具调用消息
-            messages.append({
+            # 回填 assistant 的工具调用消息。⚠️ 多轮 tools 必须连 reasoning_content 一起
+            # 回传（DeepSeek V4 Flash：否则工具调用质量下降、部分端点 400）。
+            assistant_msg = {
                 "role": "assistant",
                 "content": final_text,
                 "tool_calls": tool_calls,
-            })
+            }
+            if msg.get("reasoning_content"):
+                assistant_msg["reasoning_content"] = msg["reasoning_content"]
+            messages.append(assistant_msg)
             # 执行每个工具，结果作为 tool 消息回填给下一轮
             for tc in tool_calls:
                 fn = tc.get("function") or {}
@@ -390,7 +398,7 @@ class Engine:
                     "判断这段聊天是否已经自然结束（一方道别、说去忙/去睡、"
                     "对话收尾双方都不期待继续）。只回答一个字：是 或 否。")},
                 {"role": "user", "content": convo},
-            ], temperature=0.1)
+            ], temperature=0.1, thinking=False)   # 短回执（是/否）：关思考省 token
         except llm.LLMUnavailable:
             return False
         if ans.strip().startswith("是"):
@@ -464,7 +472,7 @@ class Engine:
         if reply is None:
             prompt = context.build_proactive_messages(state, scenario)
             try:
-                reply = llm.chat(prompt, temperature=1.0)
+                reply = llm.chat(prompt, temperature=1.0, thinking=False)
             except llm.LLMUnavailable as e:
                 print(f"[proactive:{scenario}] LLM 不可用：{e}")
                 return False
@@ -479,6 +487,19 @@ class Engine:
         # （如"热粥"+"《左传》"黏一起）。按换行拆开逐条发，像真人连发几条。
         for seg in (s.strip() for s in reply.split("\n") if s.strip()):
             self._send(seg, kind="proactive")
+        # §5 拍板 #6③：主动消息发出后，把携带的素材 id 按 id 打勾（废弃 6 字字面指纹）
+        if config.TODOS_ENABLED:
+            raw_id = db.get_kv("proactive_todo_id", "")
+            if raw_id and raw_id != "0":
+                try:
+                    todo_id = int(raw_id)
+                except ValueError:
+                    todo_id = 0
+                if todo_id:
+                    done = todos.mark_done_by_id(todo_id)
+                    if done:
+                        print(f"[待办] 打勾（id {todo_id}）：{done[:30]}")
+            db.set_kv("proactive_todo_id", "")
         return True
 
     # --- 初见阶段的冒泡机制：空闲 30-60 分钟没聊就冒个泡 ---
@@ -627,7 +648,7 @@ class Engine:
             reply = llm.chat([
                 {"role": "system", "content": persona.build_system_prompt(state)},
                 {"role": "user", "content": ask},
-            ], temperature=1.0)
+            ], temperature=1.0, thinking=False)
         except llm.LLMUnavailable as e:
             print(f"[care] 提醒生成失败：{e}")
             return False

@@ -198,6 +198,76 @@ def _strip_html(html: str) -> str:
     return text
 
 
+# txt 章节边界：优先"第X章"正则（含中文数字），fallback 按累计字数切（不按段数——
+# 对话密集一行一段会切碎）。词表/正则属"会扩充的匹配词"，但这里结构固定，就近维护。
+_CHAPTER_RE = re.compile(
+    r"^\s*(第\s*[0-9一二三四五六七八九十百千零两]+\s*[章回节卷部篇].*?)$", re.M)
+
+
+def _txt_chapters(title: str, text: str) -> list[dict]:
+    """把 txt 全文切成章节：优先"第X章"正则，切不出来按累计字数 fallback（4–6k 字）。
+
+    返回 [{title, text, char_count}]。空文本返回 []。
+    """
+    text = text or ""
+    if not text.strip():
+        return []
+    lines = text.splitlines()
+    marks: list[int] = []   # 每章起始行号
+    heads: list[str] = []
+    for i, ln in enumerate(lines):
+        if _CHAPTER_RE.match(ln.strip()):
+            marks.append(i)
+            heads.append(" ".join(ln.split()))
+    if len(marks) >= 2:
+        chapters = []
+        for k, start in enumerate(marks):
+            end = marks[k + 1] if k + 1 < len(marks) else len(lines)
+            body = "\n".join(lines[start:end])
+            chapters.append({"title": heads[k], "text": body,
+                             "char_count": len(re.sub(r"\s+", "", body))})
+        # 开头可能有章前内容（版权页/序），并进第一章
+        if marks and marks[0] > 0:
+            pre = "\n".join(lines[:marks[0]])
+            chapters[0]["text"] = pre + "\n" + chapters[0]["text"]
+            chapters[0]["char_count"] = len(re.sub(r"\s+", "", chapters[0]["text"]))
+        return chapters
+    # fallback：按累计字数切（宁少勿超，保持完整段落）
+    target = (config.READING_TXT_FALLBACK_MIN + config.READING_TXT_FALLBACK_MAX) // 2
+    chapters, buf, acc, idx = [], [], 0, 1
+    for ln in lines:
+        buf.append(ln)
+        if ln.strip():
+            acc += len(re.sub(r"\s+", "", ln))
+        if acc >= target:
+            body = "\n".join(buf)
+            chapters.append({"title": f"第 {idx} 章", "text": body,
+                             "char_count": len(re.sub(r"\s+", "", body))})
+            buf, acc, idx = [], 0, idx + 1
+    if buf:
+        body = "\n".join(buf)
+        chapters.append({"title": f"第 {idx} 章", "text": body,
+                         "char_count": len(re.sub(r"\s+", "", body))})
+    return chapters
+
+
+def chapters(book_id: str) -> list[dict]:
+    """取一本书的章节列表（真读 §3 用）：epub 走 spine（边界现成），txt 走正则/fallback。
+
+    返回 [{title, text, char_count}]（正序）。章节文本进缓存——当日按整数章节圈定时用。
+    """
+    path = config.BOOKS_DIR / book_id
+    if not path.is_file():
+        return []
+    parsed = _parsed(path)
+    if not parsed:
+        return []
+    if parsed.get("chapters"):
+        return parsed["chapters"]
+    return _txt_chapters(parsed.get("title", path.stem),
+                         parsed.get("_raw", "\n".join(parsed.get("passages", []))))
+
+
 def _parse_txt(path: Path) -> dict | None:
     """读 txt，自动试常见编码。"""
     for enc in ("utf-8", "gb18030", "gbk"):
@@ -209,7 +279,8 @@ def _parse_txt(path: Path) -> dict | None:
     else:
         return None
     passages = _split_passages(text)
-    return {"title": path.stem, "author": "", "passages": passages}
+    return {"title": path.stem, "author": "", "passages": passages,
+            "_raw": text, "_fmt": "txt"}
 
 
 def _parse_epub(path: Path) -> dict | None:
@@ -267,7 +338,8 @@ def _parse_epub(path: Path) -> dict | None:
                 alt = f"{base}/{cover_href}"
                 cover_path = alt if alt in z.namelist() else ""
         passages = []
-        for idref in spine:
+        chapters = []   # 真读（§3）：spine 条目 = 章节边界（每个 idref 一段正文）
+        for idx, idref in enumerate(spine, start=1):
             href = manifest.get(idref)
             if not href:
                 continue
@@ -276,9 +348,21 @@ def _parse_epub(path: Path) -> dict | None:
                 html = z.read(full).decode("utf-8", "ignore")
             except KeyError:
                 continue
-            passages.extend(_split_passages(_strip_html(html)))
+            text = _strip_html(html)
+            segs = _split_passages(text)
+            passages.extend(segs)
+            body = "".join(segs)
+            # 章节标题：优先 HTML 里的 <title>，没有就"第 N 章"（真读只要边界现成，
+            # 标题不准不影响读）
+            tm = re.search(r"<title[^>]*>([^<]+)</title>", html, re.I)
+            ctitle = " ".join((tm.group(1) if tm else "").split())
+            if not ctitle:
+                ctitle = f"第 {idx} 章"
+            chapters.append({"title": ctitle, "text": body,
+                             "char_count": len(re.sub(r"\s+", "", body))})
         return {"title": title or path.stem, "author": author, "passages": passages,
-                "subject": " ".join(subjects), "cover": cover_path}
+                "subject": " ".join(subjects), "cover": cover_path,
+                "chapters": chapters, "_fmt": "epub"}
     except (ET.ParseError, KeyError, OSError):
         return None
 

@@ -1,4 +1,17 @@
-"""DeepSeek 对话引擎。无 API key 时降级为 stub，保证本地可调。"""
+"""DeepSeek 对话引擎。无 API key 时降级为 stub，保证本地可调。
+
+v1.0（整体设计方案 §10）接入要点：
+- 模型标识符 pin `deepseek-flash`（旧名 `deepseek-v4-flash` 已被静默改路由，防再次
+  静默换模型破坏回归）。
+- 思考内容走 `reasoning_content` 字段，与正文 `content` 分开返回——阅读"思考即笔记"
+  依赖它（`chat_with_reasoning` 取两者）。
+- thinking 开启时 temperature / presence_penalty / frequency_penalty 被静默忽略、
+  top_p 只接受 0.95–1.0——所以 `thinking=True` 时不传这些采样参数，避免"以为生效其实没"。
+- 关思考走 `extra_body.chat_template_kwargs.enable_thinking=false`（打勾、状态写入等
+  短回执关思考省 token）。
+- 结构化输出（JSON）+ thinking 可能返回 `content: null`——要 JSON 的调用要么关 thinking，
+  要么放大 max_tokens；本模块在 `thinking=False` 时照常返回 content。
+"""
 import httpx
 
 import config
@@ -27,12 +40,23 @@ def _is_v4(model: str) -> bool:
 
 
 def _payload(messages: list[dict], temperature: float, max_tokens: int,
-             tools: list[dict] | None = None) -> dict:
+             tools: list[dict] | None = None,
+             thinking: bool | None = None) -> dict:
+    """拼请求体。
+
+    thinking：
+      None —— 不设 enable_thinking（跟模型默认走，保持旧行为）
+      True —— 显式开思考（阅读"思考即笔记"用）；此时**不传** temperature 等采样参数
+              （DeepSeek 会静默忽略它们，传了徒增"以为生效"的错觉）
+      False—— 显式关思考（JSON 结构化输出 / 短回执省 token 用）；此时 temperature 照常生效
+    """
     payload: dict = {
         "model": _current_model(),
         "messages": messages,
-        "temperature": temperature,
     }
+    if thinking is not True:
+        # 开思考时采样参数被静默忽略，只在关思考 / 未指定时传，避免误导
+        payload["temperature"] = temperature
     if max_tokens > 0:
         payload["max_tokens"] = max_tokens
     if tools:
@@ -40,6 +64,11 @@ def _payload(messages: list[dict], temperature: float, max_tokens: int,
     # effort 只在 V4 上发（默认 low：日常聊天要快和省，不是深度推理）
     if _is_v4(payload["model"]) and _current_effort() in ("low", "high", "max"):
         payload["effort"] = _current_effort()
+    if thinking is not None:
+        # 关/开思考开关（DeepSeek V4.1 Flash）：官方走 extra_body.chat_template_kwargs
+        payload["extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": bool(thinking)}
+        }
     return payload
 
 
@@ -72,6 +101,11 @@ def _log_usage(data: dict) -> None:
               f" 输出 {u.get('completion_tokens', '-')}")
     except Exception:
         pass
+
+
+def _message(data: dict) -> dict:
+    """从完整响应里抽出 message 对象（content + reasoning_content + tool_calls）。"""
+    return data["choices"][0]["message"]
 
 
 def current_config() -> dict:
@@ -125,38 +159,57 @@ def list_models() -> list[dict]:
         return []
 
 
-def chat(messages: list[dict], temperature: float | None = None,
-         max_tokens: int = 0) -> str:
-    """messages: OpenAI 格式 [{"role": ..., "content": ...}]，返回回复文本。
+def chat_with_reasoning(messages: list[dict], temperature: float | None = None,
+                        max_tokens: int = 0,
+                        thinking: bool | None = None) -> tuple[str, str]:
+    """返回 (正文, 思考过程)。阅读"思考即笔记"要拿 reasoning_content 就用这个。
 
-    temperature 不传时用全局 `config.CHAT_TEMPERATURE`（网页端「模型设置」可调）。
-    max_tokens > 0 时限制输出长度（给内心独白这种"很短的结构化输出"省 token 用）。"""
+    thinking 语义见 _payload：None=跟默认、True=开思考（采样参数失效）、
+    False=关思考（JSON/短回执）。"""
     if not config.DEEPSEEK_API_KEY:
-        return corpus.LLM_STUB
+        return corpus.LLM_STUB, ""
     temp = config.CHAT_TEMPERATURE if temperature is None else temperature
-    payload = _payload(messages, temp, max_tokens)
+    payload = _payload(messages, temp, max_tokens, thinking=thinking)
     try:
         data = _post(payload)
-        return data["choices"][0]["message"]["content"].strip()
+        msg = _message(data)
+        return (msg.get("content") or "").strip(), (msg.get("reasoning_content") or "")
     except (httpx.HTTPError, KeyError, IndexError) as e:
         raise LLMUnavailable(str(e)) from e
 
 
+def chat(messages: list[dict], temperature: float | None = None,
+         max_tokens: int = 0, thinking: bool | None = None) -> str:
+    """messages: OpenAI 格式 [{"role": ..., "content": ...}]，返回回复文本。
+
+    temperature 不传时用全局 `config.CHAT_TEMPERATURE`（网页端「模型设置」可调）。
+    max_tokens > 0 时限制输出长度（给内心独白这种"很短的结构化输出"省 token 用）。
+    thinking：None=跟默认 / True=开思考 / False=关思考（见 _payload）。"""
+    content, _ = chat_with_reasoning(messages, temperature, max_tokens, thinking)
+    return content
+
+
 def chat_with_tools(messages: list[dict], tools: list[dict],
-                    temperature: float | None = None) -> dict:
+                    temperature: float | None = None,
+                    thinking: bool | None = None) -> dict:
     """带工具定义调用（function calling）。返回 OpenAI 格式的 message：
-    {"content": str, "tool_calls": [{"id", "type", "function": {"name", "arguments"}}]}。
+    {"content": str, "reasoning_content": str, "tool_calls": [{"id","type","function":{...}}]}。
+
+    ⚠️ 多轮 tools：调用方把 assistant 的 tool_calls 消息回填进 messages 时，**必须连
+    reasoning_content 一起带上**（否则工具调用质量下降、部分端点直接 400）——所以这里
+    把 reasoning_content 一并返回，供上层透传。
 
     无 API key 时降级为普通 stub 回复（tool_calls 空），保证本地可调。"""
     if not config.DEEPSEEK_API_KEY:
-        return {"content": corpus.LLM_STUB, "tool_calls": []}
+        return {"content": corpus.LLM_STUB, "reasoning_content": "", "tool_calls": []}
     temp = config.CHAT_TEMPERATURE if temperature is None else temperature
-    payload = _payload(messages, temp, 0, tools)
+    payload = _payload(messages, temp, 0, tools, thinking=thinking)
     try:
         data = _post(payload)
-        msg = data["choices"][0]["message"]
+        msg = _message(data)
         return {
             "content": (msg.get("content") or "").strip(),
+            "reasoning_content": (msg.get("reasoning_content") or ""),
             "tool_calls": msg.get("tool_calls") or [],
         }
     except (httpx.HTTPError, KeyError, IndexError) as e:

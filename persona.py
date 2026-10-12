@@ -296,9 +296,9 @@ def user_name() -> str:
     return config.USER_NAME
 
 STATE_HINTS = {
-    "AWAKE": "你现在醒着，状态正常。",
-    "SLEEPY": "你快睡了，有点困，回复可以带一点困意。",  # 仅 stay_up（晚上撑着）时用，见 _sleepy_hint
-    "SLEEPING": "你在睡觉。",  # SLEEPING 状态不调 LLM，此条仅兜底
+    "AWAKE": "我现在醒着，状态正常。",
+    "SLEEPY": "我快睡了，有点困，回复可以带一点困意。",  # 仅 stay_up（晚上撑着）时用，见 _sleepy_hint
+    "SLEEPING": "我在睡觉。",  # SLEEPING 状态不调 LLM，此条仅兜底
 }
 
 
@@ -308,10 +308,10 @@ def _sleepy_hint() -> str:
     import db
     reason = db.get_kv("sleepy_reason")
     if reason == "lie_in":
-        return "你还没完全睡醒，赖床赖到一半，脑子迷迷糊糊的。"
+        return "我还没完全睡醒，赖床赖到一半，脑子迷迷糊糊的。"
     if reason == "stay_up":
         return STATE_HINTS["SLEEPY"]
-    return ("你还没完全睡醒，脑子迷迷糊糊的。" if datetime.now().hour < 14
+    return ("我还没完全睡醒，脑子迷迷糊糊的。" if datetime.now().hour < 14
             else STATE_HINTS["SLEEPY"])
 
 PROACTIVE_SCENARIOS = {
@@ -408,6 +408,12 @@ def static_system_prompt() -> str:
     kp = kernel_prompt("compact")
     if kp:
         parts.append(kp)
+    # 世界观（§1 架空设定）：来历骨架 + canon 设定集（防自相矛盾）——身份的一部分，
+    # 与人格内核一样属于缓存稳定前缀（只有 canon 追加时才变）。
+    import lore
+    lhint = lore.prompt_hint()
+    if lhint:
+        parts.append(lhint)
     profile = _read_profile()
     if profile:
         parts.append(f"【你已经知道的关于TA的事】\n{profile}")

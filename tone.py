@@ -16,12 +16,12 @@ import cost
 import mood
 import work
 
-# 从属的相处姿势：由打断成本三态推出，但措辞挂在主轨之下（"对方找你时你怎么接"）。
+# 从属的相处姿势：由打断成本三态推出，但措辞挂在主轨之下（"对方找我时我怎么接"）。
 # 注意只描述自己的状态、不归因（反愧疚红线，见 corpus.COST_BLAME）。
 _COST_STANCE = {
-    "welcomed": "对方找你时你正好接得住，可以自然地多聊两句。",
-    "tolerated": "对方找你，你正常回应就行，不用刻意。",
-    "costly": "对方找你时你正忙/有点累，回应可以短一点、慢一点（只说自己的状态，别提对方）。",
+    "welcomed": "对方找我时我正好接得住，可以自然地多聊两句。",
+    "tolerated": "对方找我，我正常回应就行，不用刻意。",
+    "costly": "对方找我时我正忙/有点累，回应可以短一点、慢一点（只说自己的状态，别提对方）。",
 }
 
 
@@ -49,11 +49,11 @@ def voice_hint(now: datetime | None = None) -> str:
     main_hint = mood.MOOD_HINTS.get(d["main"], "")
     stance = _COST_STANCE.get(d["cost"], "")
     lines = [
-        f"【此刻的我】你现在的心情是「{d['main']}」——这是这一轮你说话语气的主轨，"
+        f"【此刻的我】我现在的心情是「{d['main']}」——这是这一轮我说话语气的主轨，"
         f"后面所有语气都以它为准。",
     ]
     if main_hint:
         lines.append(main_hint)
     if stance:
-        lines.append(f"（对方这时找你，你的松紧度）{stance}")
+        lines.append(f"（对方这时找我，我的松紧度）{stance}")
     return "\n".join(lines)

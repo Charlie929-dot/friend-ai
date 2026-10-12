@@ -35,12 +35,12 @@ PHASE_LABELS = {
 
 # 注入 system prompt 的话：让它知道自己手头正在做什么（一视同仁 + 反愧疚：只说自己的状态）
 PHASE_HINTS = {
-    "idle": "你今天还没开始忙自己的事。",
-    "working": "你正在忙自己的事（今天第 {done}/{quota} 件）。手头有活，回复可以短一点、慢一点。",
-    "flow": "你刚忙到进入状态，这会儿脑子全在手头的事上，回复会短一些、慢一些。"
+    "idle": "我今天还没开始忙自己的事。",
+    "working": "我正在忙自己的事（今天第 {done}/{quota} 件）。手头有活，回复可以短一点、慢一点。",
+    "flow": "我刚忙到进入状态，这会儿脑子全在手头的事上，回复会短一些、慢一些。"
             "只说自己的状态，别提对方，别抱怨。",
-    "break": "你刚忙完一件，正歇会儿（今天第 {done}/{quota} 件）。这会儿松弛，可以多聊两句。",
-    "off": "你今天的事都忙完了，现在是自己的时间。",
+    "break": "我刚忙完一件，正歇会儿（今天第 {done}/{quota} 件）。这会儿松弛，可以多聊两句。",
+    "off": "我今天的事都忙完了，现在是自己的时间。",
     "sleep": "",
 }
 
@@ -174,11 +174,15 @@ def _settle(state: dict, now: datetime) -> bool:
         # 工作=读书：这个单元读 N 段（优先用户导入的真书，没书回退内置书摘），读完产出"摘抄+读后感"素材
         article = None
         if config.READING_ENABLED:
-            import library
-            article = library.next_passage(config.WORK_READ_PER_UNIT)  # 用户书库优先
-            if article is None:
-                import reading
-                article = reading.next_article()      # 没导入书才读内置书摘
+            if config.TRUE_READ_ENABLED:
+                # 真读（§3）：按章节读，章节末结算产出读书笔记 alpha/beta；不打动就不摘素材
+                _trueread_unit(state["day"], state["settled"] + 1, now)
+            else:
+                import library
+                article = library.next_passage(config.WORK_READ_PER_UNIT)  # 用户书库优先
+                if article is None:
+                    import reading
+                    article = reading.next_article()      # 没导入书才读内置书摘
         # 兴趣修炼（S4）：阅读源——读完一篇，它的 genre 就是一次兴趣信号（确定性最强，
         # 不经过词表匹配）。读历史读得多 → 历史偏好慢慢长出来、累计转正。
         if article and article.get("genre"):
@@ -197,12 +201,85 @@ def _settle(state: dict, now: datetime) -> bool:
     return changed
 
 
+def _trueread_unit(day: str, seq: int, now: datetime) -> None:
+    """真读（§3）：一个工作单元读一个半节的窗口。
+
+    - 视线窗口召回（§5 第二批）：以当前阅读窗口做向量查询，召回相关历史事件。
+    - 章节末结算（§3.3）：读完一章 → 独立 LLM 调用（思考 buffer + 章节 → 想法+总结）
+      → 读书笔记 alpha/beta；打动才进素材池 / 待办 / 今日素材。
+    - 结算在后台线程跑（要调 LLM），不阻塞 HUD。与 `_produce_shareable` 同款约定：
+      素材产出受 WORK_SHAREABLE_ENABLED 门控（测试里关掉它就不会起 LLM 线程）。
+    """
+    import trueread
+    try:
+        ch = trueread.current_chapter(now)
+        if ch:
+            # 视线窗口召回：窗口短 → embedding 锐利 → 边读边想起（联想增强，漏召回不崩）
+            _sight_recall(ch)
+    except Exception:
+        pass
+    if config.WORK_SHAREABLE_ENABLED:
+        threading.Thread(target=_settle_chapter_async, args=(now,), daemon=True).start()
+
+
+def _sight_recall(ch: dict) -> None:
+    """视线窗口召回：以当前阅读窗口做向量查询，召回相关历史事件（统一向量索引）。"""
+    try:
+        import vecindex
+        window = (ch.get("text") or "")[:200]
+        events = vecindex.recall(window, top_k=3)
+        if events:
+            stream.append("read", f"读到这，我想起：{events[0]['text'][:60]}", datetime.now())
+    except Exception:
+        pass
+
+
+def _settle_chapter_async(now: datetime) -> None:
+    """后台线程：章节末结算（思考 buffer + 章节 → 读书笔记 alpha/beta）。"""
+    import trueread
+    try:
+        result = trueread.settle_chapter(now)
+        if not result:
+            return
+        if result.get("moved"):
+            # 打动 → 进素材池（供 C 模块主动分享）+ 待办（想说还没说的事）
+            _note_shareable_text(result.get("shareable_text", ""))
+    except Exception as e:
+        print(f"[真读] 章节结算失败：{e}")
+
+
+def _note_shareable_text(text: str) -> None:
+    """把打动产生的分享素材落进素材池 + 今日笔记 + 待办（不额外调 LLM）。"""
+    if not text:
+        return
+    todo_id = 0
+    if config.TODOS_ENABLED:
+        import todos
+        todo_id = todos.add(text, source="reading")
+    items = _shareables()
+    items.append({"day": datetime.now().strftime("%Y-%m-%d"), "seq": 0,
+                  "text": text, "used": 0, "todo_id": todo_id})
+    db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
+    if config.TODAY_NOTES_ENABLED:
+        db.add_today_note("今天读到一句有触动的话", text)
+
+
+# 分享质量三选一（§6）：每次分享至少命中一条——①启发性/思辨性 ②娱乐性/趣味性
+# ③相关性（自己或用户）。约束：从刚读到的具体内容出发、锚点必须具体；**禁止强行
+# 结合生活**；"相关性（自己）"只允许关联意识流里的真实事件（读过的书/聊过的话），
+# 架空身世按节奏控制输出、不当强行关联素材。
+_SHARE_QUALITY = (
+    "（分享质量：下面这句至少要命中一条——①有启发性/思辨性，②有意思/有趣，"
+    "③跟你或TA有关。锚点要具体：从刚读到的具体句子、具体情节出发，别泛泛而谈。"
+    "别为了凑'相关'强行扯到生活上；扯到你自己时，只说你意识流里真实发生过的事，"
+    "别编。）")
+
 _SHARE_PROMPT = (
     "（内心活动，不用回复这句话）你刚忙完今天第 {seq} 件自己的事。"
     "用一句话说一件你刚才手头遇到或想到的、值得一说的小事——"
     "可以是一个发现、一个小麻烦、一个念头、一件好笑的事。"
     "要求：第一人称、口语、不超过 30 字、不要提对方、"
-    "不要写成'我想跟你说'、不要出现'工作'这个词。")
+    "不要写成'我想跟你说'、不要出现'工作'这个词。" + _SHARE_QUALITY)
 
 # 工作=读书：每读完一篇，产出"摘抄金句 + 人格化读后感"（quote 是预摘的真实金句，
 # 读后感由 LLM 按它的人格生成——爱吐槽就吐槽、爱感慨就感慨）。
@@ -212,7 +289,7 @@ _READING_PROMPT = (
     "补一句你的读后感或联想，带你的性格（爱吐槽就吐槽、爱感慨就感慨），"
     "可以自然地带出上面这句摘抄。\n"
     "要求：第一人称、口语、合起来一两句话、别写成'我想跟你分享'、"
-    "别太书面、不要出现'工作'这个词。")
+    "别太书面、不要出现'工作'这个词。" + _SHARE_QUALITY)
 
 _generating = False   # 有素材正在生成（同一时刻只排一条，见 _produce_shareable）
 
@@ -232,22 +309,27 @@ def _gen_shareable(day: str, seq: int, article: dict | None = None) -> str:
         {"role": "user", "content": user_content},
     ]
     try:
-        text = llm.chat(prompt, temperature=1.0).strip()
+        # thinking 开启时 temperature 会被静默忽略（DeepSeek Flash），这里要的是
+        # "口语、随机一点"的读后感，关思考让 temperature=1.0 真正生效。
+        text = llm.chat(prompt, temperature=1.0, thinking=False).strip()
     except llm.LLMUnavailable:
         return ""
     finally:
         _generating = False
     if not text or text == corpus.LLM_STUB:
         return ""                      # 没配 key / 拿不到内容就不硬凑
-    items = _shareables()
-    items.append({"day": day, "seq": seq, "text": text, "used": 0})
-    db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
-    _note_today(article, seq, text)   # 顺手进 B 库：今天读到的东西，当天能说得出细节
     # 待办队列（v0.80）：读到有感触的句子 = 一件"想说还没说的事"，入队等它自己聊。
     # 不进队的话，这条素材只能靠主动消息撞运气，聊天时永远想不起来（实测 #42 #1）。
+    # §5 拍板 #6③：待办打勾升级为"素材 id 匹配"——这里把 todo id 记到素材条目上，
+    # 主动消息发出后按 id 打勾（不再事后用 6 字字面指纹猜）。
+    todo_id = 0
     if config.TODOS_ENABLED:
         import todos
-        todos.add(text, source="reading")
+        todo_id = todos.add(text, source="reading")
+    items = _shareables()
+    items.append({"day": day, "seq": seq, "text": text, "used": 0, "todo_id": todo_id})
+    db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
+    _note_today(article, seq, text)   # 顺手进 B 库：今天读到的东西，当天能说得出细节
     return text
 
 
@@ -312,13 +394,22 @@ def _shareables() -> list[dict]:
 
 def take_shareable() -> str:
     """取一条还没用过的素材（最早的优先），取到就标记用过。供 C 模块主动分享当内容源。"""
+    text, _ = take_shareable_item()
+    return text
+
+
+def take_shareable_item() -> tuple[str, int]:
+    """取一条还没用过的素材，返回 (text, todo_id)。取到就标记用过。
+
+    §5 拍板 #6③：主动消息生成时携带素材 id（todo_id），消息发出后按 id 打勾——
+    这里把 todo_id 一并交出，供主动消息路径回填打勾。"""
     items = _shareables()
     for x in items:
         if not x.get("used"):
             x["used"] = 1
             db.set_kv(_SHARE_KEY, json.dumps(items, ensure_ascii=False))
-            return x["text"]
-    return ""
+            return x["text"], int(x.get("todo_id") or 0)
+    return "", 0
 
 
 # --- 当前状态 ---
@@ -443,14 +534,23 @@ def prompt_hint(now: datetime | None = None) -> str:
 
 def _current_reading() -> str:
     """当前正在读什么（一句话，给 prompt 注入用）。
-    优先用户书库（真书），没导书退回内置书摘；都拿不到返回空串。"""
+    真读优先（章节级，最准）；否则用户书库（真书）；再退回内置书摘。"""
+    if config.TRUE_READ_ENABLED:
+        try:
+            import trueread
+            ch = trueread.current_chapter()
+            if ch:
+                return (f"我在读《{ch['book_title']}》的「{ch['title']}」"
+                        f"（今天第 {ch['idx'] + 1}/{ch['total']} 章）")
+        except Exception:
+            pass
     try:
         import library
         prog = library.progress()
         if prog and prog.get("book_id"):
             for b in library.books():
                 if b.get("id") == prog["book_id"]:
-                    return (f"你在读《{b['title']}》（{b.get('author', '')}），"
+                    return (f"我在读《{b['title']}》（{b.get('author', '')}），"
                             f"已经读到第 {prog.get('idx', 0) + 1} 段")
     except Exception:
         pass
@@ -458,7 +558,7 @@ def _current_reading() -> str:
         import reading
         a = reading.current_article()
         if a:
-            return f"你在读{a.get('source', '')}的《{a['title']}》"
+            return f"我在读{a.get('source', '')}的《{a['title']}》"
     except Exception:
         pass
     return ""

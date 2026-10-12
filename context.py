@@ -94,8 +94,8 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
         messages.append({"role": "system", "content": thint})
     if inbox:
         messages.append({"role": "system", "content": (
-            "【你刚上线】你刚才在忙自己的事（或睡着了），没看手机。"
-            "现在看到 TA 在你不在的时候发来的话，自然地回应一下——"
+            "【你刚上线】我刚才在忙自己的事（或睡着了），没看手机。"
+            "现在看到 TA 在我不在的时候发来的话，自然地回应一下——"
             "可以顺口带一句刚在忙/刚醒，然后正经回 TA 说的内容。")})
     # 紧急通道（打断成本的安全阀）：识别到急事 → 手头的活先放下，简短回应、先听TA说
     import guard
@@ -131,8 +131,14 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
                 body = body[:config.TODAY_NOTES_CHARS] + "…"
             lines.append(f"- {n['summary']}：{body}")
         messages.append({"role": "system",
-                         "content": f"【你今天做过的事】（{memory._TODAY_NOTE_HINT}，"
+                         "content": f"【我今天做过的事】（{memory._TODAY_NOTE_HINT}，"
                                     f"细节过了今天就淡了）\n" + "\n".join(lines)})
+    # 读书笔记（§4 alpha 库）：最近章节按累计字数窗口必带（读得近的靠后）
+    if config.TRUE_READ_ENABLED:
+        import notes as _notes
+        nhint = _notes.prompt_hint()
+        if nhint:
+            messages.append({"role": "system", "content": nhint})
     combined = " ".join(batch)
     if combined:
         # 追问细节（"详细讲讲/完整说说"）时展开命中的长记忆全文
@@ -187,12 +193,17 @@ def _inject_random_topic(prompt: list[dict]) -> None:
     兴趣修炼（S4）：转正的新偏好也是话题弹药——TA 最近喜欢上的东西，比旧记忆更鲜活。"""
     if random.random() < 0.5:
         import work
-        mat = work.take_shareable()
+        mat, todo_id = work.take_shareable_item()
         if mat:
+            # §5 拍板 #6③：携带素材 id（todo_id），消息发出后按 id 打勾（不再字面指纹）。
+            # 用 kv 暂存，供 core._proactive 发送后回填打勾。
+            import db
+            db.set_kv("proactive_todo_id", str(todo_id or 0))
             prompt[-1]["content"] += (
                 f"\n（你刚忙完手头的事，脑子里还留着这么一句："
                 f"「{mat}」。可以自然跟TA聊起它——比如提一句你最近在读什么书、"
-                f"读到哪句挺有感觉。想聊别的也行。）")
+                f"读到哪句挺有感觉。想聊别的也行。）"
+                f"\n（分享质量：聊这个要落在具体内容上，别泛泛、别硬扯生活。）")
             return
     import interests
     topic = interests.random_promoted()

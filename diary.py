@@ -92,7 +92,7 @@ def daily_review(force: bool = False) -> str:
         {"role": "system", "content": REVIEW_PROMPT.format(name=name,
                                                            user_name=persona.user_name())},
         {"role": "user", "content": user_msg},
-    ], temperature=0.7)
+    ], temperature=0.7, thinking=False)   # 结构化 JSON 输出：关思考防 content:null
     data = _parse_json_object(raw)
     reflection = str(data.get("reflection", "")).strip()
     diary = str(data.get("diary", "")).strip()

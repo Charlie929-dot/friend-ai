@@ -109,6 +109,13 @@ def _fire_due(engine, missed: bool) -> None:
             continue
         if engine.care_remind(ev, missed=missed):
             _set_status(ev, "done")
+            # 统一事件源（§5 拍板 #6④）：承诺到点 = 一件"发生在我身上的事"，
+            # 往意识流注入条目，与待办/用户消息同一机制、无需单独逻辑。
+            try:
+                import stream
+                stream.append("care", f"到点了，我答应过要提醒TA：{ev.get('what', '')}")
+            except Exception:
+                pass
         # 生成失败（LLM 不可用 / 熔断）保持 pending，下次再试
 
 

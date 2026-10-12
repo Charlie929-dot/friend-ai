@@ -107,6 +107,24 @@ def _hit(text: str, said: str) -> bool:
     return t[:n] in s or t[len(t) // 2:len(t) // 2 + n] in s
 
 
+def mark_done_by_id(todo_id: int, now: datetime | None = None) -> str | None:
+    """按素材 id 打勾（§5 拍板 #6③）：主动消息生成时携带素材 id，发出后按 id 打勾，
+    不做文本指纹。返回被打勾条目的文本；没找到 / 已打勾返回 None。"""
+    todo_id = int(todo_id or 0)
+    if not todo_id:
+        return None
+    items = _load()
+    for x in items:
+        if int(x.get("id") or 0) == todo_id and not x.get("done"):
+            x["done"] = 1
+            x["done_ts"] = (now or datetime.now()).isoformat(timespec="seconds")
+            _save(items)
+            import stream
+            stream.append("todo", f"我把那件事跟{persona_name()}说了：{x['text']}", now)
+            return x["text"]
+    return None
+
+
 def mark_done(said: str, now: datetime | None = None) -> list[str]:
     """TA 刚说完一段话：把说到的待办打勾。返回被打勾的条目文本列表。
 
@@ -148,7 +166,7 @@ def prompt_hint() -> str:
     pend = [x for x in items if not x.get("done")]
     if not pend:
         return ""
-    lines = ["【想说还没说的】下面是你脑子里攒着、还没跟TA聊过的事。"
+    lines = ["【想说还没说的】下面是我脑子里攒着、还没跟TA聊过的事。"
              "想聊就从这里挑一件自然地聊，别硬塞，也别一次全倒出来："]
     for x in pend:
         lines.append(f"- {x['text']}")

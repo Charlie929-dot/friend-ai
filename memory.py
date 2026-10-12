@@ -208,7 +208,7 @@ def _extract() -> None:
     raw = llm.chat([
         {"role": "system", "content": _extract_prompt()},
         {"role": "user", "content": user_msg},
-    ], temperature=0.2)
+    ], temperature=0.2, thinking=False)   # 结构化 JSON 输出：关思考防 content:null
     items = _parse_json_array(raw)
     for it in items:
         _apply(it, assistant_tail, evidence=convo)
@@ -504,7 +504,7 @@ def backfill_history(batch: int = 16, progress=print) -> int:
         raw = llm.chat([
             {"role": "system", "content": _extract_prompt()},
             {"role": "user", "content": user_msg},
-        ], temperature=0.2)
+        ], temperature=0.2, thinking=False)   # 结构化 JSON 输出：关思考防 content:null
         for it in _parse_json_array(raw):
             if _apply(it, assistant_tail, evidence=convo):
                 added += 1
@@ -806,7 +806,7 @@ def run_memory_tool(name: str, args: dict) -> str:
 # 用户要的「一天所有信息交流都进记忆，阅读内容存 B 库并注入上下文，写日记后从
 # 上下文清除但记忆保留」：注入的筛选条件就是"创建于今天"——跨天自动不再注入，
 # 而 B 库记录本身保留。写入点在 work._gen_shareable（不额外调 LLM）。
-_TODAY_NOTE_HINT = "这是你今天自己做过/读到的事，细节只有今天还记得清楚"
+_TODAY_NOTE_HINT = "这是我自己今天做过/读到的事，细节只有今天还记得清楚"
 
 
 def today_notes(day: str | None = None) -> list[dict]:
@@ -873,7 +873,7 @@ def _compress_batch(items: list[dict]) -> dict[int, str]:
             {"role": "system", "content": persona.core_identity_prompt()},
             {"role": "user", "content": _COMPRESS_PROMPT.format(max_chars=max_chars,
                                                                 items=listing)},
-        ], temperature=0.2)
+        ], temperature=0.2, thinking=False)   # 结构化 JSON 输出：关思考防 content:null
     except llm.LLMUnavailable as e:
         print(f"[memory] 淡忘跳过（LLM 不可用）：{e}")
         return {}

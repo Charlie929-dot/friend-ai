@@ -173,7 +173,7 @@ def prompt_hint(query: str = "") -> str:
                  "self_mistake": "我出过的糗", "self_topic": "我一直想聊的",
                  "self_relation": "我对TA", "self_state": "我上次的状态"}.get(kind, "我记得")
         lines.append(f"- 【{label}】{m['content']}")
-    head = ("【关于我自己的记忆】这些是你自己说过、做过的事；别前后矛盾，"
+    head = ("【关于我自己的记忆】这些是我自己说过、做过的事；别前后矛盾，"
             "立场真的变了要承认自己变了，而不是假装从来没说过另一句话。\n")
     return head + "\n".join(lines)
 
@@ -257,7 +257,7 @@ def review(convo: str, stream_text: str = "") -> str:
                 old_state=json.dumps(old_state, ensure_ascii=False),
                 stream=(stream_text or "").strip() or "（今天没有特别记下的时间线）")},
             {"role": "user", "content": "开始回顾你自己今天的表现。"},
-        ], temperature=0.6)
+        ], temperature=0.6, thinking=False)   # 结构化 JSON 输出：关思考防 content:null
     except llm.LLMUnavailable as e:
         return f"自我复盘跳过（LLM 不可用：{e}）"
 
