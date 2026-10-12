@@ -40,12 +40,49 @@ def append(kind: str, text: str, now: datetime | None = None) -> int:
     text = (text or "").strip()
     if not text:
         return 0
-    return db.add_stream(kind, text, _life_day_str(now))
+    return db.add_stream(kind, text, _life_day_str(now), now)
 
 
 def recent(limit: int | None = None, day: str | None = None) -> list[dict]:
     """最近 N 条意识流（新的在前）。"""
     return db.recent_stream(limit or config.CONSCIOUS_STREAM_RECENT, day)
+
+
+def day_rows(now: datetime | None = None, limit: int | None = None) -> list[dict]:
+    """今天（生活日）起床 → 现在的完整意识流，正序。注入与睡前浓缩都读它。
+
+    为什么按生活日取而不是"最近 N 条"：生活日的边界就是起床，和会话边界一致——
+    睡前浓缩进 self_* 后清空、次日起床重开，所以这条轴天然就是"起床到现在"。
+    """
+    rows = db.stream_for_day(_life_day_str(now))
+    n = limit or config.CONSCIOUS_STREAM_RECENT
+    if n and len(rows) > n:
+        rows = rows[-n:]
+    return rows
+
+
+def once(key: str, now: datetime | None = None) -> bool:
+    """某个事件今天是否已经记过。True = 还没记过（现在可以记），并立即标记。
+
+    相位/时段类事件（开工、午休、读到哪）必须去重——实测"忙完第 6 件"被写了两遍。
+    key 按生活日隔离，新的一天自动重置。"""
+    k = f"stream_once:{_life_day_str(now)}:{key}"
+    if db.get_kv(k):
+        return False
+    db.set_kv(k, "1")
+    return True
+
+
+def note_phase(phase: str, text: str, now: datetime | None = None) -> int:
+    """相位事件：只在相位真的变了才记一条（歇会儿 / 收工 …）。
+
+    和 once() 的区别：相位会来回切（忙 → 歇 → 忙 → 歇），每一次切换都是真事件，
+    要各记一条；同一个相位被反复问到时才不该刷屏。"""
+    key = "stream_last_phase"
+    if db.get_kv(key) == phase:
+        return 0
+    db.set_kv(key, phase)
+    return append(phase, text, now)
 
 
 def status_line(now: datetime | None = None) -> dict:
@@ -68,28 +105,34 @@ def status_line(now: datetime | None = None) -> dict:
 
 
 def prompt_hint(now: datetime | None = None) -> str:
-    """每轮注入的【我的意识流】块：此刻的我（含 money/energy/mood）+ 最近几条流。
+    """每轮注入的【我的意识流】块：从起床到现在的完整时间轴，全文不截断。
 
-    只补 work.prompt_hint 缺的部分（攒了多少/精力/心情）——phase 和"正在读什么"
-    仍由 work.prompt_hint 注入（收敛是第二步的事），这里不重复。睡着/关闭返回空串。
+    v0.80 重写（实测 #42）：原来只给 TA 看最后 4 条、每条再截 60 字——当天存了 54 条，
+    它却只知道自己五分钟前在干嘛。现在整条轴全量全文，「此刻的我」就是轴的最后一行
+    （它描述的就是这个时刻的我，不是另起一块）。
+
+    注入位置在静态 system 之后、所有动态注入之前：轴的历史部分 append-only、永不改写，
+    与静态 system 一起构成**缓存稳定前缀**——这是"全量读"能便宜的前提。
+    睡着 / 关工作系统返回空串（没有"自己的日子"就无从谈意识）。
     """
     if not config.CONSCIOUS_STREAM_ENABLED:
         return ""
+    now = now or datetime.now()
     s = status_line(now)
     if not s:
         return ""
     lines = [
-        "【我的意识流】你脑子里有一条持续更新的自我叙事——此刻的你，心里有数：",
-        f"- 攒了多少：{s['money']} 块（这是你自己挣的，你清楚自己有多少）",
-        f"- 精力还剩：{s['energy']}",
-        f"- 心情：{s['mood']}",
+        "【我的意识流】你脑子里有一条持续更新的自我叙事——"
+        "下面是你今天从起床到现在，身上发生过的事，按时间先后一条条排着。",
+        "（这是你自己的一天。上面有的你就知道，上面没有的就别当成正在发生——"
+        "别编你在做的事。）",
     ]
-    rows = recent()
-    if rows:
-        lines.append("")
-        lines.append("最近发生在你身上的事（你自己的时间线，从早到晚）：")
-        for r in reversed(rows):  # 正序展示，像一条在流动的时间线
-            lines.append(f"- {_hhmm(r)} {_line_text(r)}")
+    for r in day_rows(now):
+        hhmm = _hhmm(r)
+        lines.append(f"{hhmm} {_line_text(r)}" if hhmm else _line_text(r))
+    # 「此刻的我」= 这条轴的最后一行：它描述的就是现在这个时刻的我
+    lines.append(f"{now:%H:%M} 此刻的我：{s['phase']}；攒了多少：{s['money']} 块；"
+                 f"精力还剩：{s['energy']}；心情：{s['mood']}")
     return "\n".join(lines)
 
 
@@ -101,8 +144,11 @@ def _hhmm(r: dict) -> str:
 
 
 def _line_text(r: dict) -> str:
-    body = (r.get("text") or "").strip()
-    return body[:config.CONSCIOUS_STREAM_LINE_CHARS]
+    # 独白是多行的：压成一行，保持"一行一个时刻"的时间轴形状
+    body = " ".join((r.get("text") or "").split())
+    if config.CONSCIOUS_STREAM_LINE_CHARS > 0:
+        return body[:config.CONSCIOUS_STREAM_LINE_CHARS]
+    return body
 
 
 def render_day(day: str | None = None) -> str:

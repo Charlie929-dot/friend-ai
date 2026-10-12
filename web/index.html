@@ -299,6 +299,8 @@
   .btn:hover { background: var(--accent-soft); border-color: var(--accent); }
   .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.warn { color: #d98a8a; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.06); }
   .btnrow { display: flex; gap: 8px; margin-top: 10px; }
   .btnrow .btn { flex: 1; }
   .panel { background: var(--surface-2); border-radius: 12px; padding: 11px; margin-top: 12px; max-height: 260px; overflow: auto; }
@@ -505,6 +507,23 @@
   .bk-reading { color: var(--accent); font-weight: 600; }
   .bk-foot { flex: 0 0 auto; display: flex; gap: 8px; align-items: center;
     padding: 10px 16px; border-top: 1px solid var(--line); }
+
+  /* ===== 模型设置（v0.80：账户菜单里自主配置，全局，写 .env 热生效）===== */
+  .lm-modal { position: fixed; inset: 0; z-index: 90; display: none; }
+  .lm-modal.open { display: block; }
+  .lm-dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: min(420px, 92vw); background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
+    overflow: hidden; animation: bkPop .22s cubic-bezier(.18,.9,.28,1.2); }
+  .lm-body { padding: 16px 16px 4px; display: grid; gap: 13px; }
+  .lm-row label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; }
+  .lm-row select, .lm-row input { width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--surface-2); color: var(--ink); font-size: 12.5px;
+    outline: 0; }
+  .lm-row select:focus, .lm-row input:focus { border-color: var(--accent); }
+  .lm-tip { font-size: 10.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .lm-foot { display: flex; gap: 8px; align-items: center; padding: 14px 16px; }
+  .lm-msg { font-size: 11.5px; color: var(--accent); flex: 1; min-width: 0; }
   @media (max-width: 640px) {
     .bk-row { flex-wrap: wrap; }
     .bk-name { flex-basis: 100%; }
@@ -546,6 +565,7 @@
             <button class="skin-opt" data-skin="night"><i style="background:#a3c2a0"></i>月光</button>
           </div>
           <div class="menu-div"></div>
+          <button class="menu-item" id="mModel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="10" rx="2.5"/><path d="M7 11h2M11 11h2M15 11h2M7 14h8"/></svg>模型设置</button>
           <button class="menu-item" id="mHelp"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg>帮助</button>
           <a class="menu-item" href="/account" style="text-decoration:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>账号管理</a>
           <div class="menu-div"></div>
@@ -725,6 +745,45 @@
           <button class="btn" id="bkReindex">重新自动分类</button>
           <span style="flex:1"></span>
           <span class="bk-sub" id="bkPref"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模型设置（v0.80：全局配置，写 .env 热生效，不用重启） -->
+    <div class="lm-modal" id="lmModal">
+      <div class="bk-back" id="lmBack"></div>
+      <div class="lm-dialog">
+        <div class="bk-head">
+          <h3>模型设置</h3>
+          <span class="bk-sub" id="lmSub">全局配置 · 改完立即生效</span>
+          <button class="icon-btn" id="lmClose" aria-label="关闭"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="lm-body">
+          <div class="lm-row">
+            <label>模型</label>
+            <input id="lmModel" list="lmModels" placeholder="deepseek-flash">
+            <datalist id="lmModels"></datalist>
+            <div class="lm-tip">下拉是服务端当前可用的模型（官方上新会自动出现），也可以直接手填。</div>
+          </div>
+          <div class="lm-row">
+            <label>思考强度 effort</label>
+            <select id="lmEffort">
+              <option value="low">low（默认：快和省，日常聊天够用）</option>
+              <option value="high">high（想得细一些，慢一点）</option>
+              <option value="max">max（最细，最慢最贵）</option>
+            </select>
+            <div class="lm-tip">只对 V4 系模型有意义，老模型会自动忽略。</div>
+          </div>
+          <div class="lm-row">
+            <label>聊天温度 temperature</label>
+            <input id="lmTemp" type="number" min="0" max="2" step="0.05" value="0.8">
+            <div class="lm-tip">说话层的随机性，越高越发散。内心独白的温度没开放——那个调乱会影响判断。</div>
+          </div>
+        </div>
+        <div class="lm-foot">
+          <span class="lm-msg" id="lmMsg"></span>
+          <button class="btn" id="lmCancel">取消</button>
+          <button class="btn primary" id="lmSave">保存</button>
         </div>
       </div>
     </div>
@@ -1410,6 +1469,42 @@ document.addEventListener('click',(e)=>{ if(!e.target.closest('.menu-wrap')) acc
 $('mHelp').onclick=()=>{ accMenu.style.display='none'; openDrawer('R'); $('foldDebug').open=true; runCmd('/help','帮助'); };
 $('mRestart').onclick=()=>restartService();
 
+/* ===== 模型设置（v0.80：全局，写 .env 热生效） ===== */
+$('mModel').onclick=()=>{ accMenu.style.display='none'; openModelPanel(); };
+function closeModelPanel(){ $('lmModal').classList.remove('open'); }
+async function openModelPanel(){
+  $('lmModal').classList.add('open');
+  $('lmMsg').textContent='';
+  try{
+    const d=await (await fetch('/api/llm/config')).json();
+    const cfg=d.config||{};
+    $('lmModel').value=cfg.model||'';
+    $('lmEffort').value=(cfg.effort||'low');
+    $('lmTemp').value=(cfg.temperature==null?0.8:cfg.temperature);
+    $('lmModels').innerHTML=(d.models||[]).map(m=>
+      '<option value="'+esc(m.id)+'">'+esc(m.id+'（'+(m.owned_by||m.id)+'）')+'</option>').join('');
+    const n=(d.models||[]).length;
+    $('lmSub').textContent=n?('全局配置 · 当前可用 '+n+' 个模型'):'全局配置 · 改完立即生效';
+  }catch(e){
+    $('lmMsg').textContent='⚠ 拉取失败：'+e.message;
+  }
+}
+$('lmClose').onclick=closeModelPanel;
+$('lmCancel').onclick=closeModelPanel;
+$('lmBack').onclick=closeModelPanel;
+$('lmSave').onclick=async()=>{
+  const body={ model: $('lmModel').value.trim(), effort: $('lmEffort').value,
+               temperature: $('lmTemp').value };
+  $('lmMsg').textContent='保存中…';
+  try{
+    const r=await (await fetch('/api/llm/config',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})).json();
+    if(!r.ok){ $('lmMsg').textContent='⚠ '+(r.error||'保存失败'); return; }
+    $('lmMsg').textContent='已生效（'+(r.config&&r.config.model)+' · '+(r.config&&r.config.effort)+' · 温度 '+(r.config&&r.config.temperature)+'）';
+    setTimeout(closeModelPanel, 900);
+  }catch(e){ $('lmMsg').textContent='⚠ '+e.message; }
+};
+
 /* ===== 记忆卡 ===== */
 async function loadMemories(){
   try{
@@ -1575,7 +1670,8 @@ function closeBooks(){ $('bkModal').classList.remove('open'); }
 })();
 
 /* ===== 意识流 ===== */
-const STREAM_LABEL={inbox:'收',reply:'说',monologue:'想',work:'活',sleep:'眠',wake:'醒',revoke:'撤'};
+const STREAM_LABEL={inbox:'收',reply:'说',monologue:'想',work:'活',sleep:'眠',wake:'醒',revoke:'撤',
+  reading:'读',read:'读',rest:'歇',todo:'勾'};
 let streamRows = [];
 function streamCopyText(){ return streamRows.map(r=>'['+(r.hhmm||'')+'] '+(r.text||'')).join('\n'); }
 async function loadStream(){

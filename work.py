@@ -185,6 +185,10 @@ def _settle(state: dict, now: datetime) -> bool:
             import interests
             if interests.record(article["genre"]):
                 print(f"[兴趣] 转正：{article['genre']}")
+        # 意识流（v0.80）：读完一段也是一件"发生在我身上的事"，往轴上记一笔
+        if article:
+            _t = article.get("title") or ""
+            stream.append("read", f"读完一段{'《' + _t + '》' if _t else ''}，摘了一句", now)
         _produce_shareable(state["day"], state["settled"] + 1, article)
         state["settled"] += 1
         changed = True
@@ -239,6 +243,11 @@ def _gen_shareable(day: str, seq: int, article: dict | None = None) -> str:
     items.append({"day": day, "seq": seq, "text": text, "used": 0})
     db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
     _note_today(article, seq, text)   # 顺手进 B 库：今天读到的东西，当天能说得出细节
+    # 待办队列（v0.80）：读到有感触的句子 = 一件"想说还没说的事"，入队等它自己聊。
+    # 不进队的话，这条素材只能靠主动消息撞运气，聊天时永远想不起来（实测 #42 #1）。
+    if config.TODOS_ENABLED:
+        import todos
+        todos.add(text, source="reading")
     return text
 
 
@@ -343,6 +352,7 @@ def status(now: datetime | None = None) -> dict:
             phase = "break"
 
     done = state["settled"]
+    _note_events(phase, state, now)
     return {
         "phase": phase,
         "label": PHASE_LABELS[phase],
@@ -355,6 +365,54 @@ def status(now: datetime | None = None) -> dict:
             state["units"][done]["start"])).total_seconds() // 60) if phase in (
             "working", "flow") else 0,
     }
+
+
+def _note_events(phase: str, state: dict, now: datetime) -> None:
+    """把"身上发生的事"往意识流轴上追加一笔（v0.80：举一反三，每个细小事件都要打印）。
+
+    原实现只落了 wake/sleep/work 等 6 个 kind，所以轴上没有"开工/读到哪/歇会儿/
+    收工"——TA 收工了还从今日素材里推断自己"还在读书"（实测 #42 #3）。
+
+    去重：一次性事件走 `stream.once`（今天只记一次），来回切的相位走
+    `stream.note_phase`（相位真变了才记，实测"忙完第 6 件"被写了两遍）。"""
+    if not config.CONSCIOUS_STREAM_ENABLED or phase == "sleep":
+        return
+    if phase in ("working", "flow"):
+        if stream.once("work_start", now):
+            stream.append("work", "开始忙今天的事了", now)
+        seq = state["settled"] + 1
+        if stream.once(f"unit{seq}", now):
+            line = _reading_line()
+            if line:
+                stream.append("reading", line, now)
+    elif phase == "break":
+        stream.note_phase("break", "忙完一件，歇会儿", now)
+    elif phase == "off":
+        stream.note_phase("off", "今天的事忙完了，我收工了", now)
+    if config.NOON_HOUR <= now.hour < config.NOON_HOUR + 1:
+        if stream.once("noon", now):
+            stream.append("rest", "中午了，歇一会儿", now)
+
+
+def _reading_line() -> str:
+    """意识流轴上的一行：在读什么、读到哪（第一人称，不写"你"）。"""
+    try:
+        import library
+        prog = library.progress()
+        if prog and prog.get("book_id"):
+            for b in library.books():
+                if b.get("id") == prog["book_id"]:
+                    return f"在读《{b['title']}》，已经读到第 {prog.get('idx', 0) + 1} 段"
+    except Exception:
+        pass
+    try:
+        import reading
+        a = reading.current_article()
+        if a:
+            return f"在读《{a['title']}》"
+    except Exception:
+        pass
+    return ""
 
 
 def hud(now: datetime | None = None) -> str:

@@ -127,7 +127,6 @@ KERNEL_QUIET = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.45,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["嘴硬", "部分承认", "小声岔开", "反问回去", "不接这个茬"],
         "topic_initiative_every": 8,
@@ -210,7 +209,6 @@ KERNEL_SUNSHINE = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.5,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["直接问回去", "半开玩笑顶一句", "岔开", "部分承认"],
         "topic_initiative_every": 6,
@@ -294,7 +292,6 @@ KERNEL_NIGHTOWL = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.6,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["嘴硬", "部分承认", "开玩笑带过", "反问回去", "岔开"],
         "topic_initiative_every": 8,
@@ -375,7 +372,6 @@ KERNEL_TSUNDERE = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.7,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["嘴硬到底", "反问回去", "部分承认但保留", "岔开"],
         "topic_initiative_every": 10,
@@ -455,7 +451,6 @@ KERNEL_HEALER = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.4,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["温和地保留意见", "把话说到一半停住", "反问回去", "岔开"],
         "topic_initiative_every": 8,
@@ -535,7 +530,6 @@ KERNEL_OLDCADRE = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.65,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["坚持自己的理", "部分承认", "嘴硬", "岔开"],
         "topic_initiative_every": 8,
@@ -615,7 +609,6 @@ KERNEL_CHUUNI = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.55,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["耍赖", "开玩笑带过", "反问回去", "岔开", "嘴硬"],
         "topic_initiative_every": 6,
@@ -708,7 +701,6 @@ KERNEL_SCHOLAR = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.6,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["补一句限定", "指出哪里还没说清", "反问回去", "说'我保留意见'"],
         "topic_initiative_every": 10,
@@ -798,7 +790,6 @@ KERNEL_HOMEMAKER = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 2,
-        "disagreement_rate": 0.35,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["嘴上应着但不做", "岔到别的事", "说'随你吧'", "念一句就停"],
         "topic_initiative_every": 7,
@@ -888,7 +879,6 @@ KERNEL_CATLIKE = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.5,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["不回", "回个'嗯'", "岔开", "隔很久回一句别的"],
         "topic_initiative_every": 14,
@@ -978,7 +968,6 @@ KERNEL_JIANGHU = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 0,
-        "disagreement_rate": 0.65,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["直接怼回去", "'行吧'带保留", "反问'你确定？'", "不接这个茬"],
         "topic_initiative_every": 8,
@@ -1068,7 +1057,6 @@ KERNEL_ARTSY = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 2,
-        "disagreement_rate": 0.45,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["收声", "自嘲一句", "说'就那样吧'", "转到别的话题"],
         "topic_initiative_every": 6,
@@ -1158,7 +1146,6 @@ KERNEL_DOER = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 0,
-        "disagreement_rate": 0.7,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["直接说不可行并给替代", "'这个我做不到'", "反问目标", "不接"],
         "topic_initiative_every": 12,
@@ -1249,7 +1236,6 @@ KERNEL_SNARK = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 1,
-        "disagreement_rate": 0.6,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["抬杠", "损一句带过", "'行吧你说得…算了'", "岔开"],
         "topic_initiative_every": 8,
@@ -1339,7 +1325,6 @@ KERNEL_STRAIGHT = {
     },
     "anti_sycophancy": {
         "mirroring_budget": 0,
-        "disagreement_rate": 0.55,
         "surrender_policy": "never_full",
         "surrender_alternatives": ["'哦那我错了'", "沉默一下然后换话题", "反问'那你想要啥'", "直说不干"],
         "topic_initiative_every": 11,

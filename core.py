@@ -19,6 +19,7 @@ import offline
 import persona
 import selfmem
 import stream
+import todos
 from channels.base import Channel
 
 
@@ -227,7 +228,12 @@ class Engine:
         # 全文在 messages 表里，这里只存摘要供注入；"我在想/我说"是每轮对话的锚点。
         said = " ".join(reply.split())
         if said:
-            stream.append("reply", f"我说：{said[:config.CONSCIOUS_STREAM_LINE_CHARS]}")
+            # 存全文（v0.80：注入也不再截断，截了就等于没说过这句话）
+            stream.append("reply", f"我说：{said}")
+            # 待办打勾：刚才那段话里说到了哪件攒着的事 → 标记做完（做完不再当话题）
+            if config.TODOS_ENABLED:
+                for t in todos.mark_done(said):
+                    print(f"[待办] 打勾：{t[:30]}")
 
         # 话题结束判断：AI 自己的回复带结束信号 → 直接关闭会话（不轻催）；
         # 关键词都没抓住时，让 AI 异步判一下这段聊天是不是自然结束了。
@@ -275,7 +281,9 @@ class Engine:
             shint = selfmem.state_hint()
             if shint:
                 parts.append(shint)
-        recent = db.recent_context(config.CONTEXT_TURNS)
+        # 整段会话全量（v0.80）：独白层以前也只读 20 条，同样瞎——判"和旧立场冲不冲突"
+        # 靠的就是早些时候说过的话（实测 #42）
+        recent = db.session_context(config.CONTEXT_MAX_MESSAGES)
         if parts:
             system = system + "\n\n" + "\n".join(parts)
         try:
@@ -302,6 +310,11 @@ class Engine:
         # 自我意识流（S4）：内心独白持久化——不再用完就扔，跨轮有连续性。
         # 每轮注入时只取摘要，全文留在这里供睡前复盘浓缩。
         stream.append("monologue", f"我在想：{raw}")
+        # 待办队列（v0.80）：独白里冒出来的念头（【我自己的话题】非空）入队等它自己聊
+        if config.TODOS_ENABLED:
+            topic = todos.from_monologue(raw)
+            if topic:
+                todos.add(topic, source="monologue")
         return raw
 
     def _generate_reply_text(self, messages: list[dict], batch: list[str]) -> str:

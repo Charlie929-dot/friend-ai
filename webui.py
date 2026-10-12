@@ -369,6 +369,12 @@ def _make_handler(channel: WebChannel, on_message):
                             "stream": [{"ts": r["ts"], "hhmm": r["ts"][11:16],
                                         "kind": r["kind"], "text": r["text"]}
                                        for r in rows]})
+            elif u.path == "/api/llm/config":
+                # 模型设置（v0.80）：当前全局配置 + 官方可用模型列表（开面板时拉一次，
+                # 上新模型会自动出现在下拉里）。effort 只对 V4 系模型有意义。
+                import llm as _llm
+                self._json({"config": _llm.current_config(),
+                            "models": _llm.list_models()})
             elif u.path == "/account":
                 # 账号管理页（改密码 / 重绑 TOTP）
                 self._serve_web_file("account.html", "text/html; charset=utf-8")
@@ -402,6 +408,9 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if u.path == "/api/revoke":
                 self._do_revoke()
+                return
+            if u.path == "/api/llm/config":
+                self._do_llm_config()
                 return
             if u.path == "/api/emoji":
                 self._do_emoji()
@@ -640,6 +649,37 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"ok": ok, "error": "" if ok else "删不掉（书不在书架里？）"})
             else:
                 self._json({"error": "not found"}, 404)
+
+        def _do_llm_config(self):
+            """保存模型设置：写回 .env（全局）+ 热生效，不重启。"""
+            import llm as _llm
+            try:
+                data = self._read_json()
+            except Exception:
+                self._json({"error": "读不到请求体"}, 400)
+                return
+            model = str(data.get("model") or "").strip()
+            effort = str(data.get("effort") or "").strip().lower()
+            raw_temp = data.get("temperature", None)
+            temp = None
+            if raw_temp not in (None, ""):
+                try:
+                    temp = float(raw_temp)
+                except (TypeError, ValueError):
+                    self._json({"error": "温度得是数字"}, 400)
+                    return
+                if not 0.0 <= temp <= 2.0:
+                    self._json({"error": "温度要在 0–2 之间"}, 400)
+                    return
+            if effort and effort not in ("low", "high", "max"):
+                self._json({"error": "effort 只能是 low / high / max"}, 400)
+                return
+            try:
+                cfg = _llm.save_config(model=model, effort=effort, temperature=temp)
+            except Exception as e:
+                self._json({"error": f"保存失败：{e}"}, 500)
+                return
+            self._json({"ok": True, "config": cfg})
 
         def _do_revoke(self):
             """撤回一条消息：删库 + 意识流注入一条同步响应（TA 下一轮知道"你撤回了"）。

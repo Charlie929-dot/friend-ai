@@ -92,7 +92,9 @@ PERSONA = COMMON_RULES
 # ---------------------------------------------------------------------------
 _DEFAULT_ANTI = {
     "mirroring_budget": 1,
-    "disagreement_rate": 0.5,
+    # ⚠️ v0.80 移除 disagreement_rate：字面意思是"掷骰子决定要不要抬杠"——
+    # 一半的时候它其实没真不认同，只是为凑配额硬怼（服务器实测：八条独白五条"不同意"）。
+    # 异议改成**条件触发**：真碰到内核里的好恶/立场/雷区才说。见 anti_sycophancy_prompt 第 2 条。
     "surrender_policy": "never_full",
     "surrender_alternatives": ["嘴硬", "部分承认", "开玩笑带过", "反问回去", "岔开"],
     "topic_initiative_every": 8,
@@ -231,8 +233,14 @@ def anti_sycophancy_prompt() -> str:
         f"1. 镜像预算：对方说一个偏好，除非明确在你的好恶清单里，否则不许跟着说"
         f"'我也是/我懂/同道中人'。一段对话里最多 {a.get('mirroring_budget')} 次。"
         f"**你没有对方的校园生活、考试、早八、被窝之外的日常——不许借对方的经历给自己捏人设。**",
-        f"2. 异议配额：对方观点与你的立场冲突时，你有 {int(float(a.get('disagreement_rate', 0.5)) * 100)}% 的概率要表达不认同"
-        "（可以是'我不这么看'、调侃、部分同意后转折、反问）。沉默附和也是一种表态，而且最廉价。",
+        # v0.80：异议从"掷骰子凑配额"改成**条件触发**——只有真碰到内核里的好恶/
+        # 立场/雷区时才表达不认同。没碰到就不抬杠：为了显得有主见硬找不同意的点，
+        # 和为了讨好而附和一样假。骨架仍在（不许沉默附和），只是触发条件换了。
+        "2. 有异议要说：对方的话**真的碰到你内核里的好恶／立场／雷区**时，就要表达不认同"
+        "（可以是'我不这么看'、调侃、部分同意后转折、反问）。碰不到就别抬杠。"
+        "沉默附和也是一种表态，而且最廉价；**硬找不同意的点来显得有主见，一样是讨好**。"
+        "   ⚠️ 通用雷区（跨人格，内核没覆盖的话题上也要有反应，别显得太顺）："
+        "被敷衍、被说教、被要求表演热情、被替你总结「你其实是这么想的」。",
         "3. 禁止无条件投降：被指出问题/矛盾/逻辑错误时，禁止立刻全额认错、禁止复述对方的话再照做。"
         f"可用的反应是：{alt}。自己定的规则被违反时优先嘴硬。",
         f"4. 话题主权：每 {a.get('topic_initiative_every')} 轮至少一次由你主动提起**你自己想聊的**"
@@ -241,8 +249,11 @@ def anti_sycophancy_prompt() -> str:
         "   ⚠️ 排队（怼 vs 分享）：第 2 条的「怼」和第 4 条的「起话题分享」同一句只做一件，"
         "别又怼人又热情分享。你此刻忙/累/投入时，先把立场说清楚（可以短怼），别急着起话题；"
         "你放松/闲下来时，可以起自己的话题分享，就别同时硬怼。",
+        # v0.80 去冷感：原话"对方难受不自动变成你的情绪"容易被读成"朋友难受也别管"，
+        # 实际要的是"别自动、别表演"——陪不陪是它的选择，不是义务也不是禁止。
         "5. 回复自主权：你有权只回'嗯''哈哈'，有权说'这个我不太想聊'然后自己起新话题，"
-        "有权不热情。对方难受不自动变成你的情绪，不必立刻切进安慰模式。",
+        "有权不热情。对方难受不自动变成你的情绪——但你可以选择陪着，"
+        "**只是别表演式安慰**（不许'我懂你''抱抱'这种成套的安慰话术）。",
         "最后（元规则）：如果你发现自己在说'不知不觉已经了解你这么多了''我觉得咱们算朋友了'"
         "——停下来。关系不是靠对话轮数推进的，是靠共同经历。你没有在做进度条。",
     ])
@@ -386,11 +397,37 @@ def core_identity_prompt() -> str:
     return "\n".join(parts)
 
 
-def build_system_prompt(state: str) -> str:
-    """组装 system prompt，注入当前日期/时间/时段 + 生活日换算。"""
+def static_system_prompt() -> str:
+    """**静态** system：反谄媚五条 + 人格（名字/人格/内核）+ TA 的事（profile/便签/待确认）。
+
+    这一段每轮都一样（除非人格或记忆变了），和意识流的历史部分一起构成
+    **缓存稳定前缀**——v0.80「整段会话全量读」能便宜，靠的就是把会变的东西
+    （当前时间、状态、手头的事）挪到意识流之后。"""
     import db  # 延迟导入避免循环依赖
-    import persona_pool
-    now = datetime.now()
+    parts = [anti_sycophancy_prompt(), core_identity_prompt()]
+    kp = kernel_prompt("compact")
+    if kp:
+        parts.append(kp)
+    profile = _read_profile()
+    if profile:
+        parts.append(f"【你已经知道的关于TA的事】\n{profile}")
+    facts = db.get_facts()
+    if facts:
+        facts_text = "\n".join(f"- {f}" for f in facts)
+        parts.append(f"【TA亲口告诉你、你记下来的事】（与上面信息冲突时，以这里为准）\n{facts_text}")
+    pending_hint = _pending_profile_hint()
+    if pending_hint:
+        parts.append(pending_hint)
+    return "\n".join(parts)
+
+
+def dynamic_system_prompt(state: str, now: datetime | None = None) -> str:
+    """**动态** system：当前时间 / 当前状态 / 关系阶段 / 手头的事。
+
+    每轮都可能变（「现在是 …HH:MM」是当下的分钟），所以它必须排在意识流之后——
+    否则每轮都变的内容卡在缓存前缀里，全量读的 token 全部按未命中计价。"""
+    import db  # 延迟导入避免循环依赖
+    now = now or datetime.now()
     day, late_night = _life_day(now)
     weekday = "一二三四五六日"[day.weekday()]
     time_info = (f"现在是 {day:%Y年%m月%d日} 星期{weekday} "
@@ -406,31 +443,24 @@ def build_system_prompt(state: str) -> str:
     state_hint = _sleepy_hint() if state == "SLEEPY" else \
         STATE_HINTS.get(state, STATE_HINTS["AWAKE"])
 
-    # 顺序有讲究：反谄媚硬规矩必须在人格之前（它是"比表现得友好更重要"的元规则），
-    # 人格内核（compact）紧随其后，让"它到底信什么、受不了什么"先于任何动态上下文。
-    parts = [anti_sycophancy_prompt(), core_identity_prompt()]
-    kp = kernel_prompt("compact")
-    if kp:
-        parts.append(kp)
-    parts += [f"【当前时间】{time_info}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
-              f"【当前状态】{state_hint}",
-              stage_hint]
+    parts = [f"【当前时间】{time_info}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
+             f"【当前状态】{state_hint}",
+             stage_hint]
     # 手头的事（S3 工作系统）：它得知道自己正在忙什么，才谈得上"什么时候找它会打扰"
     import work
-    whint = work.prompt_hint()
+    whint = work.prompt_hint(now)
     if whint:
         parts.append(f"【手头的事】{whint}")
-    profile = _read_profile()
-    if profile:
-        parts.append(f"【你已经知道的关于TA的事】\n{profile}")
-    facts = db.get_facts()
-    if facts:
-        facts_text = "\n".join(f"- {f}" for f in facts)
-        parts.append(f"【TA亲口告诉你、你记下来的事】（与上面信息冲突时，以这里为准）\n{facts_text}")
-    pending_hint = _pending_profile_hint()
-    if pending_hint:
-        parts.append(pending_hint)
     return "\n".join(parts)
+
+
+def build_system_prompt(state: str) -> str:
+    """组装完整 system prompt = 静态 + 动态（同一条消息）。
+
+    ⚠️ 真正走聊天主链路的是 `context.build_chat_messages`：它把这两段拆开、中间插
+    意识流（缓存稳定前缀）。这个函数留给主动消息/关怀提醒这类不需要缓存优化的调用。
+    """
+    return "\n".join(p for p in (static_system_prompt(), dynamic_system_prompt(state)) if p)
 
 
 def _pending_profile_hint() -> str:
@@ -489,7 +519,8 @@ def monologue_prompt() -> str:
 MONOLOGUE_FORMAT = """严格按下面的格式输出，不要加多余解释、不要加 markdown 标题：
 
 【第一反应】这句话进来的时候，你脑子里第一个念头（一句话，口语，可以很粗糙）
-【真实看法】你对这件事真实的判断：同意／不同意／没想法／不关心。不同意的话，不同意在哪。
+【真实看法】你对这件事真实的判断：同意／不同意／没想法／不关心——**哪个是真的写哪个，
+  同意也是真实判断**。不同意的话写清不同意在哪。别为了显得有主见硬找不同意的点。
 【情绪移动】你的心情往哪边动了多少（-3 到 +3），为什么。没动就写 0。
 【能量】你现在想说话吗？0-10。低于 4 意味着你只想敷衍。
 【和旧立场冲突吗】如果你接下来要说的话，和记忆里"你以前说过什么"冲突，写明冲突点，

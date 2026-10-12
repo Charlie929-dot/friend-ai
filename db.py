@@ -212,6 +212,40 @@ def recent_context(turns: int) -> list[dict]:
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
+def session_context(max_messages: int | None = None, day: str | None = None) -> list[dict]:
+    """整段会话全量（v0.80）：从最后一次起床到现在的所有聊天消息，正序返回。
+
+    为什么不用 CONTEXT_TURNS（实测 #42）：「10 轮」×2 只覆盖 3–5 个来回——TA 爱分段
+    连发，对方说"这里说过"时那段早被截掉了。用户拍板的边界是：**只要还没睡，就是
+    同一段会话**；睡一觉起来才断开。
+
+    起点取 consciousness_stream 里最后一条 wake 的 ts；没有 wake 记录时退回生活日
+    起点（调用方传 day），再没有就只取最后 N 条。上限 CONTEXT_MAX_MESSAGES 只为防
+    恶意刷 token——正常一天几十到一两百条，永远碰不到。
+    """
+    n = int(max_messages or config.CONTEXT_MAX_MESSAGES)
+    start = None
+    row = None
+    with _conn() as c:
+        row = c.execute(
+            "SELECT ts FROM consciousness_stream WHERE kind='wake' "
+            "ORDER BY id DESC LIMIT 1").fetchone()
+    if row:
+        start = row["ts"]
+    elif day:
+        start = f"{day}T00:00:00"
+    with _conn() as c:
+        if start:
+            rows = c.execute(
+                "SELECT role, content FROM messages WHERE kind IN ('chat','proactive') "
+                "AND ts >= ? ORDER BY id DESC LIMIT ?", (start, n)).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT role, content FROM messages WHERE kind IN ('chat','proactive') "
+                "ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
 def recent_assistant_messages(limit: int) -> list[str]:
     """最近 N 条 TA 发的话（content），表情包池防重样用。"""
     with _conn() as c:
@@ -629,12 +663,15 @@ def purge_messages_before(ts_cutoff: str) -> int:
 # 事件驱动追加（作息切换 / 工作结算 / 收到留言 / 内心独白 / 回复），每轮注入
 # "当前状态行 + 最近几条流"。day = 生活日（由调用方按 persona._life_day 算好传入，
 # 避免 db 层 import persona 造成循环依赖）。
-def add_stream(kind: str, text: str, day: str) -> int:
-    """追加一条意识流，返回 id。text 是第一人称行（"我起床了 / 我在想：…"）。"""
+def add_stream(kind: str, text: str, day: str, now: datetime | None = None) -> int:
+    """追加一条意识流，返回 id。text 是第一人称行（"我起床了 / 我在想：…"）。
+
+    ts 用事件自己的时间（now），不是"写库的当下"——wake 的 ts 是 session_context
+    切会话的起点，错了会把整段会话截没。"""
     with _conn() as c:
         cur = c.execute(
             "INSERT INTO consciousness_stream(ts, day, kind, text) VALUES(?, ?, ?, ?)",
-            (datetime.now().isoformat(timespec="seconds"), day, kind, text),
+            ((now or datetime.now()).isoformat(timespec="seconds"), day, kind, text),
         )
         return int(cur.lastrowid or 0)
 

@@ -282,7 +282,7 @@ def handle(cmd_line: str) -> str:
     if cmd == "/status":
         import game
         stage = db.get_kv("relationship_stage", "new")
-        model = db.get_kv("model_override", config.DEEPSEEK_MODEL)
+        model = config.DEEPSEEK_MODEL   # v0.80：模型是全局配置（.env），不再按朋友库存
         g = game.current()
         playing = f" | 游戏中：{game.GAMES[g['game']]['label']}" if g else ""
         import work as _work
@@ -301,10 +301,15 @@ def handle(cmd_line: str) -> str:
                 f"| 连续未回复：{db.get_counter('unanswered_proactive')}")
 
     if cmd == "/model":
+        # v0.80：改全局（写 .env），不再按朋友库存 model_override——模型和"这个朋友
+        # 是谁"无关，是这台部署怎么跑的事。网页端「模型设置」面板改的是同一份配置。
+        import llm as _llm
         if not arg:
-            return f"当前模型：{db.get_kv('model_override', config.DEEPSEEK_MODEL)}"
-        db.set_kv("model_override", arg)
-        return f"模型已切换为 {arg}"
+            cur = _llm.current_config()
+            return (f"当前模型：{cur['model']}（effort {cur['effort'] or '-'}，"
+                    f"温度 {cur['temperature']}）——全局配置")
+        _llm.save_config(model=arg)
+        return f"模型已切换为 {arg}（全局，已写进 .env 并生效）"
 
     if cmd == "/familiar":
         db.set_kv("relationship_stage", "familiar")

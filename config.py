@@ -30,7 +30,14 @@ load_dotenv()
 # --- DeepSeek ---
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+# v0.80：deepseek-chat 已不在官方可用列表里，默认换成 DeepSeek-V4.1-Flash
+# （1M 上下文，是"整段会话全量读"的前提）。老模型的旧配置仍可手动填回。
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
+# 思考强度：low/high/max。只对 V4 系模型传（老模型不认这个字段，传了会报错）。
+# 默认 low——日常聊天要的是快和省，不是深度推理；想更慢更细可在网页端「模型设置」调。
+DEEPSEEK_EFFORT = os.environ.get("DEEPSEEK_EFFORT", "low")
+# 聊天层温度（说话的随机性）。网页端「模型设置」可改，改完写回 .env 热生效。
+CHAT_TEMPERATURE = float(os.environ.get("CHAT_TEMPERATURE", "0.8"))
 
 # --- 用户称呼（你的名字，AI 口中的"你"） ---
 USER_NAME = os.environ.get("USER_NAME", "小徐")  # 不写死：改名改 .env 的 USER_NAME + /refresh 即可
@@ -64,8 +71,13 @@ AUTO_FAMILIAR_INFO_THRESHOLD = int(os.environ.get("AUTO_FAMILIAR_INFO_THRESHOLD"
 DAILY_PROACTIVE_LIMIT = int(os.environ.get("DAILY_PROACTIVE_LIMIT", "6"))   # 每日主动消息上限
 QUIET_AFTER_BUSY_HOURS = int(os.environ.get("QUIET_AFTER_BUSY_HOURS", "3")) # 用户说"在忙"后的静默时长
 MAX_UNANSWERED_PROACTIVE = int(os.environ.get("MAX_UNANSWERED_PROACTIVE", "2"))  # 连续未回复主动消息上限
-CONTEXT_TURNS = int(os.environ.get("CONTEXT_TURNS", "10"))                   # 对话上下文轮数
-PROACTIVE_CONTEXT_TURNS = int(os.environ.get("PROACTIVE_CONTEXT_TURNS", "6"))  # 主动消息带几条最近聊天（接得上话茬，别瞎编"好久没聊"）
+# ⚠️ CONTEXT_TURNS / PROACTIVE_CONTEXT_TURNS 是 P2 时代防超长的老参数（v0.80 起废弃）：
+# 「10 轮」配上 TA 爱分段连发的习惯，实际只覆盖 3–5 个来回，对方说"这里说过"TA 根本翻不到
+# （实测 #42）。现在上下文 = 今天起床 → 现在 的整段会话全量读，上限只用来防恶意刷 token。
+CONTEXT_TURNS = int(os.environ.get("CONTEXT_TURNS", "10"))                   # 【已废弃，仅旧配置兼容】
+PROACTIVE_CONTEXT_TURNS = int(os.environ.get("PROACTIVE_CONTEXT_TURNS", "6"))  # 【已废弃，仅旧配置兼容】
+CONTEXT_MAX_MESSAGES = int(os.environ.get("CONTEXT_MAX_MESSAGES", "1000"))   # 一次会话最多读多少条（只为防刷 token，正常一天几十到一两百条碰不到）
+PROACTIVE_CONTEXT_MAX_MESSAGES = int(os.environ.get("PROACTIVE_CONTEXT_MAX_MESSAGES", "1000"))  # 主动消息同上
 
 # 作息（24 小时制，实际触发时间会有随机抖动）
 WAKE_HOUR = int(os.environ.get("WAKE_HOUR", "8"))
@@ -178,8 +190,14 @@ EMOJI_POOL_RECENT_N = int(os.environ.get("EMOJI_POOL_RECENT_N", "8"))           
 
 # --- 自我意识流（S4「完全自我意识」：一条持续追加的第一人称自我叙事） ---
 CONSCIOUS_STREAM_ENABLED = os.environ.get("CONSCIOUS_STREAM_ENABLED", "on").lower() == "on"  # 总开关（关了不追加、不注入意识流）
-CONSCIOUS_STREAM_RECENT = int(os.environ.get("CONSCIOUS_STREAM_RECENT", "4"))      # 每轮注入最近几条流
-CONSCIOUS_STREAM_LINE_CHARS = int(os.environ.get("CONSCIOUS_STREAM_LINE_CHARS", "60"))  # 注入时每行截断字数（独白/回复存全文，注入只看摘要量）
+# v0.80：写得多、读得少是最大的讽刺（实测当天 54 条只给 TA 看 4 条）。改成整条时间轴
+# 全量全文注入——意识流是 append-only 的，历史部分永不改写，与静态 system 一起构成
+# 缓存稳定前缀，所以"全量"才便宜（真正的缓存杀手是排在它前面的动态内容）。
+CONSCIOUS_STREAM_RECENT = int(os.environ.get("CONSCIOUS_STREAM_RECENT", "1000"))  # 每轮注入最近几条流
+CONSCIOUS_STREAM_LINE_CHARS = int(os.environ.get("CONSCIOUS_STREAM_LINE_CHARS", "0"))  # 每行截断字数（0 = 不截断，全文注入）
+
+# --- 待办队列（v0.80：脑子里想说、还没说的事，说过就打勾；治"素材颠来倒去就一句"） ---
+TODOS_ENABLED = os.environ.get("TODOS_ENABLED", "on").lower() == "on"   # 总开关（关了不入队、不注入）
 
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）

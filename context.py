@@ -16,6 +16,7 @@ import memory
 import persona
 import selfmem
 import stream
+import todos
 
 # 记忆注入的统一文案
 _MEMORY_HINT = "自然使用，别生硬复述；同主题多条按时间先后排列，靠后的是最新进展"
@@ -72,10 +73,25 @@ def _quote_hint(quote: dict | None) -> dict | None:
 
 def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
                         inbox: bool = False, quote: dict | None = None) -> list[dict]:
-    """私聊回复的完整 messages：system（人设+便签+profile）→ 游戏规则 →
-    相关记忆（system）→ 最近聊天上下文（user）。inbox=True 时带"刚上线看到留言"语境。
-    quote 非空时额外注入一条【引用回复】说明对方在回哪句。"""
-    messages = [{"role": "system", "content": persona.build_system_prompt(state)}]
+    """私聊回复的完整 messages：静态 system → **意识流** → 动态 system → 其余注入 →
+    整段会话上下文（user）。inbox=True 时带"刚上线看到留言"语境。
+    quote 非空时额外注入一条【引用回复】说明对方在回哪句。
+
+    ⚠️ 顺序是钱（v0.80）：静态 system + 意识流历史构成**缓存稳定前缀**，会变的
+    （当前时间/状态/手头的事）一律排在意识流之后。否则全量读的 token 每轮都按
+    未命中计价，一天就不是一两块而是十几块。"""
+    # 1) 静态人设（每轮不变）
+    messages = [{"role": "system", "content": persona.static_system_prompt()}]
+    # 2) 自我意识流：紧跟静态区，在所有动态注入之前（缓存稳定前缀的尾巴）
+    shint = stream.prompt_hint()
+    if shint:
+        messages.append({"role": "system", "content": shint})
+    # 3) 动态：当前时间 / 状态 / 手头的事
+    messages.append({"role": "system", "content": persona.dynamic_system_prompt(state)})
+    # 4) 想说还没说的事（待办队列）：治"颠来倒去就一句"，说过的标 ✅ 提醒别重复
+    thint = todos.prompt_hint()
+    if thint:
+        messages.append({"role": "system", "content": thint})
     if inbox:
         messages.append({"role": "system", "content": (
             "【你刚上线】你刚才在忙自己的事（或睡着了），没看手机。"
@@ -94,11 +110,6 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
         thint = tone.voice_hint()
         if thint:
             messages.append({"role": "system", "content": thint})
-    # 自我意识流（S4）：此刻的我（攒了多少/精力/心情）+ 最近发生的事——补 money/energy
-    # 进 prompt（原来钱只在 HUD 给你看、TA 自己不知道，实测 #36）。紧急窗口也注入。
-    shint = stream.prompt_hint()
-    if shint:
-        messages.append({"role": "system", "content": shint})
     # 表情包池（E 模块）：让 TA 聊天前"翻看"表情库存、可以只甩一个表情当懒人回应、
     # 别重复最近用过的（治「表情单一 😂 反复用」，实测 #36）。
     ehint = emoji_pool.prompt_hint()
@@ -133,7 +144,8 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
     qhint = _quote_hint(quote)
     if qhint:
         messages.append(qhint)
-    messages += db.recent_context(config.CONTEXT_TURNS)
+    # 整段会话全量（v0.80）：今天起床 → 现在，不再按"轮"截断（实测 #42）
+    messages += db.session_context(config.CONTEXT_MAX_MESSAGES)
     return messages
 
 
@@ -153,7 +165,7 @@ def build_proactive_messages(state: str, scenario: str) -> list[dict]:
     prompt[-1]["content"] += f"\n{_PROACTIVE_CONTEXT_RULE}"
     if scenario == "random":
         _inject_random_topic(prompt)
-    recent = db.recent_context(config.PROACTIVE_CONTEXT_TURNS)
+    recent = db.session_context(config.PROACTIVE_CONTEXT_MAX_MESSAGES)
     # 自我记忆：主动开口最该兑现的是"我答应过的事"——那是它自己的承诺，比寒暄有分量
     extra = []
     if config.SELF_MEMORY_ENABLED:

@@ -3249,8 +3249,11 @@ def test_persona_kernel():
         assert len(k.get("stances") or {}) >= 8, f"{k_name} 立场太少，异议没来源"
         assert (k.get("boundaries") or {}).get("绝对不做"), f"{k_name} 缺雷区"
         assert k.get("voice", {}).get("禁止的句式"), f"{k_name} 缺禁止句式"
-        for key in ("mirroring_budget", "disagreement_rate", "topic_initiative_every"):
+        for key in ("mirroring_budget", "topic_initiative_every"):
             assert key in (k.get("anti_sycophancy") or {}), f"{k_name} 缺反谄媚参数 {key}"
+        # v0.80 起 disagreement_rate 已移除（异议改条件触发，不掷骰子），卡里不该再有
+        assert "disagreement_rate" not in (k.get("anti_sycophancy") or {}), \
+            f"{k_name} 还留着已移除的 disagreement_rate"
 
     # 2) 每条好恶都必须带强度，强度才是"被踩到会怎样"的依据
     for item in _pool.KERNELS["quiet"]["likes"]:
@@ -3274,12 +3277,16 @@ def test_persona_kernel():
     assert "禁止说" in voice
 
     # 4) 反谄媚规则读了人格自己的参数（不能写死一套给所有人）
+    #    v0.80：disagreement_rate 已删（异议改条件触发），改成断言条件触发的措辞
     rules = _persona.anti_sycophancy_prompt()
-    rate = card["kernel"]["anti_sycophancy"]["disagreement_rate"]
-    assert f"{int(rate * 100)}%" in rules, f"异议配额没按人格参数渲染：{rules[:80]}"
+    assert "mirroring" not in rules  # 占位防呆：下面断言别整段删光
     assert "「表现得友好」" in rules or "表现得友好" in rules
-    for must in ("镜像预算", "异议配额", "禁止无条件投降", "话题主权", "回复自主权"):
+    for must in ("镜像预算", "禁止无条件投降", "话题主权", "回复自主权"):
         assert must in rules, f"缺{must}"
+    # 条件触发：没碰到内核就不抬杠，碰到了才表达不认同
+    assert "碰到" in rules and "好恶" in rules, f"异议不是条件触发写法：{rules[:120]}"
+    # 通用雷区（跨人格）：被敷衍/被说教/被要求表演热情/被替它总结
+    assert "被敷衍" in rules and "被说教" in rules and "表演热情" in rules, rules[:200]
 
     # 5) 体系化注入：system prompt 里先规则、后内核，顺序不能反
     sp = _persona.build_system_prompt("AWAKE")
@@ -3987,6 +3994,148 @@ def test_consciousness_stream():
         _db.init()
 
 
+def test_session_context():
+    """整段会话全量读（v0.80，实测 #42 #2）：起点=最后一次起床，起床前的截掉、
+    之后的全部保留（治"对方说这里说过，TA 翻不了记录"）；上限 1000 只防刷 token。"""
+    import tempfile
+    from datetime import datetime as _dt
+    import config as _cfg
+    import db as _db
+    import stream as _stream
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+
+        def _msg(role, content, ts, kind="chat"):
+            with _db._conn() as c:
+                c.execute(
+                    "INSERT INTO messages(ts, role, kind, content) VALUES(?,?,?,?)",
+                    (ts, role, kind, content))
+
+        # 昨天晚上的消息（隔夜，必须截掉）
+        _msg("user", "昨晚那句", "2026-10-10T23:00:00")
+        # 今天起床前的（早起留言，TA 没看到，也截掉）
+        _msg("user", "起床前那句", "2026-10-11T07:30:00")
+        _stream.append("wake", "我伸了懒腰，起床了", _dt(2026, 10, 11, 8, 0))
+        # 起床之后的（全量保留，不管多少条）
+        _msg("user", "起床后第1句", "2026-10-11T08:10:00")
+        _msg("assistant", "我在呢", "2026-10-11T08:11:00")
+        _msg("user", "这里说过", "2026-10-11T09:00:00")
+        _msg("assistant", "我说过这句", "2026-10-11T09:01:00", kind="proactive")
+
+        msgs = _db.session_context()
+        texts = [m["content"] for m in msgs]
+        assert "这里说过" in texts and "我说过这句" in texts, texts
+        assert "昨晚那句" not in texts and "起床前那句" not in texts, texts
+        assert len(msgs) == 4, texts
+        # proactive 也算 TA 的发言，role 是 assistant
+        assert next(m for m in msgs if m["content"] == "我说过这句")["role"] == "assistant"
+        # 正序：越早的在前
+        assert texts == ["起床后第1句", "我在呢", "这里说过", "我说过这句"], texts
+
+        # 再睡一觉起来 → 会话断开，旧段被新 wake 截掉
+        _stream.append("sleep", "我困了，去睡了", _dt(2026, 10, 11, 23, 30))
+        _stream.append("wake", "又起床了", _dt(2026, 10, 12, 9, 0))
+        _msg("user", "新会话第1句", "2026-10-12T09:05:00")
+        msgs2 = _db.session_context()
+        texts2 = [m["content"] for m in msgs2]
+        assert texts2 == ["新会话第1句"], texts2
+
+        # 没有任何 wake 记录 + 传了 day → 从生活日起点取
+        with _db._conn() as c:
+            c.execute("DELETE FROM consciousness_stream")
+        msgs3 = _db.session_context(day="2026-10-12")
+        texts3 = [m["content"] for m in msgs3]
+        assert "新会话第1句" in texts3 and "这里说过" not in texts3, texts3
+
+        # 上限：max_messages 生效（防恶意刷 token 的兜底）
+        assert len(_db.session_context(max_messages=2)) == 2
+
+        print("ok 整段会话全量读（起床切会话 + 隔夜截断 + proactive 算发言 + 正序）")
+    finally:
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
+def test_todos():
+    """待办队列（v0.80，实测 #42 #1）：入队/去重/独白解析/打勾/注入，
+    治"素材颠来倒去就一句"——说过就打勾，打勾的不再当话题。"""
+    import json
+    import tempfile
+    import config as _cfg
+    import db as _db
+    import stream as _stream
+    import todos as _todos
+
+    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    saved_todos = config.TODOS_ENABLED
+    config.TODOS_ENABLED = True
+    tmp = Path(tempfile.mkdtemp())
+    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    try:
+        _db.init()
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "reading_pref": "科幻",
+            "drawn_at": "2026-10-09T00:00:00"}))
+
+        # 1. 入队 + 相同内容去重
+        i1 = _todos.add("《雾都孤儿》里那句关于雾的描写", source="reading")
+        assert i1 > 0
+        assert _todos.add("《雾都孤儿》里那句关于雾的描写") == 0, "同一条不该重复入队"
+        assert len(_todos.pending()) == 1
+
+        # 2. 独白解析：【我自己的话题】非空即入队；"没有"不入
+        raw = ("【真实看法】同意\n"
+               "【我自己的话题】想跟TA聊聊雾都孤儿里的雾\n"
+               "【先说立场】没什么")
+        assert _todos.from_monologue(raw) == "想跟TA聊聊雾都孤儿里的雾"
+        assert _todos.from_monologue("【我自己的话题】没有") is None
+        topic = _todos.from_monologue(raw)
+        assert topic and _todos.add(topic, source="monologue") > 0
+        assert len(_todos.pending()) == 2
+
+        # 3. 注入：没说的列出来说话题
+        hint = _todos.prompt_hint()
+        assert "想说还没说的" in hint and "雾都孤儿" in hint, hint
+
+        # 4. 打勾：回复里说到了就 done，并往意识流追加一条
+        said = "对了，我最近读《雾都孤儿》，那句关于雾的描写真是绝了"
+        hit = _todos.mark_done(said)
+        assert hit == ["《雾都孤儿》里那句关于雾的描写"], hit
+        assert len(_todos.pending()) == 1, "说过的该退出待办"
+        assert len(_todos.done_items()) == 1
+        todo_lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "todo"]
+        assert any("跟" in t and "说了" in t for t in todo_lines), todo_lines
+
+        # 5. 注入块：打勾的标 ✅ 提醒别再原样说第二遍；没说的还在
+        hint2 = _todos.prompt_hint()
+        assert "✅" in hint2, hint2
+        assert "想跟TA聊聊雾都孤儿里的雾" in hint2, hint2
+
+        # 6. 打过的勾不再重复打
+        assert _todos.mark_done(said) == []
+
+        # 7. 关开关 → 不注入
+        config.TODOS_ENABLED = False
+        assert _todos.prompt_hint() == ""
+        config.TODOS_ENABLED = True
+
+        # 8. reset 清空
+        _todos.reset()
+        assert _todos.pending() == []
+
+        print("ok 待办队列（入队去重 + 独白解析 + 打勾 + 注入✅ + 开关 + reset）")
+    finally:
+        config.TODOS_ENABLED = saved_todos
+        config.BASE_DIR, config.DB_PATH = real_base, real_db
+        _db.init()
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -4054,4 +4203,6 @@ if __name__ == "__main__":
     test_inner_monologue()
     test_self_memory()
     test_consciousness_stream()
+    test_session_context()
+    test_todos()
     print("\n全部通过")
