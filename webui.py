@@ -375,6 +375,11 @@ def _make_handler(channel: WebChannel, on_message):
                 import llm as _llm
                 self._json({"config": _llm.current_config(),
                             "models": _llm.list_models()})
+            elif u.path == "/api/tuning/config":
+                # 调优参数面板（v0.86）：全项目实测优化参数的清单 + 当前值，前端渲染
+                # L1 首屏 / L2 高级折叠。读用，改走 POST。
+                import tuning as _tuning
+                self._json({"groups": _tuning.catalog()})
             elif u.path == "/account":
                 # 账号管理页（改密码 / 重绑 TOTP）
                 self._serve_web_file("account.html", "text/html; charset=utf-8")
@@ -411,6 +416,9 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if u.path == "/api/llm/config":
                 self._do_llm_config()
+                return
+            if u.path == "/api/tuning/config":
+                self._do_tuning_config()
                 return
             if u.path == "/api/emoji":
                 self._do_emoji()
@@ -680,6 +688,24 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"error": f"保存失败：{e}"}, 500)
                 return
             self._json({"ok": True, "config": cfg})
+
+        def _do_tuning_config(self):
+            """保存调优参数：校验 + 写回 .env（全局）+ 热生效，不重启。"""
+            import tuning as _tuning
+            data = self._read_json()
+            updates = data.get("updates")
+            if not isinstance(updates, dict) or not updates:
+                self._json({"error": "没有要保存的参数"}, 400)
+                return
+            try:
+                values = _tuning.save_values(updates)
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+                return
+            except Exception as e:
+                self._json({"error": f"保存失败：{e}"}, 500)
+                return
+            self._json({"ok": True, "values": values})
 
         def _do_revoke(self):
             """撤回一条消息：删库 + 意识流注入一条同步响应（TA 下一轮知道"你撤回了"）。

@@ -540,6 +540,38 @@
     .composer-wrap { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
     .bubble-row { max-width: 86%; }
   }
+
+  /* ===== 调优参数面板（v0.86：L1 首屏 + L2 高级折叠，复用 .env 写回热生效） ===== */
+  .tune-modal { position: fixed; inset: 0; z-index: 90; display: none; }
+  .tune-modal.open { display: block; }
+  .tune-dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: min(680px, 96vw); height: min(84vh, 760px); background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
+    overflow: hidden; animation: bkPop .22s cubic-bezier(.18,.9,.28,1.2); display: flex; flex-direction: column; }
+  .tune-ctl { flex: 0 0 auto; padding: 12px 18px 0; display: flex; align-items: center; gap: 10px; }
+  .tune-ctl label { font-size: 12px; color: var(--muted); cursor: pointer;
+    display: flex; align-items: center; gap: 6px; user-select: none; }
+  .tune-ctl input { accent-color: var(--accent); }
+  .tune-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 18px 18px; }
+  .tune-group { margin-bottom: 18px; }
+  .tune-ghead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .tune-ghead h4 { font-size: 13px; font-weight: 600; }
+  .tune-ghead .cnt { font-size: 10.5px; color: var(--muted); }
+  .tune-row { display: grid; grid-template-columns: 168px 1fr; gap: 5px 12px; align-items: center;
+    padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .tune-row:last-child { border-bottom: none; }
+  .tune-row label { font-size: 12px; color: var(--ink); display: flex; align-items: baseline; gap: 5px; }
+  .tune-row label .def { font-size: 10px; color: var(--muted); }
+  .tune-row input { width: 100%; padding: 6px 9px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--surface-2); color: var(--ink); font-size: 12.5px; outline: 0; }
+  .tune-row input:focus { border-color: var(--accent); }
+  .tune-row .tip { grid-column: 1 / -1; font-size: 10.5px; color: var(--muted); line-height: 1.4; }
+  .tune-row.l2 { display: none; }
+  .tune-modal.advanced .tune-row.l2 { display: grid; }
+  .tune-foot { flex: 0 0 auto; display: flex; gap: 8px; align-items: center;
+    padding: 12px 18px; border-top: 1px solid var(--line); }
+  .tune-msg { font-size: 11.5px; color: var(--accent); flex: 1; min-width: 0; }
+  @media (max-width: 640px) { .tune-row { grid-template-columns: 118px 1fr; } }
 </style>
 </head>
 <body>
@@ -566,6 +598,7 @@
           </div>
           <div class="menu-div"></div>
           <button class="menu-item" id="mModel"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="10" rx="2.5"/><path d="M7 11h2M11 11h2M15 11h2M7 14h8"/></svg>模型设置</button>
+          <button class="menu-item" id="mTuning"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg>调优参数</button>
           <button class="menu-item" id="mHelp"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg>帮助</button>
           <a class="menu-item" href="/account" style="text-decoration:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>账号管理</a>
           <div class="menu-div"></div>
@@ -784,6 +817,27 @@
           <span class="lm-msg" id="lmMsg"></span>
           <button class="btn" id="lmCancel">取消</button>
           <button class="btn primary" id="lmSave">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 调优参数（v0.86：L1 首屏 + L2 高级折叠，写 .env 热生效） -->
+    <div class="tune-modal" id="tuneModal">
+      <div class="bk-back" id="tuneBack"></div>
+      <div class="tune-dialog">
+        <div class="bk-head">
+          <h3>调优参数</h3>
+          <span class="bk-sub" id="tuneSub">全局实测参数 · 改完立即生效</span>
+          <button class="icon-btn" id="tuneClose" aria-label="关闭"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="tune-ctl">
+          <label><input type="checkbox" id="tuneAdv">显示高级参数（L2）</label>
+        </div>
+        <div class="tune-body" id="tuneBody"></div>
+        <div class="tune-foot">
+          <span class="tune-msg" id="tuneMsg"></span>
+          <button class="btn" id="tuneCancel">取消</button>
+          <button class="btn primary" id="tuneSave">保存</button>
         </div>
       </div>
     </div>
@@ -1503,6 +1557,61 @@ $('lmSave').onclick=async()=>{
     $('lmMsg').textContent='已生效（'+(r.config&&r.config.model)+' · '+(r.config&&r.config.effort)+' · 温度 '+(r.config&&r.config.temperature)+'）';
     setTimeout(closeModelPanel, 900);
   }catch(e){ $('lmMsg').textContent='⚠ '+e.message; }
+};
+
+/* ===== 调优参数（v0.86：L1 首屏 + L2 高级折叠，写 .env 热生效） ===== */
+let tuneGroups = [];
+$('mTuning').onclick=()=>{ accMenu.style.display='none'; openTunePanel(); };
+function closeTunePanel(){ $('tuneModal').classList.remove('open'); }
+async function openTunePanel(){
+  $('tuneModal').classList.add('open');
+  $('tuneMsg').textContent='';
+  $('tuneBody').innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const d=await (await fetch('/api/tuning/config')).json();
+    tuneGroups=d.groups||[];
+    $('tuneSub').textContent='共 '+tuneGroups.reduce((a,g)=>a+g.items.length,0)
+      +' 个参数（L1 首屏 '+tuneGroups.reduce((a,g)=>a+g.items.filter(i=>i.level==='L1').length,0)
+      +' · L2 高级 '+tuneGroups.reduce((a,g)=>a+g.items.filter(i=>i.level==='L2').length,0)+'）';
+    $('tuneAdv').checked=false;
+    $('tuneModal').classList.remove('advanced');
+    renderTune();
+  }catch(e){
+    $('tuneBody').innerHTML='<div class="empty">⚠ 拉取失败：'+esc(e.message)+'</div>';
+  }
+}
+function renderTune(){
+  $('tuneBody').innerHTML=tuneGroups.map(g=>{
+    const rows=g.items.map(it=>{
+      const def=it.default==null?'':'<span class="def">默认 '+esc(it.default)+'</span>';
+      const input=it.type==='time'
+        ?'<input data-key="'+esc(it.key)+'" type="text" inputmode="numeric" maxlength="5" placeholder="08:30" value="'+esc(it.value)+'">'
+        :'<input data-key="'+esc(it.key)+'" type="number" step="'+(it.step||1)+'"'
+          +(it.min!=null?' min="'+it.min+'"':'')+(it.max!=null?' max="'+it.max+'"':'')
+          +' value="'+esc(it.value)+'">';
+      return '<div class="tune-row '+(it.level==='L2'?'l2':'')+'">'
+        +'<label>'+esc(it.label)+def+'</label>'+input
+        +'<div class="tip">'+esc(it.desc)+'</div></div>';
+    }).join('');
+    return '<div class="tune-group"><div class="tune-ghead"><h4>'+esc(g.name)+'</h4>'
+      +'<span class="cnt">'+g.items.length+' 项</span></div>'+rows+'</div>';
+  }).join('');
+}
+$('tuneAdv').onchange=e=>{ $('tuneModal').classList.toggle('advanced', e.target.checked); };
+$('tuneClose').onclick=closeTunePanel;
+$('tuneCancel').onclick=closeTunePanel;
+$('tuneBack').onclick=closeTunePanel;
+$('tuneSave').onclick=async()=>{
+  const updates={};
+  $('tuneBody').querySelectorAll('input[data-key]').forEach(inp=>{ updates[inp.dataset.key]=inp.value; });
+  $('tuneMsg').textContent='保存中…';
+  try{
+    const r=await (await fetch('/api/tuning/config',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({updates})})).json();
+    if(!r.ok){ $('tuneMsg').textContent='⚠ '+(r.error||'保存失败'); return; }
+    $('tuneMsg').textContent='已生效，全部热加载，不用重启';
+    setTimeout(closeTunePanel, 900);
+  }catch(e){ $('tuneMsg').textContent='⚠ '+e.message; }
 };
 
 /* ===== 记忆卡 ===== */

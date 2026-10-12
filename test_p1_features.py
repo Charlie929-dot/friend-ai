@@ -2643,10 +2643,22 @@ def test_webui():
             assert 'id="emojiPanel"' in html and 'id="btnEmoji"' in html and 'id="epGrid"' in html \
                 and 'id="epAddEmoji"' in html and 'id="epAddBucket"' in html, \
                 "页面缺表情面板/表情按钮结构"
+            # 调优参数面板（v0.86）：菜单项 + 模态框结构
+            assert 'id="mTuning"' in html and 'id="tuneModal"' in html \
+                and 'id="tuneBody"' in html and 'id="tuneAdv"' in html, \
+                "页面缺调优参数面板结构"
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
             assert st["work"]["phase"] in _webui.work.PHASE_LABELS, f"phase 不合法：{st}"
+
+            # 调优参数面板接口（v0.86）：返回分组 + 每项元数据 + 当前值
+            tc = c.get(base + "/api/tuning/config").json()
+            assert isinstance(tc["groups"], list) and tc["groups"], \
+                f"/api/tuning/config 该返回分组：{tc}"
+            t0 = tc["groups"][0]["items"][0]
+            assert "key" in t0 and "value" in t0 and "level" in t0, \
+                f"调优参数项缺字段：{t0}"
 
             r = c.post(base + "/api/send", json={"text": "你好呀"}).json()
             assert r["echo"] is True, f"普通消息应回显用户输入：{r}"
@@ -4360,6 +4372,79 @@ def test_unified_event_source():
         _db.init()
 
 
+def test_tuning_panel():
+    """调优参数面板（G 模块 S4，方案 §10）：清单完整对齐 config、校验拒绝非法值、
+    save 按「写 .env + force reload」序列热生效（模型设置同款机制）。"""
+    import importlib as _il
+    import tuning as _tuning
+    import auth as _auth
+
+    # 1) 清单完整性：8 组 / 键唯一 / 类型·层级合法 / 每个键都在 config 里有定义
+    cats = _tuning.catalog()
+    assert len(cats) == 8, f"该有 8 组，实际 {len(cats)}"
+    items = [it for g in cats for it in g["items"]]
+    keys = [it["key"] for it in items]
+    assert len(keys) == len(set(keys)), "env key 重复"
+    for it in items:
+        assert it["type"] in ("int", "float", "time"), f"类型非法：{it['key']}"
+        assert it["level"] in ("L1", "L2"), f"层级非法：{it['key']}"
+        assert hasattr(config, it["key"]), f"config 缺 {it['key']}"
+    assert sum(1 for it in items if it["level"] == "L1") > 0, "L1 首屏不能为空"
+    assert sum(1 for it in items if it["level"] == "L2") > 0, "L2 高级不能为空"
+
+    # 2) 当前值覆盖全部登记键
+    cv = _tuning.current_values()
+    assert set(cv) == set(keys), "current_values 漏了键"
+
+    # 3) 非法值被拒（_coerce 抛错在 write_env 之前，不落盘）
+    def _raises(key, val):
+        try:
+            _tuning.save_values({key: val})
+            return False
+        except ValueError:
+            return True
+    assert _raises("READING_DAILY_CHARS", "abc"), "非整数没被拒"
+    assert _raises("BUBBLE_FIXED_PROB", "x"), "非数字没被拒"
+    assert _raises("SCHED_WORK_START", "25:00"), "非法小时没被拒"
+    assert _raises("SCHED_WORK_START", "8:60"), "非法分钟没被拒"
+    assert _raises("SCHED_WORK_START", "830"), "非 HH:MM 没被拒"
+    assert _raises("COST_R_FLOW", "5"), "越界（>max）没被拒"
+    assert _raises("NUDGE_PROBABILITY", "1.5"), "概率越界没被拒"
+    assert _raises("NO_SUCH_KEY", "1"), "未登记键没被拒"
+
+    # 4) save 序列：write_env 收到规范化字符串 + 触发 load_dotenv(force=True) + reload(config)
+    written, reloaded = {}, []
+    real_write, real_ld, real_reload = _auth.write_env, config.load_dotenv, _il.reload
+
+    def _fake_write(updates):
+        written.update(updates)
+
+    def _fake_ld(force=False):
+        reloaded.append(("load", force))
+
+    def _fake_reload(mod):
+        reloaded.append(("reload", mod.__name__))
+
+    _auth.write_env, config.load_dotenv, _il.reload = _fake_write, _fake_ld, _fake_reload
+    try:
+        _tuning.save_values({
+            "READING_DAILY_CHARS": "12000",
+            "BUBBLE_FIXED_PROB": 0.5,
+            "SCHED_WORK_START": "9:05",
+        })
+    finally:
+        _auth.write_env, config.load_dotenv, _il.reload = real_write, real_ld, real_reload
+
+    assert written == {
+        "READING_DAILY_CHARS": "12000",
+        "BUBBLE_FIXED_PROB": "0.5",
+        "SCHED_WORK_START": "09:05",
+    }, f"write_env 收到的规范化值不对：{written}"
+    assert ("load", True) in reloaded, "该 load_dotenv(force=True) 热生效"
+    assert ("reload", "config") in reloaded, "该 reload(config) 刷新常量"
+    print("ok 调优参数面板（清单 8 组对齐 config + 校验拒非法 + save 写 .env 热生效序列）")
+
+
 if __name__ == "__main__":
     test_cli_timestamps()
     test_refresh_reloads_config_and_modules()
@@ -4432,4 +4517,5 @@ if __name__ == "__main__":
     test_lore()
     test_trueread()
     test_unified_event_source()
+    test_tuning_panel()
     print("\n全部通过")
