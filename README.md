@@ -1,15 +1,18 @@
 # friend-ai
 
-朋友型 AI · MVP：主动触发引擎（问候 + 话题 + 作息）。
+> ⚠️ **本文档已过时，仅作最小维护。** 项目已从「MVP / CLI 主载体」演进为「**网页端 Web UI 主载体** + DeepSeek-V4.1-Flash」，请以 [docs/需求概要-朋友型AI.md](./docs/需求概要-朋友型AI.md) 为准。完整重写留到推广前（需求文档 7.1）。
+
+朋友型 AI · 主动触发引擎（问候 + 话题 + 作息）。
 
 ## 架构
 
 通道可插拔，业务逻辑与 IM 解耦：
 
 ```
-main.py ─┬─ channels/cli.py      本地命令行（开发调试用）
-         ├─ channels/wecom.py    企业微信自建应用（正式）
-         └─ channels/telegram.py Telegram（备案等待期兜底）
+main.py ─┬─ webui.py            网页端 Web UI（自用阶段主载体）
+         ├─ channels/cli.py     本地命令行（调试用）
+         ├─ channels/wecom.py   企业微信自建应用（备用）
+         └─ channels/telegram.py Telegram（备用）
                 │
             core.Engine ── 状态机(AWAKE/SLEEPING) + 防打扰 + 对话引擎
                 │
@@ -24,9 +27,10 @@ main.py ─┬─ channels/cli.py      本地命令行（开发调试用）
 pip install -r requirements.txt
 cp .env.example .env   # 填入 DEEPSEEK_API_KEY
 cp profile.example.md profile.md  # 可选：预填你的个人信息，AI 会把这些当成"已知道的事"
-python main.py         # CLI 模式本地聊天
-python main.py telegram  # Telegram 兜底通道
-python main.py server    # 企业微信通道（云服务器上跑）
+python main.py web       # 网页端主入口 → http://127.0.0.1:8787（自用阶段主载体）
+python main.py           # CLI 调试模式
+python main.py telegram  # Telegram（备用通道）
+python main.py server    # 企业微信（备用，云服务器上跑）
 ```
 
 ## CLI 斜杠命令（所有通道通用）
@@ -35,7 +39,7 @@ python main.py server    # 企业微信通道（云服务器上跑）
 |---|---|
 | `/help` | 帮助 |
 | `/status` | 当前状态：作息/关系阶段/今日计数/模型 |
-| `/model [名字]` | 查看或切换模型（如 `deepseek-reasoner`） |
+| `/model [名字]` | 查看或切换模型（如 `deepseek-flash`） |
 | `/familiar` | 进入熟悉阶段：停止冒泡，主动只由触发源发起 |
 | `/new` | 回到初见阶段：恢复高频冒泡 |
 | `/new-friend` | **抽一位新朋友**（P1 核心玩法）：随机人格 + 随机名字 + 随机怪癖，归档当前数据库，新朋友用人格自我介绍 |
