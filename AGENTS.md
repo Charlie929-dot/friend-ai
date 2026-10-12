@@ -3,7 +3,7 @@
 > 这是**朋友型 AI**（friend-ai）项目。核心特征：**主动**——它不等指令，有自己的作息、工作、记忆和生活节奏。  
 > **每次改完代码，下面这些地方必须同步维护。只改代码不改这些 = 改动没做完。**  
 > 完整需求见 `docs/需求概要-朋友型AI.md`，历史见 `docs/历史归档-版本.md`，实测见 `docs/实测反馈/`。  
-> **当前版本：v0.82**（文档可维护性优化·方案 A：各文档加职责声明 + 单一事实源规则 + README 修错）。
+> **当前版本：v0.83**（文档可维护性优化·方案 B：需求池拆两级 + 实测一号一文件 + 交叉链接 + 方案文档规范）。
 
 ---
 
@@ -66,11 +66,11 @@
 3. **语料只装"会扩充"的两类** —— 固定回复语 + 匹配关键词/正则。不会扩充的固定文案（工具 description、工具返回固定句）就近在业务模块维护，**不要塞进 corpus**。业务模块不硬编码匹配词表。
 4. **称呼不写死** —— 每个朋友有自己 profile 里的"称呼"字段（事实便签"叫我X" > profile 称呼 > `config.USER_NAME` 兜底），不同朋友可以有个性称呼。
 5. **代价只呈现、不归因** —— costly 状态只说自己的状态（"今天读得晚"），**禁止"你打断我/因为你/又被你/我为了你"** 这类把代价指向对方的表达。这是硬红线。
-6. **内部 LLM 调用不拼完整人设** —— 记忆提取、素材生成这类"后台"调用一律用 `persona.core_identity_prompt()`，**不要用 `build_system_prompt()`**。完整人设里塞的动态段（时间/状态/手头的事）只要有一个会触发新的 LLM 调用就成环递归爆栈（实测 #17 已踩）。
+6. **内部 LLM 调用不拼完整人设** —— 记忆提取、素材生成这类"后台"调用一律用 `persona.core_identity_prompt()`，**不要用 `build_system_prompt()`**。完整人设里塞的动态段（时间/状态/手头的事）只要有一个会触发新的 LLM 调用就成环递归爆栈（[实测 #17](docs/实测反馈/#17.md) 已踩）。
 7. **Windows 上别用 `os.kill(pid, 0)` 探活** —— 它不等于 POSIX 的信号 0，CPython 会直接 `TerminateProcess`，**是杀人不是探活**。查进程活着用 `autostart._pid_alive()`（`OpenProcess` + `GetExitCodeProcess`）。
 8. **注册计划任务别用 `schtasks.exe`** —— 部分终端（含受限会话）里它连 `/query` 都返回 "The system cannot find the path specified"。统一走 `autostart._ps()`（PowerShell 的 `ScheduledTasks` cmdlet）。
-9. **profile 自动填写要留痕、稳定字段不静默覆盖** —— AI 自动填 profile 字段时，上下文证据存 **B 库**（`long_memories`），**A 库记忆挂 `long_id` 链接**；`/profile why <字段>` 看证据原文。**稳定字段**（`memory.STABLE_PROFILE_FIELDS`：作息/生日/城市/称呼等身份级）遇到与旧值冲突的新说法**不静默覆盖**，标 `pending` 待用户确认（`/profile pending/accept/reject`），并由 `persona._pending_profile_hint()` 注入提示让 AI 主动跟用户核实（实测 #21）。可变字段（在忙的事等）可照旧更新。
-10. **测试必须与"现在几点"解耦**（实测 #27 的教训）—— fresh DB 在工作时段必然判"离线专注"（消息进 inbox 不回话），所以：测 Engine 交互（打字/插话）的用例先 `config.WORK_ENABLED = False`（finally 恢复）；用锚点时刻断言排班的用例预置 `rest_schedule`（wake 早于锚点）与随机浮动解耦；手工构造 `work_state` fixture 必须带 `"planned": 1`（缺了会被新逻辑当"没排过班"重排覆盖）。
+9. **profile 自动填写要留痕、稳定字段不静默覆盖** —— AI 自动填 profile 字段时，上下文证据存 **B 库**（`long_memories`），**A 库记忆挂 `long_id` 链接**；`/profile why <字段>` 看证据原文。**稳定字段**（`memory.STABLE_PROFILE_FIELDS`：作息/生日/城市/称呼等身份级）遇到与旧值冲突的新说法**不静默覆盖**，标 `pending` 待用户确认（`/profile pending/accept/reject`），并由 `persona._pending_profile_hint()` 注入提示让 AI 主动跟用户核实（[实测 #21](docs/实测反馈/#21.md)）。可变字段（在忙的事等）可照旧更新。
+10. **测试必须与"现在几点"解耦**（[实测 #27](docs/实测反馈/#27.md) 的教训）—— fresh DB 在工作时段必然判"离线专注"（消息进 inbox 不回话），所以：测 Engine 交互（打字/插话）的用例先 `config.WORK_ENABLED = False`（finally 恢复）；用锚点时刻断言排班的用例预置 `rest_schedule`（wake 早于锚点）与随机浮动解耦；手工构造 `work_state` fixture 必须带 `"planned": 1`（缺了会被新逻辑当"没排过班"重排覆盖）。
 11. **测试临时产物不许落项目根** —— 测试统一走 `test_p1_features.py` 顶部的 `_TEST_TMP_ROOT`（固定目录 `.test-tmp/`，已 gitignore、**启动即清 + 退出清**双保险）；**别再裸用 `tempfile.mkdtemp()` 当根目录**——某些环境 `%TEMP%` 不可写会回退到**当前工作目录**，跑几次就在项目根撒一地 `tmpXXXX`（历史债：曾攒到 1100+ 个 / 56MB）。
 12. **需求池「状态」打勾纪律**（2026-10-11 用户明确；起因：「表情包池 img 仅预留字段却整条 ✅」「引用对话已实现却仍挂待做」两处账目错）——每次改代码更新需求文档时：①**逐子项核对**：条目说明里每一句都要与状态对得上，说明含「**预留 / 待做 / 遗留 / TODO / 占位 / 下一步**」字样的部分**不许整条打 ✅**——要么拆成独立子条目、要么标「✅ 部分（剩余是 …）」；②**反向也查**：顺手扫一遍相关模块，已实现却还挂「待做」的改掉；③**版本记录只写做了的事**：预留字段 ≠ 实现功能，记录里必须写明「本版仅预留、功能未实现」；④状态列用复合标注（如「✅ 文字+图」「✅ 承诺提醒」）时，未做的部分要在说明里显式列出。
 

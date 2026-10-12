@@ -2,4 +2,4 @@
 
 > 归属：需求概要 C 模块。主表一句话见 [需求概要-朋友型AI.md](../需求概要-朋友型AI.md)。
 
-**防瞎编开场**（实测 #26）：主动消息注入最近聊天（`PROACTIVE_CONTEXT_TURNS`，默认 6 轮）+ 「别说好久没聊」规则；`random_memory()` 只抽**关于用户**的记忆（person 含称呼/"对方"/"TA"，别人的事不安到用户头上）；**素材当话题**（实测 #28）：random 场景一半概率翻一条攒下的素材（读后感想，`work.take_shareable()`）接着聊；服务器调参 `MAX_UNANSWERED_PROACTIVE=1`（连续未回复 1 条即停发）
+**防瞎编开场**（[实测 #26](../实测反馈/#26.md)）：主动消息注入最近聊天（`PROACTIVE_CONTEXT_TURNS`，默认 6 轮）+ 「别说好久没聊」规则；`random_memory()` 只抽**关于用户**的记忆（person 含称呼/"对方"/"TA"，别人的事不安到用户头上）；**素材当话题**（[实测 #28](../实测反馈/#28.md)）：random 场景一半概率翻一条攒下的素材（读后感想，`work.take_shareable()`）接着聊；服务器调参 `MAX_UNANSWERED_PROACTIVE=1`（连续未回复 1 条即停发）
