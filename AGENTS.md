@@ -1,9 +1,19 @@
-# AGENTS.md — 给 AI 协作者的改动维护清单
+# AGENTS.md
 
 > 这是**朋友型 AI**（friend-ai）项目。核心特征：**主动**——它不等指令，有自己的作息、工作、记忆和生活节奏。  
 > **每次改完代码，下面这些地方必须同步维护。只改代码不改这些 = 改动没做完。**  
 > 完整需求见 `docs/需求概要-朋友型AI.md`，历史见 `docs/历史归档-版本.md`，实测见 `docs/实测反馈/`。  
-> **当前版本：v0.86**（落地「整体设计方案 v1.0」：世界观架空 / 阅读真读 + 读书笔记双库 / 统一事件源 + 待办 id 化 / 人称分层全量改 / DeepSeek Flash 五坑 / 调优参数面板 web 调试；详见 `docs/方案-整体设计-v0.84.md`）。
+> **当前版本：v0.87**（落地「整体设计方案 v1.0」：世界观架空 / 阅读真读 + 读书笔记双库 / 统一事件源 + 待办 id 化 / 人称分层全量改 / DeepSeek Flash 五坑 / 调优参数面板 web 调试；详见 `docs/方案-整体设计-v0.84.md`。⏳ **「任务模型重构」方案已落档待动工**，详见 `docs/方案-任务模型重构-v0.87.md`）。
+
+---
+
+## 架构速览（新会话先读 30 秒）
+
+- **入口**：`python main.py [web|cli|server|telegram|autostart]`——自用阶段主载体是 **web**（`webui.py`，浏览器开 http://127.0.0.1:8787）；cli 与 web 用**同一份 `friend.db`**，改配置/查库/跑回填用它顺手。
+- **分层**：`channels/`（通道可插拔）→ `core.Engine`（收发/阅读模拟/后台回复线程）→ `context.py`（统一组装：事实便签 > profile > 记忆 > 聊天上下文）→ `db.py`（SQLite，**每朋友一份 `friend-<id>.db`**，切库互斥靠 `db.PATH_LOCK`/`SEND_LOCK`）+ `llm.py`（DeepSeek）。
+- **测试**：`python test_p1_features.py`（**自研 runner、不是 pytest**——文件底部 `__main__` 顺序调 `test_*()`，跑一次全量）。文件顶部两段全局机制（`_TEST_TMP_ROOT` 临时目录收口 + `INNER_MONOLOGUE_ENABLED=off` 关双层生成）拆新测试文件时**必须带上**（见硬性约定 #10/#11）。
+- **配置唯一真相是 `.env`**（`config.py` 读取，`/refresh` 热生效）；`tuning.py` 只是网页调优面板的元数据清单，**默认值与 config.py 双头维护——改默认值两处都要动**。
+- `README.md` 已自声明过时，一切以 `docs/需求概要-朋友型AI.md` 为准。
 
 ---
 
