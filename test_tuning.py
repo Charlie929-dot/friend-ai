@@ -14,14 +14,15 @@ def test_tuning_panel():
     import tuning as _tuning
     import auth as _auth
 
-    # 1) 清单完整性：8 组 / 键唯一 / 类型·层级合法 / 每个键都在 config 里有定义
+    # 1) 清单完整性：9 组 / 键唯一 / 类型·层级合法 / 每个键都在 config 里有定义
     cats = _tuning.catalog()
-    assert len(cats) == 8, f"该有 8 组，实际 {len(cats)}"
+    assert len(cats) == 9, f"该有 9 组，实际 {len(cats)}"
     items = [it for g in cats for it in g["items"]]
     keys = [it["key"] for it in items]
     assert len(keys) == len(set(keys)), "env key 重复"
     for it in items:
-        assert it["type"] in ("int", "float", "time"), f"类型非法：{it['key']}"
+        assert it["type"] in ("int", "float", "time", "bool", "str"), \
+            f"类型非法：{it['key']}"
         assert it["level"] in ("L1", "L2"), f"层级非法：{it['key']}"
         assert hasattr(config, it["key"]), f"config 缺 {it['key']}"
     assert sum(1 for it in items if it["level"] == "L1") > 0, "L1 首屏不能为空"
@@ -37,7 +38,9 @@ def test_tuning_panel():
             want = f"{float(raw):g}"
         elif it["type"] == "int":
             want = str(int(raw))
-        else:
+        elif it["type"] == "bool":
+            want = "on" if raw else "off"
+        else:                                   # str（含 SOURCES_FILE 这种 Path）
             want = str(raw)
         assert it["default"] == want, \
             f"default 没从 config 取（双头维护会漂移）：{it['key']} = {it['default']} vs {want}"
@@ -65,6 +68,17 @@ def test_tuning_panel():
         except ValueError:
             pass
     assert _tuning._coerce(_time_item, "9:05") == "09:05", "时间该规范化成 HH:MM"
+
+    # bool / str 类型（v0.94 信息获取新增：开关 / 适配器名这类非数值参数）
+    assert _tuning._coerce({"k": "X_B", "l": "测试开关", "t": "bool"}, "ON") == "on"
+    assert _tuning._coerce({"k": "X_B", "l": "测试开关", "t": "bool"}, "off") == "off"
+    for bad in ("maybe", ""):
+        try:
+            _tuning._coerce({"k": "X_B", "l": "测试开关", "t": "bool"}, bad)
+            raise AssertionError(f"非法 bool 没被拒：{bad!r}")
+        except ValueError:
+            pass
+    assert _tuning._coerce({"k": "X_S", "l": "测试串", "t": "str"}, "  abc ") == "abc"
 
     # 退役参数不能还挂在面板上（v0.89 批 A：20 → 11 个参数）
     retired = {"SCHED_WORK_START", "SCHED_LUNCH_START", "SCHED_LUNCH_END",
@@ -105,4 +119,4 @@ def test_tuning_panel():
     }, f"write_env 收到的规范化值不对：{written}"
     assert ("load", True) in reloaded, "该 load_dotenv(force=True) 热生效"
     assert ("reload", "config") in reloaded, "该 reload(config) 刷新常量"
-    print("ok 调优参数面板（清单 8 组对齐 config + 校验拒非法 + save 写 .env 热生效序列）")
+    print(f"ok 调优参数面板（清单 {len(cats)} 组 / {len(items)} 参数对齐 config + 校验拒非法 + save 写 .env 热生效序列）")

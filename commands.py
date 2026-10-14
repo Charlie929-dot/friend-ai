@@ -49,6 +49,8 @@ HELP = """可用命令：
   /selfmem         看TA记下的关于**它自己**的事（我说过的立场/答应过的事/出过的糗）
   /selfreview      现在复盘一次"今天的我"（睡前会自动跑，写回自我记忆）
   /work            看它今天手头的事（进度/精力/余额/攒了多少素材）
+  /browse          现在刷一圈外面（RSS/网页）；/browse <URL> 投喂一条地址
+  /browse src      看它的订阅源；/browse add|del <URL> 增删订阅源
   /books           看我书架上的书（按分类分组）；/books cats|set|reindex 管分类
   /autostart       查开机自启状态；/autostart on|off 开/关（网页端开机自己回来）
   /diary           看今天的日记（含复盘）；/diary <日期> 看指定那天
@@ -599,6 +601,43 @@ def handle(cmd_line: str) -> str:
                 + (" · 今天读得有点晚" if s["overtime"] else "") + "\n"
                 f"攒了 {fresh} 条没说过的素材\n"
                 f"（经验是纯叙事资源 = 今天读到多少的印记，不绑任何真实付费）")
+
+    if cmd == "/browse":
+        # 信息获取（v0.94 批 2）：手动触发"刷手机看信息"——这一步先只做手动，
+        # 接作息（自己会去刷）留到批 3。
+        import sources as _src
+        if not config.BROWSE_ENABLED:
+            return "刷信息关着呢（BROWSE_ENABLED=off）——调优面板或 .env 里打开它。"
+        sub = arg.split(maxsplit=1)
+        a0 = sub[0].lower() if sub else ""
+        rest = sub[1].strip() if len(sub) > 1 else ""
+        if not arg:
+            n = _src.daily_pass()
+            if not n:
+                return (f"刷了一圈，这回没刷到什么值得留的（源可能不通 / 都是旧的）。\n"
+                        f"订阅源 {len(_src.load_sources())} 条，/browse src 看列表。")
+            items = _src.items_today(limit=10)
+            body = "\n".join(f"  · [{it['source']}] {it['title']} —— {it['summary']}"
+                             for it in items)
+            return f"今天刷到 {n} 条：\n{body}"
+        if a0 == "src":
+            urls = _src.load_sources()
+            body = "\n".join(f"  {i + 1}. {u}" for i, u in enumerate(urls))
+            return (f"我刷手机看的源（{len(urls)} 条）：\n{body}\n\n"
+                    f"/browse add <URL> 加一条 · /browse del <URL> 删一条")
+        if a0 == "add" and rest:
+            ok = _src.add_source(rest)
+            return f"加好了：{rest}" if ok else "这条已经有了，或者地址是空的。"
+        if a0 == "del" and rest:
+            ok = _src.remove_source(rest)
+            return f"删掉了：{rest}" if ok else "订阅表里没有这条地址。"
+        if "://" not in arg:
+            return "给我一条完整地址吧，比如 /browse https://example.com/feed"
+        if _src.daily_pass(urls=[arg]) <= 0:
+            return "这条我看了，没看出什么值得留的（要么打不开，要么它觉得没意思）。"
+        rows = _src.items_today(limit=1)
+        return (f"看到了：{rows[0]['title']} —— {rows[0]['summary']}"
+                if rows else "看到了，记下了。")
 
     if cmd == "/books":
         # 用户书库（S4）：TA 读你导入的真实电子书（txt/epub）

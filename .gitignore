@@ -21,6 +21,10 @@ emoji_images/
 books/*
 !books/README.txt
 
+# 订阅源列表（运行时数据：网页端/命令改它，sync-to-server 的 git checkout 会冲掉；
+# 出厂种子在 sources.py 的 DEFAULT_SOURCES）
+sources.txt
+
 # 本地 embedding 模型（bge-small-zh-v1.5 ONNX，约 100MB，不进 git；
 # 首次同步时由 sync-to-server.sh 自动下载到 models/）
 models/

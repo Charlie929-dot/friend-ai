@@ -24,12 +24,12 @@ sys.path.insert(0, str(BASE))
 # 顺序也沿用原 __main__ 的相对次序（拆分时已按此排序）。新增一个域只在这里加一行。
 MODULES = [
     "test_engine", "test_memory", "test_persona", "test_reading",
-    "test_life", "test_proactive", "test_tuning",
+    "test_life", "test_proactive", "test_tuning", "test_info",
 ]
 
-# 防漏闸门：全量期望用例数（E4 拆分时 = 71）。数量对不上就直接报错——避免"某个文件
-# 被漏收集"或"新用例所在模块没进 MODULES"这类静默跳过。增删用例时同步改这个数字。
-EXPECTED_TOTAL = 71
+# 防漏闸门：全量期望用例数（E4 拆分时 = 71；v0.94 批 2 加 test_info 5 项 → 76）。数量对不上
+# 就直接报错——避免"某个文件被漏收集"或"新用例所在模块没进 MODULES"这类静默跳过。
+EXPECTED_TOTAL = 76
 
 
 def _collect(module):

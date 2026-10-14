@@ -383,6 +383,12 @@ def _make_handler(channel: WebChannel, on_message):
                 # L1 首屏 / L2 高级折叠。读用，改走 POST。
                 import tuning as _tuning
                 self._json({"groups": _tuning.catalog()})
+            elif u.path == "/api/sources":
+                # 信息获取（v0.94 批 2）：订阅源列表 + 今天刷到的。改走 POST。
+                import sources as _src
+                self._json({"enabled": bool(config.BROWSE_ENABLED),
+                            "sources": _src.load_sources(),
+                            "items": _src.items_today(limit=20)})
             elif u.path == "/account":
                 # 账号管理页（改密码 / 重绑 TOTP）
                 self._serve_web_file("account.html", "text/html; charset=utf-8")
@@ -422,6 +428,9 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if u.path == "/api/tuning/config":
                 self._do_tuning_config()
+                return
+            if u.path == "/api/sources":
+                self._do_sources()
                 return
             if u.path == "/api/emoji":
                 self._do_emoji()
@@ -549,6 +558,44 @@ def _make_handler(channel: WebChannel, on_message):
                 self._json({"ok": True})
             else:
                 self._json({"error": "not found"}, 404)
+
+        def _do_sources(self):
+            """信息获取（v0.94 批 2）：订阅源增删 + 手动刷一次。
+
+            只读写 sources.txt（一行一条 URL，`#` 注释），不改业务逻辑；
+            「刷一次」走 sources.daily_pass()（同一套管道，网页端只是另一个触发口）。
+            """
+            import sources as _src
+            data = self._read_json()
+            action = (data.get("action") or "").strip()
+            if action == "add":
+                url = (data.get("url") or "").strip()
+                if not url:
+                    self._json({"ok": False, "error": "地址是空的"}, 400)
+                    return
+                if not _src.add_source(url):
+                    self._json({"ok": False, "error": "这条已经有了"}, 400)
+                    return
+                msg = f"加好了：{url}"
+            elif action == "del":
+                url = (data.get("url") or "").strip()
+                if not _src.remove_source(url):
+                    self._json({"ok": False, "error": "订阅表里没有这条"}, 400)
+                    return
+                msg = f"删掉了：{url}"
+            elif action == "refresh":
+                if not config.BROWSE_ENABLED:
+                    self._json({"ok": False,
+                                "error": "刷信息关着呢（BROWSE_ENABLED=off）"}, 400)
+                    return
+                n = _src.daily_pass()
+                msg = f"刷到 {n} 条新的" if n else "这一轮没刷到新的（源不通 / 都是旧的）"
+            else:
+                self._json({"ok": False, "error": "未知操作"}, 400)
+                return
+            self._json({"ok": True, "msg": msg,
+                        "sources": _src.load_sources(),
+                        "items": _src.items_today(limit=20)})
 
         def _do_emoji(self):
             """表情包池维护（E 模块）：用户新增桶 / 新增表情 / 删自定义表情/桶。

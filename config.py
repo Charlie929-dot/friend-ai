@@ -222,6 +222,26 @@ READING_TXT_FALLBACK_MAX = int(os.environ.get("READING_TXT_FALLBACK_MAX", "6000"
 READING_SUMMARY_THRESHOLD = int(os.environ.get("READING_SUMMARY_THRESHOLD", "15000"))  # 阶段性大总结触发（累计字数）
 READING_CROSS_BOOK_COUNT = int(os.environ.get("READING_CROSS_BOOK_COUNT", "3"))        # 跨书梳理触发（读满几本）
 
+# --- 信息获取（v0.94 §11：把「刷手机看信息」从名词变成动词） ---
+# 外部源（RSS/Atom/网页）+ 对话里按需查证。抓到的进「今天的生活」（注入/弹药），不直接进记忆。
+# ⚠️ 默认源列表在 `sources.py` 的 `DEFAULT_SOURCES`（种子）；`sources.txt` 是本机/服务器上的
+# 可编辑副本，**不进 git**（与 books/ 同理，否则 sync-to-server.sh 的 `git checkout -- .` 会冲掉）。
+BROWSE_ENABLED = os.environ.get("BROWSE_ENABLED", "on").lower() == "on"      # 自主刷信息总开关（关了=回归旧行为，注入块也不出现）
+BROWSE_DAILY_PASSES = int(os.environ.get("BROWSE_DAILY_PASSES", "2"))        # 一天刷几次（批 3 接作息后才真正生效）
+BROWSE_ITEMS_PER_PASS = int(os.environ.get("BROWSE_ITEMS_PER_PASS", "3"))    # 单个源一次最多取几条
+BROWSE_CONTEXT_MAX = int(os.environ.get("BROWSE_CONTEXT_MAX", "2"))          # 每轮注入几条（批 3）
+BROWSE_ITEM_CHARS = int(os.environ.get("BROWSE_ITEM_CHARS", "160"))          # 每条注入截断字数（批 3）
+SOURCE_MAX_CHARS = int(os.environ.get("SOURCE_MAX_CHARS", "6000"))           # 正文参与摘要前的截断
+HTTP_TIMEOUT_SEC = int(os.environ.get("HTTP_TIMEOUT_SEC", "8"))              # 外部请求超时（超时就当没刷到）
+HTTP_CACHE_TTL_MIN = int(os.environ.get("HTTP_CACHE_TTL_MIN", "1440"))       # URL 去重窗口（分钟，默认 24h）
+INFO_ITEMS_KEEP_DAYS = int(os.environ.get("INFO_ITEMS_KEEP_DAYS", "90"))     # info_items 表清理窗口
+LOOKUP_ENABLED = os.environ.get("LOOKUP_ENABLED", "on").lower() == "on"      # 对话里按需查证总开关（批 4）
+LOOKUP_MAX_PER_REPLY = int(os.environ.get("LOOKUP_MAX_PER_REPLY", "1"))      # 每轮回复最多几次网络取数（批 4）
+LOOKUP_DAILY_LIMIT = int(os.environ.get("LOOKUP_DAILY_LIMIT", "20"))         # 每日网络取数上限（批 4）
+TOOL_RESULT_CHARS = int(os.environ.get("TOOL_RESULT_CHARS", "1200"))         # 工具返回给模型的文本上限（批 4）
+SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER", "none")                  # 搜索适配器；none = 只有 RSS/URL
+SOURCES_FILE = Path(os.environ.get("SOURCES_FILE", str(BASE_DIR / "sources.txt")))  # 订阅源列表（一行一条 URL，# 注释）
+
 # --- 网页端 Web UI（自用阶段主载体：浏览器打开就能聊，服务端常驻本机） ---
 WEB_HOST = os.environ.get("WEB_HOST", "127.0.0.1")     # 默认只本机访问（自用阶段不对外）
 WEB_PORT = int(os.environ.get("WEB_PORT", "8787"))

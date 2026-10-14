@@ -573,6 +573,20 @@
     padding: 12px 18px; border-top: 1px solid var(--line); }
   .tune-msg { font-size: 11.5px; color: var(--accent); flex: 1; min-width: 0; }
   @media (max-width: 640px) { .tune-row { grid-template-columns: 118px 1fr; } }
+
+  /* 它刷到的（信息获取，v0.94 批 2） */
+  .bi-item { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .bi-item:last-child { border-bottom: 0; }
+  .bi-t { font-size: 12px; color: var(--ink); line-height: 1.5; }
+  .bi-s { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.55; }
+  .bi-m { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .src-row { display: flex; align-items: center; gap: 8px; font-size: 11px;
+    padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .src-row span { flex: 1; min-width: 0; word-break: break-all; color: var(--ink); }
+  .src-add { display: flex; gap: 6px; margin: 8px 0; }
+  .src-add input { flex: 1; min-width: 0; padding: 5px 8px; font-size: 11px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface-2); color: var(--ink); }
 </style>
 </head>
 <body>
@@ -727,6 +741,24 @@
           <div class="fold-body">
             <div class="stream-actions"><button class="btn" id="streamCopy">复制全部</button></div>
             <div class="stream-list" id="streamList"><div class="empty">展开时加载…</div></div>
+          </div>
+        </details>
+
+        <details class="fold" id="foldBrowse">
+          <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></svg>它刷到的<span class="ec-sub" id="browseCount"></span></summary>
+          <div class="fold-body">
+            <div class="btnrow">
+              <button class="btn" id="browseRefresh">立刻刷一次</button>
+              <button class="btn" id="browseToggleSrc">订阅源</button>
+            </div>
+            <div id="browseSrcBox" style="display:none">
+              <div class="src-add">
+                <input id="browseSrcInput" type="text" placeholder="粘贴一条 RSS / 网页地址">
+                <button class="btn" id="browseSrcAdd">加</button>
+              </div>
+              <div id="browseSrcList"></div>
+            </div>
+            <div id="browseItems"><div class="empty">展开时加载…</div></div>
           </div>
         </details>
 
@@ -1589,11 +1621,20 @@ function renderTune(){
   $('tuneBody').innerHTML=tuneGroups.map(g=>{
     const rows=g.items.map(it=>{
       const def=it.default==null?'':'<span class="def">默认 '+esc(it.default)+'</span>';
-      const input=it.type==='time'
-        ?'<input data-key="'+esc(it.key)+'" type="text" inputmode="numeric" maxlength="5" placeholder="08:30" value="'+esc(it.value)+'">'
-        :'<input data-key="'+esc(it.key)+'" type="number" step="'+(it.step||1)+'"'
+      let input;
+      if(it.type==='bool'){
+        input='<select data-key="'+esc(it.key)+'">'
+          +'<option value="on"'+(String(it.value)==='on'?' selected':'')+'>on</option>'
+          +'<option value="off"'+(String(it.value)==='off'?' selected':'')+'>off</option></select>';
+      }else if(it.type==='time'){
+        input='<input data-key="'+esc(it.key)+'" type="text" inputmode="numeric" maxlength="5" placeholder="08:30" value="'+esc(it.value)+'">';
+      }else if(it.type==='str'){
+        input='<input data-key="'+esc(it.key)+'" type="text" value="'+esc(it.value)+'">';
+      }else{
+        input='<input data-key="'+esc(it.key)+'" type="number" step="'+(it.step||1)+'"'
           +(it.min!=null?' min="'+it.min+'"':'')+(it.max!=null?' max="'+it.max+'"':'')
           +' value="'+esc(it.value)+'">';
+      }
       return '<div class="tune-row '+(it.level==='L2'?'l2':'')+'">'
         +'<label>'+esc(it.label)+def+'</label>'+input
         +'<div class="tip">'+esc(it.desc)+'</div></div>';
@@ -1608,7 +1649,7 @@ $('tuneCancel').onclick=closeTunePanel;
 $('tuneBack').onclick=closeTunePanel;
 $('tuneSave').onclick=async()=>{
   const updates={};
-  $('tuneBody').querySelectorAll('input[data-key]').forEach(inp=>{ updates[inp.dataset.key]=inp.value; });
+  $('tuneBody').querySelectorAll('[data-key]').forEach(inp=>{ updates[inp.dataset.key]=inp.value; });
   $('tuneMsg').textContent='保存中…';
   try{
     const r=await (await fetch('/api/tuning/config',{method:'POST',
@@ -1809,6 +1850,56 @@ async function loadStream(){
 }
 $('foldStream').addEventListener('toggle',()=>{ if($('foldStream').open) loadStream(); });
 $('streamCopy').onclick=()=>{ if(!streamRows.length){ toast('还没有意识流可复制'); return; } copyText(streamCopyText(),'已复制全部意识流'); };
+
+/* ===== 它刷到的（信息获取，v0.94 批 2）===== */
+let browseData = null;   // {enabled, sources:[url], items:[{title,summary,source,shared}]}
+async function loadBrowse(){
+  try{
+    browseData = await (await fetch('/api/sources')).json();
+    renderBrowse();
+  }catch(e){ $('browseItems').innerHTML='<div class="empty">⚠ '+esc(e.message)+'</div>'; }
+}
+function renderBrowse(){
+  const d = browseData || {};
+  $('browseCount').textContent = d.enabled===false ? ' · 已关' : (' · ' + ((d.items||[]).length) + ' 条');
+  const box = $('browseItems'); const items = d.items || [];
+  box.innerHTML = items.length
+    ? items.map(it=>'<div class="bi-item"><div class="bi-t">'+esc(it.title||'')
+        +'</div><div class="bi-s">'+esc(it.summary||'')+'</div>'
+        +'<div class="bi-m">'+esc(it.source||'')+' · '+(it.shared?'已说过':'还没说')+'</div></div>').join('')
+    : '<div class="empty">今天它还没刷到什么。点「立刻刷一次」试试。</div>';
+  renderBrowseSrc();
+}
+function renderBrowseSrc(){
+  const list = (browseData && browseData.sources) || [];
+  const box = $('browseSrcList');
+  box.innerHTML = list.length
+    ? list.map(u=>'<div class="src-row"><span>'+esc(u)+'</span><button class="clr" data-del="'+esc(u)+'">删</button></div>').join('')
+    : '<div class="empty">还没有订阅源。</div>';
+  box.querySelectorAll('[data-del]').forEach(b=>{ b.onclick=()=>browsePost('del',{url:b.dataset.del}); });
+}
+async function browsePost(action, extra){
+  try{
+    const r = await (await fetch('/api/sources',{method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(Object.assign({action},extra||{}))})).json();
+    if(!r.ok){ toast(r.error||'操作失败'); return false; }
+    browseData = r; renderBrowse(); if(r.msg) toast(r.msg);
+    return true;
+  }catch(e){ toast('操作失败：'+e.message); return false; }
+}
+$('foldBrowse').addEventListener('toggle',()=>{ if($('foldBrowse').open) loadBrowse(); });
+$('browseToggleSrc').onclick=()=>{ const el=$('browseSrcBox'); el.style.display = el.style.display==='none'?'block':'none'; };
+$('browseRefresh').onclick=async()=>{
+  const b=$('browseRefresh'); const old=b.textContent;
+  b.disabled=true; b.textContent='刷着呢…';
+  await browsePost('refresh');
+  b.disabled=false; b.textContent=old;
+};
+$('browseSrcAdd').onclick=async()=>{
+  const inp=$('browseSrcInput'); const url=(inp.value||'').trim();
+  if(!url){ toast('先粘一条地址'); return; }
+  if(await browsePost('add',{url})) inp.value='';
+};
 
 /* ===== 表情面板 ===== */
 let emojiData = null;   // {buckets:[{name,builtin,items:[{text,emotion,img,builtin}]}]}

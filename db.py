@@ -110,6 +110,24 @@ CREATE TABLE IF NOT EXISTS event_vectors (
     ts TEXT NOT NULL,            -- 时间戳（相似度打平时近者赢）
     vec BLOB NOT NULL            -- float32 向量（本地 bge-small-zh-v1.5）
 );
+CREATE TABLE IF NOT EXISTS info_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    day TEXT NOT NULL,                 -- 生活日（跨天自动不注入，同 today_notes 的归日口径）
+    source TEXT NOT NULL DEFAULT '',   -- 源标识（域名，给"我从哪看到的"）
+    kind TEXT NOT NULL DEFAULT '',     -- rss / url
+    title TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',  -- 模型给的一句话大意（**不存正文**，只存摘要）
+    ts TEXT NOT NULL,
+    shared INTEGER NOT NULL DEFAULT 0, -- 是否已被当主动话题说出去（防重复当弹药）
+    starred INTEGER NOT NULL DEFAULT 0 -- 预留：标记值得再看
+);
+CREATE TABLE IF NOT EXISTS info_cache (
+    url TEXT PRIMARY KEY,              -- 去重缓存（双用途：TTL 内不重复抓 + 同 URL 不重复入库）
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    fetched_at TEXT NOT NULL
+);
 """
 
 
@@ -163,7 +181,7 @@ def clear_all():
     with _conn() as c:
         for table in ("kv", "messages", "counters", "memories", "long_memories",
                       "memory_vectors", "consciousness_stream", "reading_notes",
-                      "event_vectors"):
+                      "event_vectors", "info_items", "info_cache"):
             c.execute(f"DELETE FROM {table}")
 
 
@@ -884,3 +902,80 @@ def delete_event_vector(source: str, ref_id: int):
     with _conn() as c:
         c.execute("DELETE FROM event_vectors WHERE source=? AND ref_id=?",
                   (source, ref_id))
+
+
+# --- 信息获取（v0.94 §4.4：今天刷到的东西 + URL 去重缓存） ---
+# day = 生活日（由调用方按 persona._life_day 算好传入，db 层不 import persona，同意识流约定）。
+def add_info_item(day: str, source: str, kind: str, title: str, url: str,
+                  summary: str = "", now: datetime | None = None) -> int:
+    """落一条"今天刷到的"，返回 id。库里只存 summary + url，**不存正文**（§4.5④）。"""
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO info_items(day, source, kind, title, url, summary, ts) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (day, source or "", kind or "", title or "", url or "", summary or "",
+             (now or datetime.now()).isoformat(timespec="seconds")),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def info_items_for_day(day: str, limit: int = 0) -> list[dict]:
+    """某生活日刷到的条目（新的在前）。limit=0 表示不限。"""
+    sql = "SELECT * FROM info_items WHERE day=? ORDER BY id DESC"
+    args: tuple = (day,)
+    if limit and limit > 0:
+        sql += " LIMIT ?"
+        args = (day, limit)
+    with _conn() as c:
+        rows = c.execute(sql, args).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_info_shared(item_id: int) -> bool:
+    """打勾：这条已经被当主动话题说出去，别再当弹药重复提（§5.3）。"""
+    with _conn() as c:
+        cur = c.execute("UPDATE info_items SET shared=1 WHERE id=?", (item_id,))
+        return cur.rowcount > 0
+
+
+def info_items_unshared(day: str) -> list[dict]:
+    """某生活日还没被说出去的条目（主动消息弹药用）。"""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM info_items WHERE day=? AND shared=0 ORDER BY id DESC",
+            (day,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def cache_get(url: str) -> dict | None:
+    """查 URL 去重缓存；没有返回 None。"""
+    with _conn() as c:
+        row = c.execute("SELECT * FROM info_cache WHERE url=?", (url,)).fetchone()
+    return dict(row) if row else None
+
+
+def cache_put(url: str, title: str = "", summary: str = "",
+              now: datetime | None = None):
+    """写/更新 URL 去重缓存。"""
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO info_cache(url, title, summary, fetched_at) VALUES(?, ?, ?, ?) "
+            "ON CONFLICT(url) DO UPDATE SET title=excluded.title, "
+            "summary=excluded.summary, fetched_at=excluded.fetched_at",
+            (url, title or "", summary or "",
+             (now or datetime.now()).isoformat(timespec="seconds")),
+        )
+
+
+def cache_purge(ts_cutoff: str) -> int:
+    """清掉 fetched_at 早于 ts_cutoff 的缓存行（ISO 字符串比较），返回删除条数。"""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM info_cache WHERE fetched_at < ?", (ts_cutoff,))
+        return cur.rowcount
+
+
+def purge_info_items_before(day: str) -> int:
+    """清掉早于某生活日的刷到条目（保留窗口 = INFO_ITEMS_KEEP_DAYS，§6.3）。"""
+    with _conn() as c:
+        cur = c.execute("DELETE FROM info_items WHERE day < ?", (day,))
+        return cur.rowcount

@@ -20,6 +20,7 @@ from typing import Callable
 
 import config
 import corpus
+import db
 import llm
 
 
@@ -146,3 +147,36 @@ def run_reply(messages: list[dict], batch: list[str]) -> str:
         return llm.chat(messages)
     except llm.LLMUnavailable as e:
         return corpus.LLM_ERROR.format(e)
+
+
+# --- 网络取数预算（方案 §3.3） ------------------------------------------------
+# 延迟和 token 是真钱：每轮回复有上限、每天也有总额。**机制层**（不知道哪个工具在联网），
+# 具体谁能上网由各自 handler 调 `allow_lookup()` 前先问一句。
+# 每日计数走 `db.incr_counter`（按朋友库隔离、按天自动归零）；每轮计数是进程内的，
+# `begin_reply()` 在每轮回复开始时清一次。
+_LOOKUP_COUNTER_KEY = "lookup_online"
+_reply_spent = 0
+
+
+def begin_reply() -> None:
+    """一轮回复开始：清空"本轮已用取数次数"（每日总额不受影响）。"""
+    global _reply_spent
+    _reply_spent = 0
+
+
+def allow_lookup() -> bool:
+    """还能不能再上一次网——每轮 + 每日双上限，任一超出就 False。"""
+    if not getattr(config, "LOOKUP_ENABLED", True):
+        return False
+    if _reply_spent >= int(getattr(config, "LOOKUP_MAX_PER_REPLY", 1) or 0):
+        return False
+    if db.get_counter(_LOOKUP_COUNTER_KEY) >= int(getattr(config, "LOOKUP_DAILY_LIMIT", 20) or 0):
+        return False
+    return True
+
+
+def note_lookup() -> None:
+    """记一次网络取数（本轮 +1、今日 +1）。"""
+    global _reply_spent
+    _reply_spent += 1
+    db.incr_counter(_LOOKUP_COUNTER_KEY)

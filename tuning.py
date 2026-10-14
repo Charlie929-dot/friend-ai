@@ -206,6 +206,43 @@ _GROUPS: list[dict] = [
                  h="精力高于此值 = 精力足，倾向熬夜", min=0, step=1),
         ],
     },
+    {
+        # v0.94 信息获取：把人设第三件事「刷手机看信息」从名词变成动词（方案 §11）。
+        # 开关类（总开关/次数/上限）走 L1；截断/窗口这类调优项走 L2。
+        "name": "信息获取",
+        "items": [
+            dict(k="BROWSE_ENABLED", l="刷信息总开关", v="L1", t="bool",
+                 h="关掉 = 回归旧行为（不抓外部源、注入块也不出现）"),
+            dict(k="BROWSE_DAILY_PASSES", l="一天刷几次", v="L1", t="int",
+                 h="每天最多自主刷几轮（接作息后生效）", min=0, step=1),
+            dict(k="BROWSE_ITEMS_PER_PASS", l="单源取几条", v="L1", t="int",
+                 h="每个源一次最多取几条", min=1, step=1),
+            dict(k="HTTP_TIMEOUT_SEC", l="取数超时", v="L1", t="int",
+                 h="外部请求超时（秒），超时当没刷到", min=1, step=1),
+            dict(k="LOOKUP_ENABLED", l="按需查证开关", v="L1", t="bool",
+                 h="对话里允许它自己上网看一眼（未落地前无效果）"),
+            dict(k="LOOKUP_MAX_PER_REPLY", l="每轮取数上限", v="L1", t="int",
+                 h="一轮回复最多几次网络取数", min=0, step=1),
+            dict(k="LOOKUP_DAILY_LIMIT", l="每日取数上限", v="L1", t="int",
+                 h="每天最多几次网络取数", min=0, step=1),
+            dict(k="SEARCH_PROVIDER", l="搜索适配器", v="L1", t="str",
+                 h="搜索引擎适配器；none = 只用 RSS/网页"),
+            dict(k="BROWSE_CONTEXT_MAX", l="注入几条", v="L2", t="int",
+                 h="每轮最多注入几条刷到的", min=0, step=1),
+            dict(k="BROWSE_ITEM_CHARS", l="注入截断", v="L2", t="int",
+                 h="每条注入截断字数", min=0, step=10),
+            dict(k="SOURCE_MAX_CHARS", l="正文截断", v="L2", t="int",
+                 h="抓到的正文参与摘要前的截断", min=200, step=500),
+            dict(k="HTTP_CACHE_TTL_MIN", l="去重窗口", v="L2", t="int",
+                 h="同一 URL 多久内不重复抓（分钟）", min=0, step=60),
+            dict(k="INFO_ITEMS_KEEP_DAYS", l="刷到记录保留", v="L2", t="int",
+                 h="刷到的东西保留多少天", min=1, step=10),
+            dict(k="TOOL_RESULT_CHARS", l="工具返回上限", v="L2", t="int",
+                 h="工具返回给模型的文本上限（防烧 token）", min=100, step=100),
+            dict(k="SOURCES_FILE", l="订阅源文件", v="L2", t="str",
+                 h="订阅源列表文件路径（一行一条 URL；不存在时用出厂种子）"),
+        ],
+    },
 ]
 
 
@@ -237,7 +274,12 @@ def _by_key() -> dict:
 
 
 def _read_raw(item: dict):
-    return getattr(config, item["k"])
+    v = getattr(config, item["k"])
+    if item["t"] == "bool":          # config 里是 Python bool，面板要的是 on/off
+        return "on" if v else "off"
+    if item["t"] == "str":           # 可能不是 str（如 SOURCES_FILE 是 Path）→ 统一转字符串
+        return str(v)
+    return v
 
 
 def _default_of(item: dict) -> str:
@@ -248,6 +290,8 @@ def _default_of(item: dict) -> str:
     （分组 / 标签 / 层级 / 类型 / 范围），默认值一律 `getattr(config, k)` + 类型适配。
     """
     v = getattr(config, item["k"], "")
+    if item["t"] == "bool":
+        return "on" if v else "off"
     if item["t"] == "int":
         try:
             return str(int(v))
@@ -297,6 +341,15 @@ def _coerce(item: dict, raw) -> str:
             v = float(raw)
         except (TypeError, ValueError):
             raise ValueError(f"{label}（{key}）得是数字") from None
+    elif t == "bool":
+        s = str(raw).strip().lower()
+        if s in ("on", "true", "1", "yes"):
+            return "on"
+        if s in ("off", "false", "0", "no"):
+            return "off"
+        raise ValueError(f"{label}（{key}）得是 on / off")
+    elif t == "str":
+        return str(raw or "").strip()
     elif t == "time":
         s = str(raw or "").strip()
         m = _TIME_RE.match(s)
