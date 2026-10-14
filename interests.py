@@ -7,7 +7,8 @@
 纯规则、不调 LLM（用户 2026-10-11 拍板）：
 - 阅读源（最强、确定性）：读完一篇 → 该 genre 直接 +1（life._settle_due 结算时埋点）。
 - 聊天源：独白里「兴趣信号词 + 主题词」共现 → 该主题 +1（conservative 防误判）。
-- 刷手机源：**待 v0.94 §9 批 2 接**（刷到的东西用 INTEREST_TOPICS 词表跑 detect，纯规则、不调 LLM；目前占位）。
+- 刷手机源（v0.97 批 3 落地）：**刷到的东西**用 `detect_topics` 纯主题词表匹配 + **最近交流过的主题**
+  （近 `INTEREST_CONVO_DAYS` 个生活日双方消息），两条路命中即各 +1；累加在 `life` 的刷信息钩子里。
 同一主题累计 ≥ 阈值（INTEREST_PROMOTE_THRESHOLD）→ 转正（promoted）。
 
 存储：kv「interests」，按朋友隔离（各自 friend.db）。渲染进内核 prompt 的
@@ -90,6 +91,71 @@ def detect_and_record(text: str) -> list[str]:
     for topic in detect(text):
         if record(topic):
             promoted_now.append(topic)
+    return promoted_now
+
+
+def detect_topics(text: str) -> list[str]:
+    """从一段文本里按 `INTEREST_TOPICS` 主题词表匹配命中的主题（**不要信号词门槛**）。
+
+    刷源专用（v0.97 批 3）：新闻/条目里不会写"我感兴趣"这种话，所以不能沿用
+    `detect()` 的「信号词 + 主题词共现」保守门槛——这里纯主题词表匹配。
+    只识别、不写库。返回命中的主题列表（去重、保序）。
+    """
+    if not config.INTEREST_PROMOTE_ENABLED:
+        return []
+    text = text or ""
+    if not text:
+        return []
+    hits = []
+    for topic, kws in corpus.INTEREST_TOPICS.items():
+        if any(kw in text for kw in kws):
+            hits.append(topic)
+    return hits
+
+
+def recent_convo_topics(now=None) -> set[str]:
+    """最近 `INTEREST_CONVO_DAYS` 个生活日双方消息里出现过的兴趣主题集合。
+
+    刷源兴趣判据的第二条路（v0.97 批 3 §1）：「不只是它本身的主题词，还和我相关
+    （我做的事、问的问题、表达过的疑惑、探讨过的主题）」。
+
+    ⚠️ 逐日回溯**必须走 `persona._life_day`**：睡一觉才算新的一天，夜里 1 点时
+    `今天 - N` 这种自然日减法会把窗口取错。每天取数用 `db.today_messages(day)`
+    （双方全部消息，含 user 与 assistant）。
+    """
+    days = int(getattr(config, "INTEREST_CONVO_DAYS", 3) or 0)
+    if days <= 0 or not config.INTEREST_PROMOTE_ENABLED:
+        return set()
+    import persona
+    from datetime import datetime, timedelta
+    now = now or datetime.now()
+    base, _ = persona._life_day(now)
+    topics: set[str] = set()
+    for i in range(days):
+        day = (base - timedelta(days=i)).strftime("%Y-%m-%d")
+        try:
+            msgs = db.today_messages(day)
+        except Exception:                   # noqa: BLE001 —— 取不到就当这天没交流
+            continue
+        for m in msgs:
+            topics.update(detect_topics(m.get("content", "")))
+    return topics
+
+
+def record_topics(topics) -> list[str]:
+    """给一批主题各 +1；**同一批内同主题只算一次**（防一轮 3 条同主题冲过阈值）。
+
+    返回**刚转正**的主题列表（供日志）。刷源的累加调用方（`life` 钩子）用它。
+    """
+    promoted_now = []
+    seen: set[str] = set()
+    for t in topics:
+        t = (t or "").strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        if record(t):
+            promoted_now.append(t)
     return promoted_now
 
 

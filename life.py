@@ -64,6 +64,7 @@ _FACT_TEMPLATES = {
 }
 
 _settling = False          # 章节结算串行闸门（同时只跑 1 个 LLM 调用）
+_browsing = False          # 刷信息串行闸门（v0.97 批 3：auto↔auto 互斥；手动 /browse 不吃这把锁）
 
 
 # ---------- 钟：起床 / 睡前（全项目只此一处推算） ----------
@@ -95,6 +96,12 @@ def wake_point(now: datetime) -> datetime:
 def _life_day_str(now: datetime) -> str:
     import persona
     return persona._life_day(now)[0].strftime("%Y-%m-%d")
+
+
+def _life_day_date(now: datetime) -> datetime:
+    """当前生活日的 0 点（清账窗口按生活日算，别用自然日）。"""
+    import persona
+    return persona._life_day(now)[0]
 
 
 def speed() -> float:
@@ -393,9 +400,16 @@ def prompt_hint(now: datetime | None = None) -> str:
                       total=s["total_chapters"], done=s["settled"], cur=s["chapter"])
 
 
-def tick() -> dict:
-    """调度器每分钟调一次：把该结算的章节结算掉（惰性补账，电脑睡一觉也能补上）。"""
-    return status()
+def tick(now: datetime | None = None) -> dict:
+    """调度器每分钟调一次：把该结算的章节结算掉（惰性补账，电脑睡一觉也能补上）。
+
+    v0.97 批 3：另在这里判定「要不要刷会儿手机」——**判定只放 tick**（每分钟一次），
+    绝不进 `status()`（后者被 HUD / 意识流 / 打断成本 / 每轮聊天路径高频读，放进去会误触发）。
+    """
+    now = now or datetime.now()
+    s = status(now)
+    _browse_tick(s, now)
+    return s
 
 
 def reset():
@@ -551,3 +565,141 @@ def take_shareable_item() -> tuple[str, int]:
             db.set_kv(_SHARE_KEY, json.dumps(items, ensure_ascii=False))
             return x["text"], int(x.get("todo_id") or 0)
     return "", 0
+
+
+# ---------- 刷信息（v0.97 批 3「进生活」）：把源层接进它的日常 ----------
+# 目标：让人设第三件事「刷手机看信息」第一次在对话里真的看得见（此前只能手动 /browse）。
+# 判定（相位变化才判）→ 后台线程刷一轮 → 兴趣累加（调用方，sources.py 保持干净）→
+# 意识流埋点 → 顺手清旧账。
+def _browse_tick(s: dict, now: datetime) -> None:
+    """刷信息挂点：只在相位**变化**时判定要不要刷。
+
+    ⚠️ 更新语义写死（v0.97 §2 落点 #1）：`browse_last_phase` 在 tick 每次发现相位变化时
+    **都**更新（`working`/`flow`/`idle` 也记，不论那个相位刷不刷）——只在刷时更新的话，
+    第二个 `break` 会因 `phase == last` 被挡，「break 都刷」的拍板就落空。
+    """
+    if not config.BROWSE_ENABLED or not config.WORK_ENABLED:
+        return
+    day = _load()
+    if day.get("v") != 2 or not day.get("planned"):
+        return
+    ph = s.get("phase") or "off"
+    if ph == day.get("browse_last_phase", ""):
+        return                          # 同一相位内每分钟不重复判定（一个 break 有 15 分钟）
+    # 相位真变了：先记下新相位（不论刷不刷都更新），且**只在相位变化时写 kv**、不每分钟写库
+    day["browse_last_phase"] = ph
+    _save(day)
+    if ph not in ("break", "off"):
+        return
+    if int(day.get("browse_passes") or 0) >= config.BROWSE_DAILY_PASSES:
+        return
+    _start_browse(now)
+
+
+def _start_browse(now: datetime) -> None:
+    """起一个后台线程刷一轮（网络 + 一次 LLM，十几秒）——绝不阻塞调度与聊天。
+
+    计数在**这里**（判定通过即算一次，封顶 `BROWSE_DAILY_PASSES`），配合 `_browsing`
+    互斥标志防重入。⚠️ `_browsing` 只互斥 auto↔auto：手动 `/browse`、网页端「刷一次」
+    直调 `sources.daily_pass`、不吃这把锁（已知小缺口，v0.97 §2.2 记录在案）。
+    """
+    global _browsing
+    if _browsing:
+        return
+    day = _load()
+    day["browse_passes"] = int(day.get("browse_passes") or 0) + 1
+    _save(day)
+    _browsing = True
+    threading.Thread(target=_browse_one, args=(now,), daemon=True).start()
+
+
+def _browse_one(now: datetime) -> None:
+    """后台线程：刷一轮 → 兴趣累加 → 意识流埋点 → 清旧账。任何异常都吞掉（降级不崩）。"""
+    global _browsing
+    try:
+        import sources
+        day = _life_day_str(now)
+        before = _max_info_id(day)
+        sources.daily_pass(now)                         # 内部降级：失败返回 0 不抛
+        items = _new_info_items(day, before)
+        _record_browse_interests(items, now)
+        _note_browse(items, now)
+    except Exception as e:                              # noqa: BLE001
+        print(f"[生活] 刷信息失败：{e}")
+    finally:
+        _browsing = False
+    _purge_info(now)                                    # 清账放最后，失败不影响上面
+
+
+def _max_info_id(day: str) -> int:
+    rows = db.info_items_for_day(day)
+    return int(rows[0].get("id") or 0) if rows else 0
+
+
+def _new_info_items(day: str, after_id: int) -> list[dict]:
+    """这一轮新增的条目（id > 刷前的最大 id 做差）。
+
+    做差窗口内混进手动 `/browse` / 网页端「刷一次」落的条目**无妨**——手动刷的同样是
+    「TA 刷到的」（v0.97 §4 决策 A），不为此加过滤。
+    """
+    return [r for r in db.info_items_for_day(day) if int(r.get("id") or 0) > after_id]
+
+
+def _record_browse_interests(items: list[dict], now: datetime) -> None:
+    """刷源兴趣累加（v0.97 §2 落点 #6）——**放调用方**，不塞进 `sources.daily_pass`。
+
+    判据 = `INTEREST_TOPICS` 主题词命中（对刷到的条目） ∪ 最近交流过的主题。
+    一轮内同主题只 +1（`record_topics` 去重）。
+    """
+    if not config.INTEREST_PROMOTE_ENABLED:
+        return
+    import interests
+    topics: set[str] = set()
+    for it in items:
+        text = f"{it.get('title') or ''} {it.get('summary') or ''}"
+        topics.update(interests.detect_topics(text))
+    topics |= interests.recent_convo_topics(now)
+    if topics:
+        interests.record_topics(topics)
+
+
+def _note_browse(items: list[dict], now: datetime) -> None:
+    """意识流埋点：每轮一条 + 带 1–2 条具体内容（保住「TA 的一天」的密度）。
+
+    ⚠️ `now` 必传（踩过实测 #26 的 `add_stream` 旧 bug）；受 `CONSCIOUS_STREAM_ENABLED` 约束。
+    """
+    if not config.CONSCIOUS_STREAM_ENABLED:
+        return
+    picks = []
+    for it in items[:2]:
+        t = (it.get("summary") or it.get("title") or "").strip()
+        if t:
+            picks.append(t)
+    text = ("刷了会儿手机，看到：" + "；".join(picks)) if picks else "刷了会儿手机，没刷到什么有意思的"
+    try:
+        stream.append("browse", text, now)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
+def _purge_info(now: datetime) -> None:
+    """清旧账（v0.97 §2 落点 #10：自批 5 提前并入本批）。
+
+    批 3 起每天自动进数据（2 pass × 每源 3 条 × 5 源 ≈ 30 行/天），清理若仍等批 5
+    就是无界增长窗口 + 「参数承诺 90 天、代码没人执行」的口径裂缝。
+    `db.purge_info_items_before` / `db.cache_purge` 两个函数 v0.96 已建好、此前无人调用。
+    """
+    try:
+        keep = int(getattr(config, "INFO_ITEMS_KEEP_DAYS", 90) or 0)
+        if keep > 0:
+            cutoff = (_life_day_date(now) - timedelta(days=max(0, keep - 1))).strftime("%Y-%m-%d")
+            db.purge_info_items_before(cutoff)
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        ttl = int(getattr(config, "HTTP_CACHE_TTL_MIN", 1440) or 0)
+        if ttl > 0:
+            ts_cutoff = (now - timedelta(minutes=ttl)).isoformat(timespec="seconds")
+            db.cache_purge(ts_cutoff)
+    except Exception:                                   # noqa: BLE001
+        pass

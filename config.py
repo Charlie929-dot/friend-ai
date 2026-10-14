@@ -188,6 +188,7 @@ SELF_REVIEW_ENABLED = os.environ.get("SELF_REVIEW_ENABLED", "on").lower() == "on
 # --- 兴趣修炼（S4 人格连续性：偏好从读/聊/刷三源动态养成，内核钉死不动） ---
 INTEREST_PROMOTE_ENABLED = os.environ.get("INTEREST_PROMOTE_ENABLED", "on").lower() == "on"  # 偏好修炼总开关（关了不检测、不记录、不注入）
 INTEREST_PROMOTE_THRESHOLD = int(os.environ.get("INTEREST_PROMOTE_THRESHOLD", "3"))          # 同一兴趣主题累计 N 次自动转正（纯规则、不调 LLM）
+INTEREST_CONVO_DAYS = int(os.environ.get("INTEREST_CONVO_DAYS", "3"))                        # 「最近交流过的主题」回溯几个生活日（刷源兴趣判据，批 3）
 
 # --- 表情包池（E 模块：统一表情库存按情绪分桶，治「表情单一 😂 反复用」） ---
 EMOJI_POOL_ENABLED = os.environ.get("EMOJI_POOL_ENABLED", "on").lower() == "on"   # 总开关（关了不注入表情库存、UI 表情按钮也隐藏）

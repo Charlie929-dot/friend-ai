@@ -34,6 +34,45 @@ def _is_llm_error(text: str) -> bool:
     return bool(prefix) and t.startswith(prefix)
 
 
+def _clear_carried_ids() -> None:
+    """不发 / 发不出去时清掉本轮携带的素材 id。
+
+    v0.97 批 3 审查修订（修既有瑕疵）：旧实现只在**发出后**清 `proactive_todo_id`，
+    LLM 失败 / 无弹药的 return False 路径不清 —— 陈年 id 会被下一次**任何**主动消息
+    （含非 random 场景）错杀。对 info item 的后果是误勾 `shared`、永不能再当弹药。
+    """
+    db.set_kv("proactive_todo_id", "")
+    db.set_kv("proactive_info_id", "")
+
+
+def _settle_carried_ids() -> None:
+    """主动消息发出后，把携带的素材 id 按 id 打勾。
+
+    §5 拍板 #6③ + v0.97 批 3 审查修订：打勾**不得**包在 `TODOS_ENABLED` 门内
+    （info item 的打勾与待办开关无关）；两个 id 各自读完即清空。
+    """
+    raw = db.get_kv("proactive_todo_id", "")
+    if raw and raw != "0":
+        try:
+            todo_id = int(raw)
+        except ValueError:
+            todo_id = 0
+        if todo_id and config.TODOS_ENABLED:
+            done = todos.mark_done_by_id(todo_id)
+            if done:
+                print(f"[待办] 打勾（id {todo_id}）：{done[:30]}")
+    db.set_kv("proactive_todo_id", "")
+    raw = db.get_kv("proactive_info_id", "")
+    if raw and raw != "0":
+        try:
+            info_id = int(raw)
+        except ValueError:
+            info_id = 0
+        if info_id and db.mark_info_shared(info_id):
+            print(f"[刷到] 打勾（id {info_id}）")
+    db.set_kv("proactive_info_id", "")
+
+
 def take_outbox() -> list[dict]:
     """取出并清空未读主动消息队列（存在各自 friend.db，按朋友隔离）。
 
@@ -441,11 +480,13 @@ class Engine:
                 # v0.89 §6：random 场景没有真实弹药就不发（旧行为是让 LLM 自由发挥
                 # 编一个"我刚刷手机看到…"，于是出现连发几条都跟事实对不上的情况）
                 print(f"[proactive:{scenario}] 没有真实的事可说，这次不发")
+                _clear_carried_ids()
                 return False
             try:
                 reply = llm.chat(prompt, temperature=1.0, thinking=False)
             except llm.LLMUnavailable as e:
                 print(f"[proactive:{scenario}] LLM 不可用：{e}")
+                _clear_carried_ids()
                 return False
 
         if scenario == "bubble":
@@ -459,18 +500,7 @@ class Engine:
         for seg in (s.strip() for s in reply.split("\n") if s.strip()):
             self._send(seg, kind="proactive")
         # §5 拍板 #6③：主动消息发出后，把携带的素材 id 按 id 打勾（废弃 6 字字面指纹）
-        if config.TODOS_ENABLED:
-            raw_id = db.get_kv("proactive_todo_id", "")
-            if raw_id and raw_id != "0":
-                try:
-                    todo_id = int(raw_id)
-                except ValueError:
-                    todo_id = 0
-                if todo_id:
-                    done = todos.mark_done_by_id(todo_id)
-                    if done:
-                        print(f"[待办] 打勾（id {todo_id}）：{done[:30]}")
-            db.set_kv("proactive_todo_id", "")
+        _settle_carried_ids()
         return True
 
     # --- 初见阶段的冒泡机制：空闲 30-60 分钟没聊就冒个泡 ---

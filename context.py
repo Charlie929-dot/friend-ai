@@ -133,6 +133,24 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
         messages.append({"role": "system",
                          "content": f"【我今天做过的事】（{memory._TODAY_NOTE_HINT}，"
                                     f"细节过了今天就淡了）\n" + "\n".join(lines)})
+    # 今天刷到的（v0.97 批 3）：TA 自己的视角——「我今天刷到过这些」，**不是"帮你查的"**
+    # （一视同仁红线 §12）。空表则整块不出现；块内自带负约束守住"别把不知道的说成刚刷到"。
+    # 位置在【我今天做过的事】之后、仍在动态区，不破坏 context.py 缓存稳定前缀。
+    if config.BROWSE_ENABLED:
+        import sources as _sources
+        browsed = _sources.items_today(limit=config.BROWSE_CONTEXT_MAX)
+        if browsed:
+            blines = []
+            for it in browsed:
+                body = (it.get("summary") or it.get("title") or "").strip().replace("\n", " ")
+                if len(body) > config.BROWSE_ITEM_CHARS:
+                    body = body[:config.BROWSE_ITEM_CHARS] + "…"
+                src = (it.get("source") or "").strip()
+                blines.append("- " + body + (f"（{src}）" if src else ""))
+            messages.append({"role": "system", "content": (
+                "【我今天刷到的】这一块里有什么，我今天就真的只刷到了这些；"
+                "没有这一块 = 今天没刷到什么，别把不知道的东西说成「我刚刷到」。\n"
+                + "\n".join(blines))})
     # 读书笔记（§4 alpha 库）：最近章节按累计字数窗口必带（读得近的靠后）
     if config.TRUE_READ_ENABLED:
         import notes as _notes
@@ -192,12 +210,13 @@ def build_proactive_messages(state: str, scenario: str) -> list[dict] | None:
 def _inject_random_topic(prompt: list[dict]) -> bool:
     """random 场景的话题弹药：**从真实发生过的事里取一件**。返回有没有取到。
 
-    v0.89 §6（治「车怠速」连发四条）：五源皆空 → 返回 False →
+    v0.89 §6（治「车怠速」连发四条）：**六源皆空** → 返回 False →
     `build_proactive_messages` 返回 None → core **不调 LLM、不发**。
     这是**删除一条路径**（旧实现无弹药时让 LLM 自由发挥编环境），不是加闸门。
 
-    五源按鲜活度排：素材池（读到有触动的话）→ 待办（想说还没说的事）→
-    承诺（我答应过还没兑现的）→ 兴趣（最近喜欢上的）→ 旧记忆。
+    **六源全序**（v0.97 批 3 补全序）：素材池（读到有触动的话，50% 概率）→ 刷到的
+    （今天刷到还没说出去的）→ 待办（想说还没说的事）→ 承诺（我答应过还没兑现的）→
+    兴趣（最近喜欢上的）→ 旧记忆。
     """
     import db as _db
 
@@ -214,6 +233,20 @@ def _inject_random_topic(prompt: list[dict]) -> bool:
                 f"\n（你刚忙完手头的事，脑子里还留着这么一句："
                 f"「{mat}」。可以自然跟TA聊起它——比如提一句你最近在读什么书、"
                 f"读到哪句挺有感觉。想聊别的也行。）"
+                f"\n（分享质量：聊这个要落在具体内容上，别泛泛、别硬扯生活。）")
+            return True
+    # 刷到的（v0.97 批 3）：今天刷到、还没说出去的一条——它自己今天看到的东西。
+    # 排在「素材」之后、「待办」之前（六源全序：素材 → 刷到的 → 待办 → 承诺 → 兴趣 → 旧记忆）。
+    if config.BROWSE_ENABLED:
+        import sources as _src
+        pick = next((r for r in _src.items_today(limit=20)
+                     if not r.get("shared")), None)
+        if pick:
+            _db.set_kv("proactive_info_id", str(int(pick.get("id") or 0)))
+            body = (pick.get("summary") or pick.get("title") or "").strip()
+            prompt[-1]["content"] += (
+                f"\n（你今天刷手机看到一条：{body}。"
+                f"可以自然跟TA聊起它，聊一两句；想聊别的也行。）"
                 f"\n（分享质量：聊这个要落在具体内容上，别泛泛、别硬扯生活。）")
             return True
     # 待办：脑子里想说、还没说的事（读过/想过攒下来的）
