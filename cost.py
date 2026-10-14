@@ -21,7 +21,7 @@
 from datetime import datetime
 
 import config
-import work
+import life
 
 # 三态注入 system prompt 的语态（只说自己状态，红线见 corpus.COST_BLAME）
 LEVEL_HINTS = {
@@ -64,7 +64,7 @@ def state(now: datetime | None = None) -> dict:
 
     返回：level(welcomed/tolerated/costly/sleep) + cost_index + R + F + phase + energy。
     """
-    s = work.status(now)
+    s = life.status(now)
     phase = s["phase"]
     if phase == "sleep":
         return {"level": "sleep", "cost_index": 0.0, "R": 0.0, "F": 0.0,

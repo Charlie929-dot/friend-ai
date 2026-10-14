@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 import config
 import db
 
-# 离线相位（work.status 的 phase 里，这几个 = 它在专注做事，不秒回）
+# 离线相位（life.status 的 phase 里，这几个 = 它在专注做事，不秒回）
 _OFFLINE_PHASES = ("flow", "working")
 
 _INBOX_KEY = "inbox_queue"
@@ -45,16 +45,16 @@ def is_offline(now: datetime | None = None) -> bool:
         return False          # SLEEPY 过渡态算在线（还能回话，带困意）
     if not config.WORK_ENABLED:
         return False
-    import work
-    return work.status(now)["phase"] in _OFFLINE_PHASES
+    import life
+    return life.status(now)["phase"] in _OFFLINE_PHASES
 
 
 def offline_reason(now: datetime | None = None) -> str:
     """离线的原因：'sleep'（睡）/ 'flow'（刚进入状态）/ 'working'（忙）。"""
     if db.get_state() == "SLEEPING":
         return "sleep"
-    import work
-    return work.status(now)["phase"]
+    import life
+    return life.status(now)["phase"]
 
 
 # ---------- 离线留言（你 → 它） ----------
@@ -112,7 +112,7 @@ def _life_day_str(now: datetime) -> str:
 
 
 def _anchor_bedtime(now: datetime) -> datetime:
-    """今晚的人格卡锚点入睡时刻（跨午夜处理，思路同 work._bedtime）。"""
+    """今晚的人格卡锚点入睡时刻（跨午夜处理，思路同 life._bedtime）。"""
     import persona
     p = persona.behavior_params()
     day, _ = persona._life_day(now)
@@ -125,8 +125,8 @@ def _anchor_bedtime(now: datetime) -> datetime:
 
 def _sleep_shift(now: datetime) -> int:
     """入睡浮动（分钟，正=熬夜晚睡，负=早睡），由当天状态决定。范围 [-早睡上限, +熬夜上限]。"""
-    import work
-    s = work.status(now)
+    import life
+    s = life.status(now)
     if s["energy"] <= config.REST_TIRED_ENERGY:    # 很累 → 早睡
         return -random.randint(10, config.REST_SLEEP_EARLY_MAX)
     if s["phase"] == "off":                        # 忙完了 → 想早点睡

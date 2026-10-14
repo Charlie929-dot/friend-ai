@@ -24,7 +24,7 @@ import auth      # 必须放在 config 之后：config 导入时才会把 .env �
 import db
 import guard
 import persona
-import work
+import life
 from channels.base import Channel
 
 WEB_DIR = config.BASE_DIR / "web"
@@ -106,7 +106,7 @@ def _persona_tags(card: dict | None) -> list[str]:
 
 # --- 状态快照：HUD + 朋友档案 ---
 def _state_payload(channel: WebChannel) -> dict:
-    s = work.status()
+    s = life.status()
     import cost
     c = cost.state()
     import mood
@@ -114,7 +114,7 @@ def _state_payload(channel: WebChannel) -> dict:
     import persona_pool
     card = persona_pool.load()
     p = persona.behavior_params()
-    fresh = len([x for x in work._shareables() if not x.get("used")])
+    fresh = len([x for x in life._shareables() if not x.get("used")])
     import offline as _off
     state = db.get_state()
     off = _off.is_offline()
@@ -139,7 +139,9 @@ def _state_payload(channel: WebChannel) -> dict:
         "urgent": guard.in_urgent_window(),
         "guard": guard.guard_enabled(),
         "typing": channel.typing_now(),
-        "work": {k: s[k] for k in ("phase", "energy", "money", "done", "quota")},
+        # v0.89 §5.2：HUD 契约换成「在读哪本 / 进度% / 章节 / 经验」（余额与"第几件"退役）
+        "work": {k: s[k] for k in ("phase", "energy", "exp", "progress",
+                                   "chapter", "total_chapters", "book_title", "overtime")},
         "cost": {"level": c["level"],
                  "badge": cost.LEVEL_BADGE.get(c["level"], ""),
                  "index": c["cost_index"]},

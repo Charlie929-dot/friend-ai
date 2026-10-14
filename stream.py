@@ -10,7 +10,7 @@ TA 脑子里应该有一条持续更新、第一人称的自我叙事——像�
 
 事件驱动追加（确定性为主，只有"我在想"调 LLM）：
 - 作息切换 → "我伸了懒腰，起床了 / 我困了，去睡了"（core._do_wake/_do_sleep）
-- 工作结算 → "忙完第 X 件，攒了 Z 块，剩 W 精力"（work._settle）
+- 工作结算 → "忙完第 X 件，攒了 Z 块，剩 W 精力"（life._settle_due）
 - 收到留言 → "TA 给我发消息了"（core.on_user_message）
 - 对方撤回 → "对方撤回了刚才那句，我当没看见"（webui._do_revoke）
 - 内心独白 → "我在想：…"（core._inner_monologue，持久化不再用完就扔）
@@ -19,8 +19,8 @@ TA 脑子里应该有一条持续更新、第一人称的自我叙事——像�
 本模块是第一步「核心闭环」：建流 + 独白持久化 + 每轮注入（补 money/energy 进
 prompt）。把 work/mood/selfmem/独白 四处散注收敛成一条流，是第二步（收敛散件）。
 
-依赖设计：顶层只 import config + db（不 import work/mood/persona），
-让 work.py / core.py 能安全地顶层 import 本模块而不成环；需要时在函数内延迟 import。
+依赖设计：顶层只 import config + db（不 import life/mood/persona），
+让 life.py / core.py 能安全地顶层 import 本模块而不成环；需要时在函数内延迟 import。
 """
 from datetime import datetime
 
@@ -91,14 +91,21 @@ def status_line(now: datetime | None = None) -> dict:
     if not config.CONSCIOUS_STREAM_ENABLED or not config.WORK_ENABLED:
         return {}
     import mood
-    import work
-    s = work.status(now)
+    import life
+    s = life.status(now)
     if s["phase"] == "sleep":
         return {}
     m = mood.mood(now)
+    # §5.1：数字给屏幕、事件给舌头——这里只留「读到哪」的事实，不给百分比/点数
+    reading = ""
+    if s.get("book_title"):
+        reading = (f"读到《{s['book_title']}》第 {s.get('chapter', 0)}/{s.get('total_chapters', 0)} 章"
+                   + ("，今天读得有点晚" if s.get("overtime") else ""))
+    elif s["phase"] == "off":
+        reading = "今天的事忙完了"
     return {
         "phase": s["label"],
-        "money": s["money"],
+        "reading": reading,
         "energy": s["energy"],
         "mood": m["label"],
     }
@@ -131,7 +138,9 @@ def prompt_hint(now: datetime | None = None) -> str:
         hhmm = _hhmm(r)
         lines.append(f"{hhmm} {_line_text(r)}" if hhmm else _line_text(r))
     # 「此刻的我」= 这条轴的最后一行：它描述的就是现在这个时刻的我
-    lines.append(f"{now:%H:%M} 此刻的我：{s['phase']}；攒了多少：{s['money']} 块；"
+    # 「此刻的我」：事实句（读到哪），不是账本数字（v0.89 §5.1）
+    tail = f"；{s['reading']}" if s.get("reading") else ""
+    lines.append(f"{now:%H:%M} 此刻的我：{s['phase']}{tail}；"
                  f"精力还剩：{s['energy']}；心情：{s['mood']}")
     return "\n".join(lines)
 

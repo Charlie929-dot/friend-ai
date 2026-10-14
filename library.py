@@ -14,13 +14,13 @@
     4. 未分类 —— 都没信号，落兜底类，随时可以手动归位
 
 - 格式：txt（自动试 utf-8/gb18030）、epub（标准库 zipfile 解包 + 剥 HTML）。
-- 进度：kv.library_progress，段级推进，一轮读完再从头。
 - 解析结果按 (路径, mtime, 大小) 缓存——书架大了也不会每次全量解 epub。
 - 只读自己的书，不联网、不传播，纯本地解析，合规。
 
-`next_passage()` 返回与 `reading.next_article()` 同构的
-{genre, category, tag, title, source, quote, text}——work 层优先读这里、没书才回退内置书摘。
-选书顺序按人格两级偏好：一级分类命中 > 细标签命中 > 未分类 > 其他。
+**v0.89：跳读（`next_passage`）与段级进度（`library_progress`）整条退役**——
+真读是唯一阅读路径，阅读进度真相是 `trueread` 的书级书签 `kv.reading_state`。
+本模块只负责：书从哪来、怎么切成章、章里有什么（选书顺序仍按人格两级偏好：
+一级分类命中 > 细标签命中 > 未分类 > 其他）。
 """
 import json
 import os
@@ -33,7 +33,6 @@ import config
 import corpus
 import db
 
-_PROG_KEY = "library_progress"
 _MAP_FILE = "categories.json"      # 分类映射表（放 books/ 根目录，跟着书走）
 _MAP_VERSION = 1
 _FORMATS = (".txt", ".epub")
@@ -283,6 +282,24 @@ def _parse_txt(path: Path) -> dict | None:
             "_raw": text, "_fmt": "txt"}
 
 
+_FRONT_POS_MAX = 5          # 书首前 N 个 spine 项（短章判废必须叠加的位置条件）
+_FRONT_MIN_CHARS = 600      # 低于这个字数才算"页"而不是"章"
+
+
+def _is_front_junk(title: str, char_count: int, pos: int) -> bool:
+    """非正文页判定（v0.89 §4.4，治「真读卡在还在读前言」）。
+
+    命中关键词（书名页 / 版权 / 目录 / 制作说明…）→ 废；
+    字数很少 → **只有位于书首前 5 项**才废。短章 ≠ 非正文——诗集一章可能就几十字，
+    只看字数会把整本诗集误杀，所以小字数必须叠位置条件（词表见 `corpus.EPUB_FRONT_JUNK`）。
+    """
+    t = (title or "").strip()
+    for pat in corpus.EPUB_FRONT_JUNK:
+        if re.search(pat, t, re.I):
+            return True
+    return char_count < _FRONT_MIN_CHARS and pos <= _FRONT_POS_MAX
+
+
 def _parse_epub(path: Path) -> dict | None:
     """解 epub：container.xml → OPF（书名/作者/阅读顺序）→ 逐章剥标签取正文。"""
     try:
@@ -339,7 +356,7 @@ def _parse_epub(path: Path) -> dict | None:
                 cover_path = alt if alt in z.namelist() else ""
         passages = []
         chapters = []   # 真读（§3）：spine 条目 = 章节边界（每个 idref 一段正文）
-        for idx, idref in enumerate(spine, start=1):
+        for pos, idref in enumerate(spine, start=1):
             href = manifest.get(idref)
             if not href:
                 continue
@@ -357,9 +374,12 @@ def _parse_epub(path: Path) -> dict | None:
             tm = re.search(r"<title[^>]*>([^<]+)</title>", html, re.I)
             ctitle = " ".join((tm.group(1) if tm else "").split())
             if not ctitle:
-                ctitle = f"第 {idx} 章"
-            chapters.append({"title": ctitle, "text": body,
-                             "char_count": len(re.sub(r"\s+", "", body))})
+                ctitle = f"第 {pos} 章"
+            n_chars = len(re.sub(r"\s+", "", body))
+            # v0.89 §4.4：非正文页不进章节列表——治「真读卡在还在读前言/版权页」
+            if _is_front_junk(ctitle, n_chars, pos):
+                continue
+            chapters.append({"title": ctitle, "text": body, "char_count": n_chars})
         return {"title": title or path.stem, "author": author, "passages": passages,
                 "subject": " ".join(subjects), "cover": cover_path,
                 "chapters": chapters, "_fmt": "epub"}
@@ -473,6 +493,20 @@ def _scan() -> list[dict]:
     return books
 
 
+def _pref_rank(book: dict, pref: str, tags: list[str]) -> int:
+    """这本书在 TA 口味里的排位：0 一级分类命中 → 1 细标签命中 → 2 未分类 → 3 其他。
+
+    ⚠️ 这是**选书**用的排序（trueread.pick_book 在用），不是跳读——删跳读时别一并删了。
+    """
+    if pref and book.get("category") == pref:
+        return 0
+    if tags and set(book.get("tags") or []) & set(tags):
+        return 1
+    if book.get("category") == corpus.UNCATEGORIZED or not book.get("category"):
+        return 2
+    return 3
+
+
 def books() -> list[dict]:
     """书架摘要（id/title/author/category/tags/by/count/has_cover），供 /books 与网页端展示。"""
     return [{"id": b["id"], "title": b["title"], "author": b["author"],
@@ -539,7 +573,13 @@ def reindex() -> int:
 
 
 def delete_book(book_id: str) -> bool:
-    """从书架删掉一本书（文件 + 映射表条目 + 阅读进度）。"""
+    """从书架删掉一本书（文件 + 映射表条目 + 这本书的读书笔记与向量）。
+
+    v0.89：段级进度（library_progress）已随跳读退役；删书改为连带清笔记——
+    否则这本书的 alpha/beta 笔记和 `event_vectors` 里的 note_beta 向量都成孤儿
+    （v0.88 R5 跨线项）。书签指向被删的书时不用特判：`trueread.pick_book()` 发现
+    它不在书架上了会自动按人格偏好换下一本。
+    """
     path = config.BOOKS_DIR / book_id
     try:
         if not path.is_file() or config.BOOKS_DIR not in path.parents:
@@ -550,9 +590,10 @@ def delete_book(book_id: str) -> bool:
     data = _load_map()
     data["books"].pop(book_id, None)
     _save_map(data)
-    prog = _load_progress()
-    if prog.get("book_id") == book_id:
-        db.set_kv(_PROG_KEY, json.dumps({}, ensure_ascii=False))
+    try:
+        db.delete_reading_notes_by_book(book_id)
+    except Exception as e:
+        print(f"[书库] 清这本书的笔记失败：{e}")
     return True
 
 
@@ -627,100 +668,3 @@ def cover_bytes(book_id: str) -> tuple[bytes, str] | None:
     return data, ctype
 
 
-# ---------- 阅读进度 ----------
-
-def _load_progress() -> dict:
-    raw = db.get_kv(_PROG_KEY)
-    try:
-        p = json.loads(raw) if raw else {}
-    except ValueError:
-        return {}
-    return p if isinstance(p, dict) else {}
-
-
-def _save_progress(book_id: str, idx: int) -> None:
-    db.set_kv(_PROG_KEY, json.dumps({"book_id": book_id, "idx": idx}, ensure_ascii=False))
-
-
-def progress() -> dict:
-    """当前阅读进度 {book_id, idx}。"""
-    return _load_progress()
-
-
-def _pick_quote(passage: str) -> str:
-    """从段落里摘一句当"金句"：中英文句末标点都算，取第一个 8~40 字的完整句。
-
-    英文句末标点（字母后的 .!? 后跟空白）也切句，保留原文标点；小数点 "3.14"
-    不会误切（前面是数字不是字母）。
-    """
-    sentences = re.split(r"(?<=[。！？!?…])|(?<=[A-Za-z][.!?])\s+", passage)
-    for s in sentences:
-        s = s.strip()
-        if 8 <= len(s) <= 40:
-            return s
-    return passage[:40].rstrip()
-
-
-def _pref_rank(book: dict, pref: str, tags: list[str]) -> int:
-    """这本书在 TA 口味里的排位：0 一级分类命中 → 1 细标签命中 → 2 未分类 → 3 其他。"""
-    if pref and book.get("category") == pref:
-        return 0
-    if tags and set(book.get("tags") or []) & set(tags):
-        return 1
-    if book.get("category") == corpus.UNCATEGORIZED or not book.get("category"):
-        return 2
-    return 3
-
-
-def next_passage(n: int = 1) -> dict | None:
-    """取 TA 下一段（或下 n 段）要读的：按人格两级偏好选书、段级顺序推进、一轮读完再从头。
-
-    一个工作单元读 n 段（n 可配，如 50）：text = 这 n 段合并的内容（截断），
-    quote = 从中摘的金句，进度推进 n 段。返回 {genre, category, tag, title, source,
-    quote, text}（与 reading.next_article 同构）；书架为空返回 None（work 层回退内置书摘）。
-    """
-    books_full = _scan()
-    if not books_full:
-        return None
-    n = max(1, n)
-    import persona
-    params = persona.behavior_params()
-    pref = params.get("reading_pref", "")
-    pref_tags = params.get("reading_tags") or []
-    # 偏好分类 → 偏好细标签命中 → 未分类 → 其他；同一档内按文件名序（稳定）
-    ordered = sorted(books_full,
-                     key=lambda b: (_pref_rank(b, pref, pref_tags), b["id"]))
-    prog = _load_progress()
-    book_id = prog.get("book_id")
-    idx = prog.get("idx", 0)
-    cur = next((i for i, b in enumerate(ordered) if b["id"] == book_id), 0)
-
-    chunks = []
-    title = author = category = tag = ""
-    for i in range(n):
-        # 当前书读到末尾（或空书）就换下一本
-        for _ in range(len(ordered)):
-            book = ordered[cur]
-            if idx < len(book["passages"]):
-                break
-            idx = 0
-            cur = (cur + 1) % len(ordered)
-        passages = ordered[cur]["passages"]
-        if not passages:
-            break
-        chunks.append(passages[idx])
-        if i == 0:
-            title = ordered[cur]["title"]
-            author = ordered[cur]["author"]
-            category = ordered[cur]["category"]
-            tag = (ordered[cur]["tags"] or [""])[0]
-        idx += 1
-    if not chunks:
-        return None
-    _save_progress(ordered[cur]["id"], idx)
-
-    text = " ".join(chunks)[:800]
-    return {"genre": "" if category == corpus.UNCATEGORIZED else category,
-            "category": category, "tag": tag, "title": title,
-            "source": author or "佚名",
-            "quote": _pick_quote(text), "text": text}

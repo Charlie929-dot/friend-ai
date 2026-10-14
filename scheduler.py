@@ -59,8 +59,8 @@ def start(engine) -> BackgroundScheduler:
     sch.add_job(engine.check_nudge, CronTrigger(minute="*"), id="nudge")
 
     # 工作系统：每分钟结算一次该结算的单元（惰性补账——电脑睡一觉醒来也能补上）
-    import work
-    sch.add_job(work.tick, CronTrigger(minute="*"), id="work")
+    import life
+    sch.add_job(life.tick, CronTrigger(minute="*"), id="work")
 
     # 离线与作息：每分钟检查 SLEEPY 过渡到点 + 上线 flush 离线留言
     import offline

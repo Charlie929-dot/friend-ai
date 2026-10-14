@@ -1,89 +1,67 @@
-"""阅读真读（§3，v1.0 整体设计的主要增量）：把"每单元读 N 段"升级为真读。
+"""阅读真读（v0.89 瘦身版）：读什么、读到哪、读完留下了什么。
 
-现状是"每单元读 N 段 → 产一条摘抄+读后感"（跳读），升级为**真读**：
-- **上课作息**（默认 8:30 上班 / 12:00–14:00 午休 / 17:30 下班；上午 2 节 + 下午 2 节；
-  每节 = 上半 40min + 节内休 15min + 下半 40min；节间休 20min）→ 共 8 半节 × 40min = 320min。
-- **当日任务**：按整数章节圈定（不读半章），受当日字数上限约束，累计到"再加一章就超"就停；
-  圈定的章节均分 8 个半节。
-- **tps（吞吐速度）** = 当日总字数 ÷ 总上课时间——**推导值、不单独设**。
-- **边读边做三件事**：视线窗口召回（向量）、思考即笔记（reasoning_content → 思考 buffer）、
-  打动判断（不打动就不摘）。
-- **章节末结算**：独立总结调用 = 思考 buffer + 章节内容 → 想法 + 总结 → 读书笔记 alpha/beta。
+时间面（几点开始读、读多久、什么时候歇）**全归 `life.py`**——本模块不再有钟。
+v0.89 之前这里还有「上课作息 8 半节」的排期，与 work 的工作单元是两套钟，
+两套时间参数互不联动（实测症状 #7）；现在节奏 = 章节边界，钟只有 life 那一台。
 
-依赖设计：本模块顶层只 import config/db（与 stream 同款约定），library/llm 等函数内延迟导入，
-避免与 work/core 成环。
+三件事：
+1. **圈章**：从书级书签起按整数章节圈定（宁少勿超，受当日字数上限约束）。
+2. **书签**：`kv.reading_state = {book_id, ch_idx}`——**唯一的阅读进度真相**
+   （取代旧 `trueread_cursor` + `reading_progress` 两本账），只被章节结算推进。
+3. **结算**：思考 buffer + 章节 → 读书笔记 alpha/beta + 打动判断（打动才进素材池）。
+
+依赖设计：顶层只 import config/db（与 stream 同款约定），library/llm 等函数内延迟导入，
+避免与 life/core 成环。
 """
 import json
-from datetime import datetime, timedelta
 
 import config
 import db
 
-_PLAN_KEY = "trueread_plan"      # 当日章节圈定计划
-_CURSOR_KEY = "trueread_cursor"  # 阅读游标（读到哪章、哪半节、思考 buffer）
+_STATE_KEY = "reading_state"     # 书级书签（v0.89：唯一阅读进度真相）
+
+# 结算产物解析用的行前缀（三行纯文本，比 JSON 稳——DeepSeek 结构化输出有 content:null 风险）
+_P_ALPHA = "短概述："
+_P_BETA = "完整转述："
+_P_MOVED = "打动："
 
 
-def _parse_hhmm(s: str) -> int:
-    """'HH:MM' → 当日分钟数。"""
+# ---------- 书签 ----------
+def bookmark() -> dict:
+    """当前书签 {book_id, ch_idx}（书级，跨天不重置）。"""
+    raw = db.get_kv(_STATE_KEY)
+    if not raw:
+        return {"book_id": "", "ch_idx": 0}
     try:
-        h, m = (s or "").split(":")
-        return int(h) * 60 + int(m)
-    except (ValueError, AttributeError):
-        return 0
+        c = json.loads(raw)
+    except ValueError:
+        return {"book_id": "", "ch_idx": 0}
+    if not isinstance(c, dict):
+        return {"book_id": "", "ch_idx": 0}
+    return {"book_id": str(c.get("book_id") or ""), "ch_idx": int(c.get("ch_idx") or 0)}
 
 
-def _today(now: datetime | None = None) -> datetime:
-    now = now or datetime.now()
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+def set_bookmark(book_id: str, ch_idx: int) -> dict:
+    """写书签。返回写后的书签。"""
+    b = {"book_id": book_id, "ch_idx": max(0, int(ch_idx or 0))}
+    db.set_kv(_STATE_KEY, json.dumps(b, ensure_ascii=False))
+    return b
 
 
-def half_periods(now: datetime | None = None) -> list[dict]:
-    """8 个半节的起止时间（上课作息）。返回 [{start, end, label}]，正序。
+def align(book_id: str, ch_idx: int) -> dict:
+    """把书签对齐到 (book_id, ch_idx)（与当前不一致时才写）。
 
-    排法：上午 SCHED_MORNING_PERIODS 节、下午 SCHED_AFTERNOON_PERIODS 节；
-    每节 = 上半 40 + 节内休 15 + 下半 40；节间休 20；午休夹在上午/下午之间。
-    """
-    now = now or datetime.now()
-    day = _today(now)
-    work = _parse_hhmm(config.SCHED_WORK_START)
-    lunch_s = _parse_hhmm(config.SCHED_LUNCH_START)
-    lunch_e = _parse_hhmm(config.SCHED_LUNCH_END)
-    half = config.SCHED_HALF_PERIOD_MIN
-    intra = config.SCHED_INTRA_BREAK_MIN
-    inter = config.SCHED_INTER_BREAK_MIN
-    slots: list[dict] = []
-
-    def _add_periods(start_min: int, n_periods: int, tag: str):
-        nonlocal slots
-        t = start_min
-        for p in range(n_periods):
-            # 上半
-            slots.append({"start": t, "end": t + half, "label": f"{tag}第{p + 1}节上"})
-            t += half + intra
-            # 下半
-            slots.append({"start": t, "end": t + half, "label": f"{tag}第{p + 1}节下"})
-            t += half
-            if p < n_periods - 1:
-                t += inter
-
-    _add_periods(work, config.SCHED_MORNING_PERIODS, "上午")
-    # 上午末到午休开始之间留空（自然过渡），下午从午休结束起
-    _add_periods(lunch_e, config.SCHED_AFTERNOON_PERIODS, "下午")
-    return [{"start": day + timedelta(minutes=s["start"]),
-             "end": day + timedelta(minutes=s["end"]), "label": s["label"]}
-            for s in slots]
+    生活引擎（life）按当日计划推进结算，书签是唯一真相——两者失步时以 life 为准对齐
+    （比如冷启动跳过了几章）。"""
+    b = bookmark()
+    if b["book_id"] != book_id or b["ch_idx"] != int(ch_idx or 0):
+        return set_bookmark(book_id, ch_idx)
+    return b
 
 
-def total_teaching_min() -> int:
-    """总上课时间（8 半节 × 半节时长，休息不算）。"""
-    n = (config.SCHED_MORNING_PERIODS + config.SCHED_AFTERNOON_PERIODS) * 2
-    return n * config.SCHED_HALF_PERIOD_MIN
-
-
-# ---------- 当日任务：按整数章节圈定 ----------
-
+# ---------- 选书与圈章 ----------
 def _book_order() -> list[dict]:
-    """待读的书（按人格两级偏好排序，与 work._settle 的选书一致）。"""
+    """待读的书（按人格两级偏好排序）。"""
     try:
         import library
         import persona
@@ -91,228 +69,154 @@ def _book_order() -> list[dict]:
         params = persona.behavior_params()
         pref = params.get("reading_pref", "")
         pref_tags = params.get("reading_tags") or []
-        ordered = sorted(books_full,
-                         key=lambda b: (library._pref_rank(b, pref, pref_tags), b["id"]))
-        return ordered
+        return sorted(books_full,
+                      key=lambda b: (library._pref_rank(b, pref, pref_tags), b["id"]))
     except Exception:
         return []
 
 
-def _next_chapters_from(book: dict, start_ch: int, max_chars: int) -> tuple[list[dict], int]:
-    """从某本书的第 start_ch 章起，按整数章节累计，直到"再加一章就超"。
-    返回 (圈定的章节列表, 累计字数)。"""
+def pick_book() -> dict | None:
+    """今天读哪本：书签指向的那本还在书架上就继续读它，否则按人格偏好取第一本。
+
+    （v0.89：不再从「段落 idx 反推章节号」——书签就是章节号，书级、跨天不重置。）
+    """
+    books = _book_order()
+    if not books:
+        return None
+    b = bookmark()
+    if b["book_id"]:
+        for x in books:
+            if x["id"] == b["book_id"]:
+                return x
+    return books[0]
+
+
+def chapters_of(book_id: str) -> list[dict]:
+    """一本书的章节列表（[{title, text, char_count}]，正序）。"""
     try:
         import library
-        chs = library.chapters(book["id"])
+        return library.chapters(book_id)
     except Exception:
-        chs = []
+        return []
+
+
+def plan_from(book_id: str, start_ch: int, max_chars: int) -> tuple[list[dict], int]:
+    """从 start_ch 章起按整数章节累计，直到「再加一章就超」。
+
+    返回 (圈定的章节 [{title, char_count}], 累计字数)。宁少勿超；首章就超上限时
+    至少读首章（「有东西读」优先于上限保护）。
+    """
+    chs = chapters_of(book_id)
+    if not chs:
+        return [], 0
+    start = max(0, min(int(start_ch or 0), len(chs) - 1))
     picked, acc = [], 0
-    for ch in chs[start_ch:]:
+    for ch in chs[start:]:
         n = int(ch.get("char_count") or 0)
         if picked and acc + n > max_chars:
-            break                    # 再加一章就超 → 停（宁少勿超）
-        picked.append(ch)
+            break
+        picked.append({"title": ch.get("title", ""), "char_count": n})
         acc += n
         if acc >= max_chars:
             break
+    if not picked:                      # 首章就超上限 → 至少读首章
+        picked = [{"title": chs[start].get("title", ""),
+                   "char_count": int(chs[start].get("char_count") or 0)}]
+        acc = picked[0]["char_count"]
     return picked, acc
 
 
-def plan_day(now: datetime | None = None, force: bool = False) -> dict:
-    """圈定当日阅读任务（幂等，缓存到 kv.trueread_plan）。
-
-    返回 {day, book_id, book_title, chapters: [{title, char_count}], total_chars,
-          per_half_chars, tps, done}。书架空返回 done=True（无书可读）。
-    """
-    now = now or datetime.now()
-    day = _today(now).strftime("%Y-%m-%d")
-    if not force:
-        raw = db.get_kv(_PLAN_KEY)
-        if raw:
-            try:
-                plan = json.loads(raw)
-                if plan.get("day") == day:
-                    return plan
-            except ValueError:
-                pass
-
-    plan = {"day": day, "book_id": "", "book_title": "", "chapters": [],
-            "total_chars": 0, "per_half_chars": 0, "tps": 0, "done": False}
-    books = _book_order()
-    if not books:
-        plan["done"] = True
-        _save_plan(plan)
-        return plan
-
-    max_chars = config.READING_DAILY_CHARS
-    # 从当前进度（library.progress）接着读：book_id + 段落 idx → 大致章节号
-    start_ch = 0
-    book = books[0]
-    try:
-        import library
-        prog = library.progress()
-        if prog and prog.get("book_id"):
-            for b in books:
-                if b["id"] == prog["book_id"]:
-                    book = b
-                    break
-            # 段落 idx → 章节号（按累计段落数估，落到哪章从哪章起读）
-            chs = library.chapters(book["id"])
-            idx = int(prog.get("idx", 0) or 0)
-            acc_p = 0
-            for i, ch in enumerate(chs):
-                acc_p += len(library._split_passages(ch.get("text", "")))
-                if acc_p > idx:
-                    start_ch = i
-                    break
-    except Exception:
-        pass
-
-    chapters, total = _next_chapters_from(book, start_ch, max_chars)
-    # 兜底：一本书首章就超过上限，至少读首章（宁少勿超的上限保护让位给"有东西读"）
-    if not chapters:
-        try:
-            import library
-            chs = library.chapters(book["id"])
-            if chs:
-                chapters = [chs[start_ch] if start_ch < len(chs) else chs[0]]
-                total = int(chapters[0].get("char_count") or 0)
-        except Exception:
-            pass
-
-    plan["book_id"] = book["id"]
-    plan["book_title"] = book["title"]
-    plan["chapters"] = [{"title": c["title"], "char_count": int(c.get("char_count") or 0)}
-                        for c in chapters]
-    plan["total_chars"] = total
-    teach = total_teaching_min()
-    plan["per_half_chars"] = max(1, total // max(1, (config.SCHED_MORNING_PERIODS
-                                                    + config.SCHED_AFTERNOON_PERIODS) * 2))
-    plan["tps"] = round(total / teach, 2) if teach else 0
-    plan["done"] = not chapters
-    _save_plan(plan)
-    return plan
-
-
-def _save_plan(plan: dict) -> None:
-    db.set_kv(_PLAN_KEY, json.dumps(plan, ensure_ascii=False))
-
-
-def tps(now: datetime | None = None) -> float:
-    """当前 tps（推导值 = 当日字数 ÷ 总上课时间）。"""
-    return float(plan_day(now).get("tps") or 0)
-
-
-# ---------- 阅读游标 + 思考 buffer ----------
-
-def _load_cursor() -> dict:
-    raw = db.get_kv(_CURSOR_KEY)
-    if not raw:
-        return {}
-    try:
-        c = json.loads(raw)
-    except ValueError:
-        return {}
-    return c if isinstance(c, dict) else {}
-
-
-def _save_cursor(c: dict) -> None:
-    db.set_kv(_CURSOR_KEY, json.dumps(c, ensure_ascii=False))
-
-
-def current_chapter(now: datetime | None = None) -> dict | None:
-    """当前正在读的章节（含正文 text，给思考/结算/视线窗口用）。跨天自动重定位。"""
-    plan = plan_day(now)
-    if plan.get("done") or not plan.get("book_id"):
+def chapter_at(book_id: str, idx: int) -> dict | None:
+    """取第 idx 章（含正文），给思考/结算/注入用。越界返回 None。"""
+    chs = chapters_of(book_id)
+    i = int(idx or 0)
+    if not (0 <= i < len(chs)):
         return None
-    c = _load_cursor()
-    if c.get("day") != plan["day"]:
-        c = {"day": plan["day"], "ch_idx": 0, "buffer": []}
-        _save_cursor(c)
+    return {"book_id": book_id, "book_title": _book_title(book_id),
+            "title": chs[i].get("title", ""), "text": chs[i].get("text", ""),
+            "char_count": int(chs[i].get("char_count") or 0),
+            "idx": i, "total": len(chs)}
+
+
+def _book_title(book_id: str) -> str:
     try:
         import library
-        chs = library.chapters(plan["book_id"])
-        idx = int(c.get("ch_idx") or 0)
-        if 0 <= idx < len(chs):
-            return {"book_id": plan["book_id"], "book_title": plan["book_title"],
-                    "title": chs[idx]["title"], "text": chs[idx]["text"],
-                    "char_count": int(chs[idx].get("char_count") or 0),
-                    "idx": idx, "total": len(chs)}
+        for b in library.books():
+            if b.get("id") == book_id:
+                return b.get("title") or book_id
     except Exception:
         pass
-    return None
+    return book_id
 
 
-def buffer(now: datetime | None = None) -> list[str]:
-    """当前章节的思考 buffer（reasoning_content 按窗口 append 进来的思考片段）。"""
-    plan = plan_day(now)
-    c = _load_cursor()
-    if c.get("day") != plan["day"]:
+def chapter_count(book_id: str) -> int:
+    """这本书有几章。"""
+    return len(chapters_of(book_id))
+
+
+# ---------- 思考 buffer ----------
+def buffer() -> list[str]:
+    """当前章节攒下的思考片段（边读边想：reasoning_content 按窗口 append）。"""
+    raw = db.get_kv(_THOUGHT_KEY)
+    if not raw:
         return []
-    return list(c.get("buffer") or [])
+    try:
+        v = json.loads(raw)
+    except ValueError:
+        return []
+    return [str(x) for x in v] if isinstance(v, list) else []
 
 
-def append_thought(text: str, now: datetime | None = None) -> int:
-    """边读边想：把一段思考（reasoning_content）append 进当前章节的思考 buffer。
-    返回 buffer 当前长度。空文本/真读关闭返回 0。"""
+def append_thought(text: str) -> int:
+    """把一段思考 append 进 buffer，返回 buffer 长度。空文本/真读关闭返回 0。"""
     if not config.TRUE_READ_ENABLED:
         return 0
-    text = " ".join((text or "").split()).strip()
-    if not text:
-        return len(buffer(now))
-    plan = plan_day(now)
-    c = _load_cursor()
-    if c.get("day") != plan["day"]:
-        c = {"day": plan["day"], "ch_idx": 0, "buffer": []}
-    buf = list(c.get("buffer") or [])
-    buf.append(text)
-    c["buffer"] = buf
-    _save_cursor(c)
+    t = " ".join((text or "").split()).strip()
+    if not t:
+        return len(buffer())
+    buf = buffer()
+    buf.append(t)
+    db.set_kv(_THOUGHT_KEY, json.dumps(buf[-20:], ensure_ascii=False))
     return len(buf)
 
 
-def reset_buffer(now: datetime | None = None) -> None:
-    """章节末结算前清空思考 buffer（下一章重新攒）。"""
-    plan = plan_day(now)
-    c = _load_cursor()
-    if c.get("day") != plan["day"]:
-        return
-    c["buffer"] = []
-    _save_cursor(c)
+def reset_buffer() -> None:
+    """章节末结算后清空（下一章重新攒）。"""
+    db.set_kv(_THOUGHT_KEY, "")
 
 
-def advance_chapter(now: datetime | None = None) -> int:
-    """读完一章：游标推进到下一章、清空 buffer。返回新的章节号（0 起）。"""
-    plan = plan_day(now)
-    c = _load_cursor()
-    if c.get("day") != plan["day"]:
-        c = {"day": plan["day"], "ch_idx": 0, "buffer": []}
-    c["ch_idx"] = int(c.get("ch_idx") or 0) + 1
-    c["buffer"] = []
-    _save_cursor(c)
-    return int(c["ch_idx"])
+# ---------- 推进 ----------
+def advance() -> dict:
+    """读完一章：书签 +1。读到书末 → 翻下一本（意识流记一笔）。返回新书签。
+
+    换书事件同时是 v0.88 R4「全书总结」的触发点（接口留在这）。
+    """
+    b = bookmark()
+    chs = chapters_of(b["book_id"])
+    nxt = b["ch_idx"] + 1
+    if chs and nxt >= len(chs):
+        books = _book_order()
+        cur_i = next((i for i, x in enumerate(books) if x["id"] == b["book_id"]), -1)
+        nxt_book = books[(cur_i + 1) % len(books)] if books and len(books) > 1 else None
+        if nxt_book and nxt_book["id"] != b["book_id"]:
+            try:
+                import stream
+                stream.append("reading",
+                              f"《{_book_title(b['book_id'])}》读完了，翻开《{nxt_book['title']}》")
+            except Exception:
+                pass
+            return set_bookmark(nxt_book["id"], 0)
+    reset_buffer()
+    return set_bookmark(b["book_id"], nxt)
 
 
-def prompt_hint(now: datetime | None = None) -> str:
-    """注入【正在读】块（真读）：当前章节标题 + 读到哪 + 当日计划概览。"""
-    if not config.TRUE_READ_ENABLED:
-        return ""
-    plan = plan_day(now)
-    if plan.get("done"):
-        return ""
-    ch = current_chapter(now)
-    if not ch:
-        return ""
-    lines = [
-        f"我正在读《{ch['book_title']}》的「{ch['title']}」（今天是第 {ch['idx'] + 1}/{ch['total']} 章）。",
-        f"今天圈定 {len(plan['chapters'])} 章、共约 {plan['total_chars']} 字，"
-        f"我读得不快，一点点地读（约 {plan['tps']} 字/分）。",
-    ]
-    return "\n".join(lines)
+def skip_to(book_id: str, ch_idx: int) -> dict:
+    """跳到某章（冷启动：中间几章不补笔记，只把书签推过去）。"""
+    reset_buffer()
+    return set_bookmark(book_id, ch_idx)
 
 
-# ---------- 章节末结算：思考 buffer + 章节 → 想法 + 总结 → 读书笔记 alpha/beta ----------
-
+# ---------- 章节末结算 ----------
 _SETTLE_PROMPT = (
     "（内心活动，不用回复这句话）你刚读完《{title}》的「{chapter}」。\n"
     "下面是你在读的过程里脑子里冒出来的片段想法（思考过程本身），"
@@ -329,52 +233,50 @@ _SETTLE_PROMPT = (
 
 
 def _excerpt(chapter: dict, max_chars: int = 2000) -> str:
-    text = (chapter or {}).get("text", "")
-    return text[:max_chars]
+    return (chapter or {}).get("text", "")[:max_chars]
 
 
 def _parse_settle(raw: str) -> tuple[str, str, bool]:
-    """解析章节结算的三行文本（短概述 / 完整转述 / 打动）。"""
+    """解析三行结算文本（短概述 / 完整转述 / 打动）。"""
     alpha = beta = ""
     moved = False
     for line in (raw or "").splitlines():
         line = line.strip()
-        if line.startswith("短概述："):
-            alpha = line[len("短概述："):].strip()
-        elif line.startswith("完整转述："):
-            beta = line[len("完整转述："):].strip()
-        elif line.startswith("打动："):
-            moved = line[len("打动："):].strip().startswith("是")
+        if line.startswith(_P_ALPHA):
+            alpha = line[len(_P_ALPHA):].strip()
+        elif line.startswith(_P_BETA):
+            beta = line[len(_P_BETA):].strip()
+        elif line.startswith(_P_MOVED):
+            moved = line[len(_P_MOVED):].strip().startswith("是")
     return alpha, beta, moved
 
 
 def _refs(chapter: dict) -> str:
-    """章节引用（不存原文）：书名 + 章节名。追问时按需取原文。"""
+    """章节引用（不存原文）：书名 / 章节名。追问时按需取原文。"""
     return f"{chapter.get('book_title', '')} / {chapter.get('title', '')}"
 
 
-def settle_chapter(now: datetime | None = None) -> dict | None:
-    """章节末结算：独立 LLM 调用（思考 buffer + 章节内容 → 短概述 + 完整转述 + 打动判断）。
+def settle_chapter(now=None) -> dict | None:
+    """结算书签当前指向的那一章（独立 LLM 调用）。
 
-    打动 = 是 → 产出读书笔记 alpha/beta + 一条可分享素材；不打动 → 笔记照写（章节总结
-    照写），但**不进素材池 / 待办 / 今日素材**（§3.2 打动判断）。
-
-    返回结算结果 dict（含 note alpha_id / beta_id / moved / shareable_text），
-    失败（LLM 不可用 / 无章节）返回 None。真读关闭返回 None。
+    思考 buffer + 章节 → 短概述 / 完整转述 / 打动判断 → 读书笔记 alpha/beta
+    （+ 统一向量索引）。打动 = 是 → 额外带出 `shareable_text`（由 life 落素材池）。
+    成功则书签推进一章。LLM 不可用 / 无章可读返回 None。
     """
     if not config.TRUE_READ_ENABLED:
         return None
-    ch = current_chapter(now)
+    b = bookmark()
+    ch = chapter_at(b["book_id"], b["ch_idx"]) if b["book_id"] else None
     if not ch:
         return None
     import llm
     import persona
-    thoughts = "\n".join(f"- {t}" for t in buffer(now)) or "（读得比较平静，没冒出特别的想法）"
+    thoughts = "\n".join(f"- {t}" for t in buffer()) or "（读得比较平静，没冒出特别的想法）"
     prompt = _SETTLE_PROMPT.format(title=ch["book_title"], chapter=ch["title"],
                                    thoughts=thoughts, excerpt=_excerpt(ch))
     try:
-        # 章节总结是"成品"不是"思考的压缩"，允许再想一步 → 开思考；结构化输出有 content:null
-        # 风险，所以不强制 JSON，用三行开头的纯文本格式解析（关思考更稳、省 token）。
+        # 章节总结是"成品"不是"思考的压缩"；结构化 JSON 有 content:null 风险 →
+        # 用三行纯文本格式（关思考更稳、省 token）。
         raw = llm.chat([
             {"role": "system", "content": persona.core_identity_prompt()},
             {"role": "user", "content": prompt},
@@ -382,7 +284,7 @@ def settle_chapter(now: datetime | None = None) -> dict | None:
     except llm.LLMUnavailable as e:
         print(f"[真读] 章节结算跳过（LLM 不可用）：{e}")
         return None
-    if not raw or raw == "":
+    if not raw:
         return None
     alpha, beta, moved = _parse_settle(raw)
     if not alpha or not beta:
@@ -392,19 +294,43 @@ def settle_chapter(now: datetime | None = None) -> dict | None:
         ch["book_id"], ch["book_title"], ch["title"],
         alpha_summary=alpha, beta_content=beta,
         refs=_refs(ch), char_count=int(ch.get("char_count") or 0))
-    # 统一向量索引（§5 第二批）：beta 转述进向量索引，阅读/对话时都能联想召回
+    # 统一向量索引（§5）：beta 转述进索引，阅读/对话时都能联想召回
     try:
         import vecindex
         from datetime import datetime as _dt
         vecindex.index_event("note_beta", beta_id, beta, _dt.now().isoformat(timespec="seconds"))
     except Exception:
         pass
-    result = {"alpha_id": alpha_id, "beta_id": beta_id, "moved": moved}
+    # 兴趣修炼：书的分类就是一次兴趣信号（确定性最强，不经过词表匹配）
+    try:
+        import interests
+        import library
+        for bk in library.books():
+            if bk.get("id") == ch["book_id"] and bk.get("category"):
+                if interests.record(bk["category"]):
+                    print(f"[兴趣] 转正：{bk['category']}")
+                break
+    except Exception:
+        pass
+    result = {"alpha_id": alpha_id, "beta_id": beta_id, "moved": moved,
+              "chapter": ch["title"], "book_title": ch["book_title"]}
     if moved:
-        # 打动 → 进素材池（C 模块主动分享当内容源），不额外调 LLM（转述已经是素材）
-        text = f"读到《{ch['book_title']}》的「{ch['title']}」，有点被触动：{alpha}"
-        result["shareable_text"] = text
-    advance_chapter(now)
-    reset_buffer(now)
+        result["shareable_text"] = (
+            f"读到《{ch['book_title']}》的「{ch['title']}」，有点被触动：{alpha}")
+    advance()
     return result
 
+
+def prompt_hint(chars_hint: str = "") -> str:
+    """【正在读】块：当前章节标题 + 读到哪（给 system prompt 注入用）。"""
+    if not config.TRUE_READ_ENABLED:
+        return ""
+    b = bookmark()
+    ch = chapter_at(b["book_id"], b["ch_idx"]) if b["book_id"] else None
+    if not ch:
+        return ""
+    return (f"我正在读《{ch['book_title']}》的「{ch['title']}」"
+            f"（第 {ch['idx'] + 1}/{ch['total']} 章）。")
+
+
+_THOUGHT_KEY = "trueread_thoughts"

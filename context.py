@@ -164,13 +164,16 @@ _PROACTIVE_CONTEXT_RULE = (
     "千万别用「好久没聊」「最近在忙啥呀」这种跟事实对不上的开场。")
 
 
-def build_proactive_messages(state: str, scenario: str) -> list[dict]:
+def build_proactive_messages(state: str, scenario: str) -> list[dict] | None:
     """主动消息的 messages：最近聊天上下文 + 场景指令。
-    random 场景的话题弹药二选一：攒下的素材（读后感想）或关于TA的旧记忆。"""
+
+    random 场景拿不到真实弹药时返回 **None**（v0.89 §6）——调用方（core）据此
+    **不调 LLM、不发**，而不是让模型自由发挥编一个"我刚刷手机看到…"。
+    """
     prompt = persona.build_proactive_prompt(state, scenario)
     prompt[-1]["content"] += f"\n{_PROACTIVE_CONTEXT_RULE}"
-    if scenario == "random":
-        _inject_random_topic(prompt)
+    if scenario == "random" and not _inject_random_topic(prompt):
+        return None
     recent = db.session_context(config.PROACTIVE_CONTEXT_MAX_MESSAGES)
     # 自我记忆：主动开口最该兑现的是"我答应过的事"——那是它自己的承诺，比寒暄有分量
     extra = []
@@ -186,32 +189,61 @@ def build_proactive_messages(state: str, scenario: str) -> list[dict]:
     return prompt
 
 
-def _inject_random_topic(prompt: list[dict]) -> None:
-    """random 场景的话题弹药：一半概率翻一条攒下的素材（工作=读书的读后感），
-    没有素材（或没抽中）才退回翻一条关于TA的旧记忆。素材攒了就要用得起来，
-    否则 TA 闷头读书、攒一堆感想却从来不跟人聊（实测 #28）。
-    兴趣修炼（S4）：转正的新偏好也是话题弹药——TA 最近喜欢上的东西，比旧记忆更鲜活。"""
+def _inject_random_topic(prompt: list[dict]) -> bool:
+    """random 场景的话题弹药：**从真实发生过的事里取一件**。返回有没有取到。
+
+    v0.89 §6（治「车怠速」连发四条）：五源皆空 → 返回 False →
+    `build_proactive_messages` 返回 None → core **不调 LLM、不发**。
+    这是**删除一条路径**（旧实现无弹药时让 LLM 自由发挥编环境），不是加闸门。
+
+    五源按鲜活度排：素材池（读到有触动的话）→ 待办（想说还没说的事）→
+    承诺（我答应过还没兑现的）→ 兴趣（最近喜欢上的）→ 旧记忆。
+    """
+    import db as _db
+
+    def _carry(todo_id: int) -> None:
+        """§5 拍板 #6③：携带素材 id，消息发出后按 id 打勾（不再用字面指纹猜）。"""
+        _db.set_kv("proactive_todo_id", str(todo_id or 0))
+
     if random.random() < 0.5:
-        import work
-        mat, todo_id = work.take_shareable_item()
+        import life
+        mat, todo_id = life.take_shareable_item()
         if mat:
-            # §5 拍板 #6③：携带素材 id（todo_id），消息发出后按 id 打勾（不再字面指纹）。
-            # 用 kv 暂存，供 core._proactive 发送后回填打勾。
-            import db
-            db.set_kv("proactive_todo_id", str(todo_id or 0))
+            _carry(todo_id)
             prompt[-1]["content"] += (
                 f"\n（你刚忙完手头的事，脑子里还留着这么一句："
                 f"「{mat}」。可以自然跟TA聊起它——比如提一句你最近在读什么书、"
                 f"读到哪句挺有感觉。想聊别的也行。）"
                 f"\n（分享质量：聊这个要落在具体内容上，别泛泛、别硬扯生活。）")
-            return
+            return True
+    # 待办：脑子里想说、还没说的事（读过/想过攒下来的）
+    if config.TODOS_ENABLED:
+        import todos
+        pend = todos.pending()
+        if pend:
+            item = pend[0]
+            _carry(int(item.get("id") or 0))
+            prompt[-1]["content"] += (
+                f"\n（你心里一直搁着这么一件事，还没跟TA说过：「{item.get('text', '')}」。"
+                f"现在提起它正合适，别生硬地带出。）")
+            return True
+    # 自我记忆：我答应过却还没兑现的事
+    if config.SELF_MEMORY_ENABLED:
+        import selfmem
+        prom = [m for m in selfmem.recent("self_promise", limit=5)
+                if (m.get("content") or "").strip()]
+        if prom:
+            prompt[-1]["content"] += (
+                f"\n（你答应过TA一件事还没兑现：「{prom[0]['content']}」。"
+                f"如果现在正合适，可以自然提起/补上；不合适就别说。）")
+            return True
     import interests
     topic = interests.random_promoted()
     if topic:
         prompt[-1]["content"] += (
             f"\n（你最近对「{topic}」挺来劲——这是你从读/聊/刷里慢慢喜欢上的。"
             f"可以自然跟TA提起它，聊一两句；想聊别的也行。）")
-        return
+        return True
     mem = memory.random_memory()
     if mem:
         anchor = mem.get("time_label") or ""
@@ -221,4 +253,6 @@ def _inject_random_topic(prompt: list[dict]) -> None:
         prompt[-1]["content"] += (
             f"\n（你忽然想起关于TA的一件事{when}：「{mem['content']}」。"
             f"可以就着它聊，比如问问后续；想聊别的也行。）")
+        return True
+    return False
 

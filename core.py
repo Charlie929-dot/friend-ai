@@ -23,6 +23,16 @@ import todos
 from channels.base import Channel
 
 
+def _is_llm_error(text: str) -> bool:
+    """这条回复是不是 LLM 失败的兜底文案（v0.88 C2：失败不落库污染上下文）。
+
+    用 corpus.LLM_ERROR 的模板前缀识别（" （脑子卡住了：…）"），不靠异常对象——
+    失败可能发生在后台线程里，能拿到手的只有文本。"""
+    t = (text or "").strip()
+    prefix = corpus.LLM_ERROR.split("{")[0]
+    return bool(prefix) and t.startswith(prefix)
+
+
 def take_outbox() -> list[dict]:
     """取出并清空未读主动消息队列（存在各自 friend.db，按朋友隔离）。
 
@@ -188,6 +198,14 @@ class Engine:
         # 第 2 层只负责"怎么说"，改不了"说什么"。独白拿不到就原样单层生成。
         messages = self._with_inner_monologue(messages, batch)
         reply = self._generate_reply_text(messages, batch)
+        if _is_llm_error(reply):
+            # v0.88 C2（批 0）：LLM 失败文案**不当正经回复落库**——它一旦以 chat 落进
+            # messages，后面每一轮 session_context 都会把这句"（脑子卡住了：…）"读回去，
+            # 污染上下文。改走 kind=notice：前端灰色小字、session_context 天然不读
+            # （只取 chat/proactive）、不进目录不可引用。
+            print(f"[LLM] 回复生成失败，按提示落库不进上下文：{reply[:40]}")
+            self._send(reply, kind="notice")
+            return
         # 措辞红线（H 模块·反愧疚）：代价只呈现不归因。prompt 已约束，这里是兜底改写——
         # 归因措辞任何状态都不该出现，命中就换成"只说自己的状态"的安全句（不归因）。
         if persona.has_cost_blame(reply):
@@ -214,7 +232,9 @@ class Engine:
         interrupted = False
         for i, seg in enumerate(segments):
             if i > 0:
-                _time.sleep(min(max(len(segments[i - 1]) * config.SEND_SECONDS_PER_CHAR,
+                # v0.89 §7①：间隔取决于**下一句**多长（真人是打完这句再发这句，
+                # 不是发完上句才按上句长度等）。原来取 segments[i-1]，索引差一位。
+                _time.sleep(min(max(len(seg) * config.SEND_SECONDS_PER_CHAR,
                                     config.SEND_MIN_SECONDS), config.SEND_MAX_SECONDS))
             # 插话检测（发送前最后一刻检查）：TA 打字/连发期间你又说话了——
             # 停发剩余段，先听你说（不再补发"你说，我听着"这类让步语——用户明确不要）
@@ -471,6 +491,11 @@ class Engine:
             reply = corpus.pick(corpus.BUBBLE_LINES, "bubble")
         if reply is None:
             prompt = context.build_proactive_messages(state, scenario)
+            if prompt is None:
+                # v0.89 §6：random 场景没有真实弹药就不发（旧行为是让 LLM 自由发挥
+                # 编一个"我刚刷手机看到…"，于是出现连发几条都跟事实对不上的情况）
+                print(f"[proactive:{scenario}] 没有真实的事可说，这次不发")
+                return False
             try:
                 reply = llm.chat(prompt, temperature=1.0, thinking=False)
             except llm.LLMUnavailable as e:

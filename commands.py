@@ -285,8 +285,8 @@ def handle(cmd_line: str) -> str:
         model = config.DEEPSEEK_MODEL   # v0.80：模型是全局配置（.env），不再按朋友库存
         g = game.current()
         playing = f" | 游戏中：{game.GAMES[g['game']]['label']}" if g else ""
-        import work as _work
-        hud = _work.hud()   # 它手头的事（工作系统关着时为空）
+        import life as _life
+        hud = _life.hud()   # 它手头的事（工作系统关着时为空）
         import offline as _off
         off_txt = ""
         if _off.is_offline():
@@ -583,15 +583,22 @@ def handle(cmd_line: str) -> str:
 
     if cmd == "/work":
         # 工作系统（S3）：它今天手头的事。看得见它的日子，才知道什么时候找它会打扰
-        import work as _work
-        s = _work.status()
-        if not s["quota"]:
-            return "工作系统关着（WORK_ENABLED=off）——它没有「手头的事」，打断成本也无从算起。"
-        fresh = len([x for x in _work._shareables() if not x.get("used")])
-        return (f"{_work.hud()}\n"
-                f"今日进度 {s['done']}/{s['quota']} 件 · 精力 {s['energy']}/{config.WORK_ENERGY_MAX}"
-                f" · 余额 {s['money']} · 攒了 {fresh} 条没说过的素材\n"
-                f"（余额是纯叙事资源，不绑任何真实付费）")
+        import life as _life
+        if not config.WORK_ENABLED:
+            return "生活引擎关着（WORK_ENABLED=off）——它没有「手头的事」，打断成本也无从算起。"
+        s = _life.status()
+        if s["phase"] == "sleep":
+            return f"{_life.hud() or '（还没醒，今天还没排活）'}"
+        fresh = len([x for x in _life._shareables() if not x.get("used")])
+        # v0.89 §5.2：今日任务 = 一本真书的若干章；进度按字数百分比（"余额"已改「经验」）
+        book = f"《{s['book_title']}》" if s["book_title"] else "（今天没有在读的书）"
+        return (f"{_life.hud()}\n"
+                f"今日任务 {book} 圈 {s['total_chapters']} 章 · 进度 {s['progress']}%"
+                f"（第 {s['chapter']}/{s['total_chapters']} 章）"
+                f" · 精力 {s['energy']}/{config.WORK_ENERGY_MAX} · 经验 {s['exp']}"
+                + (" · 今天读得有点晚" if s["overtime"] else "") + "\n"
+                f"攒了 {fresh} 条没说过的素材\n"
+                f"（经验是纯叙事资源 = 今天读到多少的印记，不绑任何真实付费）")
 
     if cmd == "/books":
         # 用户书库（S4）：TA 读你导入的真实电子书（txt/epub）

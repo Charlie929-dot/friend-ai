@@ -59,6 +59,57 @@ def _set_timing(values: dict) -> dict:
     return saved
 
 
+def _mk_day(day: str, wake, chapters, book_title: str = "测试书", start_ch: int = 0,
+            warmup: int = 0, rest_min: int = 20, bedtime=None) -> dict:
+    """手造一份 v2 今日生活（day_state）——生活引擎唯一的账。
+
+    ⚠️ 必须带 `v:2` + `planned:1`：否则 `life.today()` 会把它当旧账重排、转头去扫
+    真实书架，测试就不再确定。章节字数给整数 → 会话时长 = 字数 ÷ 阅读速度。
+    """
+    import json as _json
+    from datetime import timedelta as _td
+
+    import life as _life
+    import db as _db
+
+    chs = []
+    for i, c in enumerate(chapters):
+        c = {"title": f"第{start_ch + i + 1}章", "char_count": int(c)} if isinstance(c, int) \
+            else dict(c)
+        c.setdefault("idx", start_ch + i)
+        c["char_count"] = int(c.get("char_count") or 0)
+        chs.append(c)
+    sp = _life.speed()
+    sessions, t = [], wake.replace() + _td(minutes=warmup)
+    for c in chs:
+        end = t + _td(minutes=c["char_count"] / sp)
+        sessions.append({"start": t.isoformat(timespec="seconds"),
+                         "end": end.isoformat(timespec="seconds"),
+                         "chapters": [c], "partial": False})
+        t = end + _td(minutes=rest_min)
+    state = {"v": 2, "day": day, "planned": 1,
+             "wake": wake.isoformat(timespec="seconds"),
+             "bedtime": (bedtime or t + _td(hours=8)).isoformat(timespec="seconds"),
+             "sessions": sessions, "settled_idx": 0, "overtime": 0,
+             "plan": {"done": False, "book_id": "测试书.txt", "book_title": book_title,
+                      "start_ch": start_ch, "chapters": chs,
+                      "total_chars": sum(c["char_count"] for c in chs)}}
+    _db.set_kv("day_state", _json.dumps(state, ensure_ascii=False))
+    return state
+
+
+def _mk_book(books_dir, name: str = "测试书.txt", n_ch: int = 6,
+             chars: int | None = None) -> None:
+    """在临时书架放一本带「第X章」的 txt（真读/排班要用真书）。"""
+    import life as _life
+    per = chars if chars is not None else int(_life.NOMINAL_SESSION_MIN * _life.speed())
+    body = "正文内容" * (per // 4)
+    books_dir.mkdir(parents=True, exist_ok=True)
+    (books_dir / name).write_text(
+        "\n".join(f"第{i + 1}章 章节标题{i + 1}\n{body}" for i in range(n_ch)),
+        encoding="utf-8")
+
+
 def test_cli_timestamps():
     """AI 消息带 [时间 AI] 前缀；用户发送后打印 [时间 你] 标记行。"""
     from channels.cli import CliChannel
@@ -1155,7 +1206,7 @@ def test_today_notes_injection():
     import db as _db
     import memory as _mem
     import context as _ctx
-    import work as _work
+    import life as _life
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     tmp = Path(tempfile.mkdtemp())
@@ -1164,13 +1215,13 @@ def test_today_notes_injection():
     today = _dt.date.today().isoformat()
     try:
         _db.init()
-        # 1) 工作产出素材时顺手落 B 库（不额外调 LLM）
-        _work._note_today({"genre": "科幻", "title": "三体", "source": "刘慈欣",
-                           "quote": "不要回答", "text": "正文" * 300},
-                          2, "这句挺带感的，宇宙社会学是真敢想")
+        # 1) 读到有触动的地方 → 进素材池，并顺手落 B 库（不额外调 LLM）
+        #    v0.89：素材只来自章节结算的打动（泛化"手头的小事"已退役）
+        _life._note_shareable_text(
+            "读到《三体》的「黑暗森林」，有点被触动：不要回答", _dt.datetime.now())
         notes = _mem.today_notes()
         assert len(notes) == 1, f"今天的事应进 B 库：{notes}"
-        assert "三体" in notes[0]["summary"], f"摘要应带书名：{notes[0]['summary']}"
+        assert "三体" in (notes[0].get("content") or ""), f"正文应带书名：{notes[0]}"
 
         # 2) 注入当天上下文
         msgs = _ctx.build_chat_messages("AWAKE", ["你今天干嘛了"])
@@ -1644,22 +1695,23 @@ def test_random_chat_hours_follow_persona():
     print("ok 闲聊时段按人格作息自适应（跨午夜拆段 + cron 可解析）")
 
 
-def test_work_system():
-    """S3 工作系统：排班跟人格作息、惰性结算、心流期、下班、跨天重排、素材不重复取。"""
+def test_life_engine():
+    """生活引擎（v0.89 §3）：唯一时钟排班跟人格作息、章节会话制、心流期、
+    进度/经验/精力全派生、跨天重排、素材不重复取。"""
     import json
     import tempfile
     from datetime import datetime as _dt, timedelta as _td
 
-    import config as _cfg
     import db as _db
+    import life as _life
     import persona as _persona
-    import work as _work
 
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
     saved_share = config.WORK_SHAREABLE_ENABLED
-    config.WORK_SHAREABLE_ENABLED = False      # 素材要调 LLM，这里只测机制本身
+    config.WORK_SHAREABLE_ENABLED = False      # 章节结算要调 LLM，这里只测机制本身
     tmp = Path(tempfile.mkdtemp())
     config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
     try:
         _db.init()
         # 夜猫子人格：10 点起、凌晨 2 点睡（作息必须跟着人格走）
@@ -1667,60 +1719,79 @@ def test_work_system():
             "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
             "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+        _mk_book(config.BOOKS_DIR, n_ch=6)
 
         morning = _dt(2026, 10, 9, 10, 0)
         # 预置今天的起床点（锚点前 5 分钟）：新逻辑"醒来才排班"——不预置的话
         # 赖床浮动可能让 10:00 整还没"醒"，排不出班（测试要与随机浮动解耦）
         _db.set_kv("rest_schedule", json.dumps(
             {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
-        units = _work.plan(morning)
-        assert units, "今天没排出班"
+        day = _life.today(morning)
+        units = day["sessions"]
+        assert units, "今天没排出会话"
         first_start = _dt.fromisoformat(units[0]["start"])
         assert first_start.hour >= 10, f"夜猫子 10 点才起，排班却从 {first_start} 开始"
         assert _dt.fromisoformat(units[-1]["end"]) <= _dt(2026, 10, 10, 2, 0), \
             f"排班越过了睡觉时间：{units[-1]['end']}"
         # 同一天幂等：再读一次不能换计划（否则它手头的事会一直乱跳）
-        assert _work.plan(morning) == units, "同一天重排出了新计划"
+        assert _life.today(morning)["sessions"] == units, "同一天重排出了新计划"
 
-        # 心流期 = 单元前 WORK_FLOW_RATIO 比例（这段打断代价最高）
-        flow = _work.status(first_start + _td(minutes=2))
-        assert flow["phase"] == "flow" and flow["flow"], f"单元刚开工应是心流期：{flow}"
-        working = _work.status(first_start + _td(minutes=30))
+        # 章节边界 = 节奏：一章一段（每章 40min 名义时长，够长不合并）
+        assert len(units) == 6, f"6 章该排 6 段会话：{len(units)}"
+        # 睡前是唯一硬边界：没有"下班铃"，最后一段结束 = 全书圈定的章节读完
+        assert day["plan"]["total_chars"] > 0 and not day["plan"]["done"]
+
+        # 心流期 = 会话前 WORK_FLOW_RATIO 比例（这段打断代价最高）
+        flow = _life.status(first_start + _td(minutes=2))
+        assert flow["phase"] == "flow" and flow["flow"], f"刚开工应是心流期：{flow}"
+        working = _life.status(first_start + _td(minutes=30))
         assert working["phase"] == "working" and not working["flow"], f"过了心流期：{working}"
 
-        # HUD 与 prompt 注入（要趁它还在忙的时候测：状态是持久的，
-        # 一旦结算推进到"下班"，再把时间调回去也回不到心流期）
-        assert "刚进入状态" in _work.hud(first_start + _td(minutes=2))
-        assert _work.prompt_hint(first_start + _td(minutes=2)), "忙的时候没注入手头的事"
+        # HUD 与 prompt 注入（要趁它还在忙的时候测：状态是派生的但依赖 now，
+        # 一旦过了所有会话窗口就回不到心流期）
+        hud = _life.hud(first_start + _td(minutes=2))
+        assert "刚读进去" in hud and "精力" in hud and "经验" in hud, \
+            f"HUD 该带数字三维：{hud}"
+        hint = _life.prompt_hint(first_start + _td(minutes=30))
+        assert "我在读" in hint and "《" in hint, f"忙的时候没注入手头的事：{hint}"
+        assert "今天圈了" in hint and "读完" in hint, f"缺章节坐标：{hint}"
+        # 心流期也带书名（说的是"脑子全在这章上"，措辞不同但同样有具体书）
+        assert "《测试书》" in _life.prompt_hint(first_start + _td(minutes=2))
+        # §5.1 事实句：prompt 里**不念数字账本**（没有"第 3/6 件""攒了 60 块"）
+        assert "件" not in hint and "块" not in hint and "%" not in hint, \
+            f"prompt 里念了数字账本（数字该给 HUD）：{hint}"
         # 红线：工作状态注入自己不能踩「代价归因」（它只说自己的状态）
-        for hint in _work.PHASE_HINTS.values():
-            assert not _persona.has_cost_blame(hint.format(done=1, quota=6)), \
-                f"工作提示踩了反愧疚红线：{hint}"
+        for tpl in _life._FACT_TEMPLATES.values():
+            filled = tpl.format(book="测试书", ch="第一章", total=6, done=2, cur=3)
+            assert not _persona.has_cost_blame(filled), f"工作提示踩了反愧疚红线：{tpl}"
 
-        # 单元结束 → 自动结算（精力降、余额涨、进度 +1）
-        done1 = _work.status(first_start + _td(minutes=60))
-        assert done1["done"] == 1, f"单元结束了却没结算：{done1}"
-        assert done1["money"] == _cfg.WORK_PAY_PER_UNIT
-        assert done1["energy"] == _cfg.WORK_ENERGY_MAX - _cfg.WORK_ENERGY_COST
+        # 进度 / 经验 / 精力全派生（不落库）：只跟着"读到哪"走，单调涨
+        p1 = _life.status(first_start + _td(minutes=10))["progress"]
+        p2 = _life.status(first_start + _td(minutes=30))["progress"]
+        assert 0 < p1 < p2 < 100, f"进度该随时间单调涨：{p1} → {p2}"
+        mid = _life.status(first_start + _td(minutes=30))
+        assert mid["exp"] == mid["progress"], f"经验 = 进度百分比：{mid}"
+        assert mid["energy"] < config.WORK_ENERGY_MAX, f"读了 30 分钟该掉精力：{mid}"
+        assert mid["chapter"] == 1 and mid["total_chapters"] == 6, f"章节坐标不对：{mid}"
 
-        # 休眠/关机的关键回归：错过好几个单元，睡醒回来要能一次性补上
-        late = _work.status(_dt(2026, 10, 10, 1, 0))   # 夜猫子的"今天深夜"
-        assert late["done"] == len(units), f"错过的单元没补账：{late}"
+        # 惰性补账：电脑睡了一觉错过好几段 → 醒来 progress 直接到 100%（章节照读）
+        late = _life.status(_dt(2026, 10, 10, 1, 0))   # 夜猫子的"今天深夜"
+        assert late["progress"] == 100, f"错过的段落没补账：{late}"
         assert late["phase"] == "off", f"活都干完了还在忙：{late}"
 
-        # 新的一天（睡醒）→ 重新排班、进度归零
-        _work._state(_dt(2026, 10, 10, 12, 0))
-        st = _work._load()
-        assert st["day"] == "2026-10-10" and st["settled"] == 0, f"跨天没重排：{st}"
+        # 新的一天（睡醒）→ 重新排班、结算计数归零
+        st = _life.today(_dt(2026, 10, 10, 12, 0))
+        assert st["day"] == "2026-10-10" and st["settled_idx"] == 0, f"跨天没重排：{st}"
 
         # 素材池：取过的不再取（一条素材只分享一次）
         _db.set_kv("work_shareables", json.dumps(
             [{"day": "2026-10-09", "seq": 1, "text": "刚发现楼下那只猫会自己开门", "used": 0}]))
-        assert _work.take_shareable() == "刚发现楼下那只猫会自己开门"
-        assert _work.take_shareable() == "", "同一条素材被取了两次"
-        print("ok 工作系统（排班跟人格作息 + 心流期 + 惰性补账 + 跨天重排 + 素材不重复）")
+        assert _life.take_shareable() == "刚发现楼下那只猫会自己开门"
+        assert _life.take_shareable() == "", "同一条素材被取了两次"
+        print("ok 生活引擎（排班跟人格作息 + 章节会话制 + 心流期 + 派生投影 + 跨天重排 + 素材不重复）")
     finally:
         config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BOOKS_DIR = real_books
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
 
@@ -1734,12 +1805,13 @@ def test_offline_inbox_and_rhythm():
     import config as _cfg
     import corpus as _corpus
     import db as _db
+    import life as _life
     import offline as _off
-    import work as _work
 
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
     tmp = Path(tempfile.mkdtemp())
     config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
     try:
         _db.init()
         # 老干部人格：6 点起、22 点睡（作息锚点明确，好断言浮动范围）
@@ -1747,13 +1819,13 @@ def test_offline_inbox_and_rhythm():
             "archetype": "oldcadre", "label": "老干部", "name": "稳稳", "quirk": "",
             "text": "你作息规律。", "wake_hour": 6, "sleep_hour": 22,
             "bubble_mult": 0.8, "drawn_at": "2026-10-09T00:00:00"}))
+        _mk_book(config.BOOKS_DIR, n_ch=4)
 
         morning = _dt(2026, 10, 9, 6, 0)
         # 预置今天的起床点（锚点前 5 分钟）：醒来才排班，与赖床随机浮动解耦
         _db.set_kv("rest_schedule", json.dumps(
             {"wake_day": "2026-10-09", "wake_at": "2026-10-09T05:55:00"}))
-        _work.plan(morning)
-        first_start = _dt.fromisoformat(_work.plan(morning)[0]["start"])
+        first_start = _dt.fromisoformat(_life.today(morning)["sessions"][0]["start"])
         # 工作单元进行中（flow / working）= 离线专注；开工前 = 在线
         assert _off.is_offline(first_start + _td(minutes=2)), "心流期应算离线专注"
         assert _off.is_offline(first_start + _td(minutes=30)), "working 应算离线专注"
@@ -1793,64 +1865,7 @@ def test_offline_inbox_and_rhythm():
         assert len(_corpus.OFFLINE_FOCUS_NOTICES) >= 3
         print("ok 离线留言 + 作息自主（离线判定/inbox 攒取/浮动与幂等）")
     finally:
-        config.BASE_DIR, config.DB_PATH = real_base, real_db
-        _db.init()
-
-
-def test_reading_system():
-    """S3 工作=读书：素材库非空/分类齐全、阅读顺序偏好优先、进度持久化、一轮循环、金句可摘。"""
-    import json
-    import tempfile
-
-    import config as _cfg
-    import db as _db
-    import persona as _persona
-    import reading as _reading
-
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
-    tmp = Path(tempfile.mkdtemp())
-    config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
-    try:
-        _db.init()
-        # 夜猫子人格：爱读科幻
-        _db.set_kv("persona_json", json.dumps({
-            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
-            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
-            "bubble_mult": 1.2, "reading_pref": "科幻",
-            "drawn_at": "2026-10-09T00:00:00"}))
-
-        # 素材库：非空、六大类齐全、每条都有正文 + 金句（摘抄）可摘
-        assert len(_reading.LIBRARY) >= 18, "素材库太薄"
-        genres = sorted({a["genre"] for a in _reading.LIBRARY})
-        assert genres == ["历史", "散文", "杂文", "热血", "生活随笔", "科幻"], genres
-        for a in _reading.LIBRARY:
-            assert a.get("quote") and a.get("text"), f"素材缺字段：{a['title']}"
-
-        # 人格卡行为参数带阅读偏好（两级：一级分类 + 细标签。旧标签"科幻"已自动迁移）
-        params = _persona.behavior_params()
-        assert params["reading_pref"] == "精品小说", f"阅读偏好没跟人格走：{params}"
-        assert params["reading_tags"] == ["科幻"], params
-
-        # 阅读顺序：偏好细标签（科幻）排最前
-        order = _reading._order()
-        first_genres = [_reading.LIBRARY[i]["genre"] for i in order[:4]]
-        assert first_genres == ["科幻"] * 4, f"偏好分类没排前面：{first_genres}"
-
-        # 顺序推进 + 进度持久化（对外 genre 已翻译成一级分类，原标签在 tag）
-        a1 = _reading.next_article()
-        assert a1["genre"] == "精品小说" and a1["tag"] == "科幻", f"第一篇应是科幻：{a1}"
-        assert _reading._load()["pos"] == 1, "进度没推进"
-
-        # 一轮读完再循环：把进度推到最后一篇，再取一篇应回到第一篇
-        p = _reading._load()
-        p["pos"] = len(_reading.LIBRARY) - 1
-        _reading._save(p)
-        _reading.next_article()          # 读完最后一篇
-        loop = _reading.next_article()   # 循环回第一篇
-        assert loop["title"] == _reading.LIBRARY[order[0]]["title"], \
-            f"读满一轮后应循环回第一篇：{loop['title']}"
-        print("ok 阅读素材库（分类齐全/偏好优先/进度持久化/一轮循环/金句可摘）")
-    finally:
+        config.BOOKS_DIR = real_books
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
 
@@ -1919,38 +1934,34 @@ def test_user_library():
         assert got["三体"] == ("精品小说", ["科幻"], "dir"), got
         assert got["背影"] == ("文学", ["散文"], "dir"), got
 
-        # 偏好选书：人格两级偏好（精品小说 + [科幻]）命中三体；结构与内置书摘同构
-        first = _lib.next_passage()
-        assert first["title"] == "三体", first
-        assert first["genre"] == first["category"] == "精品小说", first
-        assert first["tag"] == "科幻", first
-        assert set(("genre", "category", "tag", "title", "source",
-                    "quote", "text")) <= set(first), \
-            f"返回结构要对齐内置书摘：{first.keys()}"
-        assert first["quote"] == "给时光以生命，给岁月以文明。", first["quote"]
+        # 章节解析（v0.89：跳读退役，真读是唯一路径）——两本书都能切出章节
+        import trueread as _tr
+        for b in items:
+            chs = _lib.chapters(b["id"])
+            assert chs and all(c.get("char_count", 0) > 0 for c in chs), \
+                f"{b['title']} 没切出章节：{chs}"
 
-        # 段级进度：三体 3 段读完后换散文（背影）
-        _lib.next_passage()
-        _lib.next_passage()
-        fourth = _lib.next_passage()
-        assert fourth["title"] == "背影" and fourth["source"] == "朱自清", fourth
+        # 偏好选书：人格两级偏好（精品小说 + [科幻]）命中三体
+        picked = _tr.pick_book()
+        assert picked and picked["title"] == "三体", f"偏好选书没命中三体：{picked}"
 
-        # 英文句号摘抄（用户可能导入英文书），小数点不误切
-        assert _lib._pick_quote("This is a good sentence. Next one here.") == \
-            "This is a good sentence.", _lib._pick_quote("This is a good sentence. Next one here.")
-        assert "3.14" in _lib._pick_quote("圆周率是 3.14 左右的常数。这是一句完整的话。")
+        # 圈章：从书签起按整数章节累计（宁少勿超）
+        chs, acc = _tr.plan_from(picked["id"], 0, 10 ** 9)
+        assert chs and acc > 0, "没圈出章节"
+        one, acc1 = _tr.plan_from(picked["id"], 0, 1)   # 上限极小 → 宁少勿超，至少读首章
+        assert len(one) == 1 and acc1 == one[0]["char_count"], (one, acc1)
 
-        # 一次读 n 段：进度按 n 推进（读 2 段 → 进度 idx=2）
-        _lib._save_progress("", 0)   # 空 book_id → 从偏好排序的第一本（科幻·三体）开始
-        art = _lib.next_passage(2)
-        assert _lib.progress()["idx"] == 2, f"读 2 段后进度应为 2：{_lib.progress()}"
-        assert art["title"] == "三体" and art["quote"], f"读 2 段应返回三体摘抄：{art}"
+        # 书级书签是唯一阅读进度真相：跨天不重置，推进只发生在章节结算
+        _tr.set_bookmark(picked["id"], 2)
+        assert _tr.bookmark() == {"book_id": picked["id"], "ch_idx": 2}, _tr.bookmark()
+        assert _tr.pick_book()["id"] == picked["id"], "书签指向的书该继续读它（不换本）"
+        assert _tr.chapter_at(picked["id"], 0), "按书签取得到章节正文"
 
-        # 书架空 → None（work 层回退内置书摘）
+        # 书架空 → 今日无任务（真读是唯一路径，不再回退内置书摘）
         config.BOOKS_DIR = tmp / "empty"
-        assert _lib.next_passage() is None, "空书架应返回 None"
+        assert _tr.pick_book() is None, "空书架应返回 None"
 
-        print("ok 用户书库（txt/gbk + epub 解析 + 偏好选书 + 段级进度 + 结构与内置同构）")
+        print("ok 用户书库（txt/gbk + epub 解析 + 偏好选书 + 章节切分 + 书级书签）")
     finally:
         config.BOOKS_DIR = real_books
         config.BASE_DIR, config.DB_PATH = real_base, real_db
@@ -2210,7 +2221,6 @@ def test_reading_pref_two_level():
         _db.init()
         import persona as _persona
         import persona_pool as _pool
-        import reading as _reading
 
         # 旧卡（reading_pref 是老标签）→ 一级分类 + 细标签，口味没丢
         _db.set_kv("persona_json", json.dumps({
@@ -2231,14 +2241,11 @@ def test_reading_pref_two_level():
                 assert t in _corpus.PREF_LEGACY_MAP or any(
                     t in g["tags"] for g in _corpus.GENRES), (card, t)
 
-        # 内置书摘：旧细标签翻译成一级分类（和用户书库同一套），原标签留在 tag
+        # 旧细标签 → 一级分类，必须落在 22 类之内（和用户书库同一套分类）
         for g, cat in _corpus.PREF_LEGACY_MAP.items():
-            assert _reading.category_of(g) == cat, g
-        a = _reading.next_article()
-        assert a["genre"] == a["category"] and a["genre"] in names, a
-        assert a["tag"] in _corpus.PREF_LEGACY_MAP, a
+            assert cat in names, f"旧标签 {g} 的归类 {cat} 不在 22 类里"
 
-        print("ok 阅读偏好两级（分类 + 细标签）+ 内置书摘分类统一")
+        print("ok 阅读偏好两级（分类 + 细标签）+ 旧标签迁移进同一套分类")
     finally:
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
@@ -2391,12 +2398,12 @@ def test_interruption_cost():
     import config as _cfg
     import cost as _cost
     import db as _db
+    import life as _life
     import persona as _persona
-    import work as _work
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_share = config.WORK_SHAREABLE_ENABLED
-    config.WORK_SHAREABLE_ENABLED = False      # 素材要调 LLM，这里只测机制本身
+    config.WORK_SHAREABLE_ENABLED = False      # 章节结算要调 LLM，这里只测机制本身
     tmp = Path(tempfile.mkdtemp())
     config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
     try:
@@ -2406,12 +2413,11 @@ def test_interruption_cost():
             "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
 
+        # 手造今日生活（v2）：不依赖真实书架，测试要确定
         morning = _dt(2026, 10, 9, 10, 0)
-        # 预置今天的起床点（锚点前 5 分钟）：醒来才排班（与随机浮动解耦）
-        _db.set_kv("rest_schedule", json.dumps(
-            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
-        units = _work.plan(morning)
-        first_start = _dt.fromisoformat(units[0]["start"])
+        day = _mk_day("2026-10-09", morning,
+                      [int(_life.NOMINAL_SESSION_MIN * _life.speed())], warmup=10)
+        first_start = _dt.fromisoformat(day["sessions"][0]["start"])
 
         # 阻力系数映射：心流最高、收工为零
         assert _cost.resistance("flow") == 1.0
@@ -2422,9 +2428,9 @@ def test_interruption_cost():
         assert _cost.fatigue(100) == 0.0
         assert _cost.fatigue(0) == 1.0
 
-        # 心流期（刚进入状态）恒为 costly——打断代价最高（精力满时 costIndex=1.0）
+        # 心流期（刚进入状态）恒为 costly——打断代价最高
         flow = _cost.state(first_start + _td(minutes=2))
-        assert flow["level"] == "costly" and flow["cost_index"] == 1.0, flow
+        assert flow["level"] == "costly" and flow["cost_index"] >= 1.0, flow
 
         # 忙自己的事（精力还满）→ tolerated
         working = _cost.state(first_start + _td(minutes=30))
@@ -2434,14 +2440,13 @@ def test_interruption_cost():
         off = _cost.state(_dt(2026, 10, 10, 1, 0))   # 夜猫子深夜，活都干完
         assert off["level"] == "welcomed" and off["cost_index"] == 0.0, off
 
-        # 精力耗尽时，working 也应升到 costly（累 + 忙 = 双重代价）
-        _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 6, "planned": 1,
-            "units": [{"start": first_start.isoformat(timespec="seconds"),
-                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
-            "settled": 0, "energy": 20, "money": 0}))
-        tired = _cost.state(first_start + _td(minutes=30))
-        assert tired["level"] == "costly", tired
+        # 精力耗尽时，working 也应升到 costly（累 + 忙 = 双重代价）。
+        # ⚠️ 精力是**派生**的（不能写字段造假）：把这段会话拉长到 200 分钟，
+        # 读到 150 分钟处精力自然见底。
+        day2 = _mk_day("2026-10-09", morning, [int(200 * _life.speed())], warmup=10)
+        s2 = _dt.fromisoformat(day2["sessions"][0]["start"])
+        tired = _cost.state(s2 + _td(minutes=150))
+        assert tired["phase"] == "working" and tired["level"] == "costly", tired
 
         # 语态提示：三态都非空、且不踩反愧疚红线（只说自己的状态）
         for lv in ("welcomed", "tolerated", "costly"):
@@ -2515,9 +2520,9 @@ def test_mood():
 
     import config as _cfg
     import db as _db
+    import life as _life
     import mood as _mood
     import persona as _persona
-    import work as _work
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_share = config.WORK_SHAREABLE_ENABLED
@@ -2534,11 +2539,9 @@ def test_mood():
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
 
         morning = _dt(2026, 10, 9, 10, 0)
-        # 预置今天的起床点（锚点前 5 分钟）：醒来才排班（与随机浮动解耦）
-        _db.set_kv("rest_schedule", json.dumps(
-            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
-        units = _work.plan(morning)
-        first_start = _dt.fromisoformat(units[0]["start"])
+        day = _mk_day("2026-10-09", morning,
+                      [int(_life.NOMINAL_SESSION_MIN * _life.speed())], warmup=10)
+        first_start = _dt.fromisoformat(day["sessions"][0]["start"])
 
         # 工作状态 → 心情（心流=投入积极 / 忙=专注中性）
         assert _mood.mood(first_start + _td(minutes=2)) == \
@@ -2551,20 +2554,16 @@ def test_mood():
         assert idle == {"label": "慵懒", "tone": "neutral"}, idle
 
         # 精力低 → 疲惫（累是最强烈的感受，盖过 phase）
-        _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 1, "planned": 1,
-            "units": [{"start": first_start.isoformat(timespec="seconds"),
-                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
-            "settled": 0, "energy": 20, "money": 0}))
-        tired = _mood.mood(first_start + _td(minutes=30))
+        # ⚠️ 精力是**派生**的（不能写字段造假）：把会话拉长到 300 分钟，
+        # 读到 250 分钟处精力自然见底（消耗率 = COST ÷ 名义会话时长）
+        day2 = _mk_day("2026-10-09", morning, [int(300 * _life.speed())], warmup=10)
+        s2 = _dt.fromisoformat(day2["sessions"][0]["start"])
+        tired = _mood.mood(s2 + _td(minutes=250))
         assert tired == {"label": "疲惫", "tone": "tired"}, tired
 
         # 忙完（off）白天 → 轻松；夜里 → 平静（时段情绪，独立于 phase）
-        _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 1, "planned": 1,
-            "units": [{"start": first_start.isoformat(timespec="seconds"),
-                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
-            "settled": 1, "energy": 100, "money": 20}))
+        _mk_day("2026-10-09", morning,
+                [int(_life.NOMINAL_SESSION_MIN * _life.speed())], warmup=10)
         assert _mood.mood(_dt(2026, 10, 9, 14, 0)) == {"label": "轻松", "tone": "positive"}
         assert _mood.mood(_dt(2026, 10, 9, 22, 0)) == {"label": "平静", "tone": "neutral"}
 
@@ -2598,6 +2597,7 @@ def test_webui():
     import db as _db
     import guard as _guard
     import httpx
+    import life as _life
     import webui as _webui
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
@@ -2650,7 +2650,11 @@ def test_webui():
 
             st = c.get(base + "/api/state").json()
             assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
-            assert st["work"]["phase"] in _webui.work.PHASE_LABELS, f"phase 不合法：{st}"
+            # v0.89：HUD 契约换成「在读哪本 / 进度% / 章节 / 经验」（"第几件/余额"退役）
+            assert st["work"]["phase"] in _life.PHASE_LABELS, f"phase 不合法：{st}"
+            for k in ("energy", "exp", "progress", "chapter", "total_chapters",
+                      "book_title", "overtime"):
+                assert k in st["work"], f"HUD 状态缺 {k}：{st['work']}"
 
             # 调优参数面板接口（v0.86）：返回分组 + 每项元数据 + 当前值
             tc = c.get(base + "/api/tuning/config").json()
@@ -2907,62 +2911,75 @@ def test_wake_semantics_and_tick():
         _db.init()
 
 
-def test_lazy_work_plan():
-    """醒来才排班（实测 #26）：没醒 plan 空、进度条不涨；醒了从实际起床点后排；
-    起得太晚可用时间变短 → 少排几件，而不是把班排进被窝。"""
+def test_lazy_life_plan():
+    """醒来才排班（实测 #26）：没醒 sessions 空、进度条不涨；醒了从实际起床点后排；
+    起得太晚可用时间变短 → 读不完（最后一段截断在睡前），而不是把班排进被窝。"""
     import json
     import tempfile
     from datetime import datetime as _dt
 
-    import config as _cfg
     import db as _db
-    import work as _work
+    import life as _life
 
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
     saved_share = config.WORK_SHAREABLE_ENABLED
     config.WORK_SHAREABLE_ENABLED = False
     tmp = Path(tempfile.mkdtemp())
     config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
+    config.BOOKS_DIR = tmp / "books"
     try:
         _db.init()
         _db.set_kv("persona_json", json.dumps({
             "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
             "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
             "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+        _mk_book(config.BOOKS_DIR, n_ch=12)
 
         # 今天睡懒觉：12 点才醒（锚点 10 点）
         _db.set_kv("rest_schedule", json.dumps(
             {"wake_days": {"2026-10-09": "2026-10-09T12:00:00"}}))
         now = _dt(2026, 10, 9, 10, 30)          # 锚点已过但还没醒
-        assert _work.plan(now) == [], "人没醒就排了班（班不能排进被窝）"
-        st = _work.status(now)
-        assert st["phase"] == "sleep" and st["quota"] == 0, \
-            f"人没醒进度条不该涨：{st}"
-        assert _work.hud(now) == "", "没醒不该显示进度条"
+        assert _life.today(now)["sessions"] == [], "人没醒就排了班（班不能排进被窝）"
+        st = _life.status(now)
+        assert st["phase"] == "sleep", f"人没醒不该有自己的生活：{st}"
+        assert st["progress"] == 0 and st["exp"] == 0, f"人没醒进度条不该涨：{st}"
+        assert _life.hud(now) == "", "没醒不该显示进度条"
 
         # 醒了（12:30）：排班，起点在实际起床点之后（磨蹭另算）
         now2 = _dt(2026, 10, 9, 12, 30)
-        units = _work.plan(now2)
+        units = _life.today(now2)["sessions"]
         assert units, "醒了却没排班"
         first_start = _dt.fromisoformat(units[0]["start"])
         assert first_start >= _dt(2026, 10, 9, 12, 0), \
             f"排班起点早于实际起床点（排进被窝了）：{first_start}"
         assert _dt.fromisoformat(units[-1]["end"]) <= _dt(2026, 10, 10, 2, 0), \
             "排班越过了睡觉时间"
-        assert _work.plan(now2) == units, "同一天重排出新计划"
+        assert _life.today(now2)["sessions"] == units, "同一天重排出新计划"
 
-        # 起得太晚（20:00 才醒）→ 可用时间短 → 少排几件
+        # 起得太晚（20:00 才醒）→ 睡前是唯一硬边界 → 读不完的那段截断（partial），
+        # 不追进度：剩下的章节明天按字数重圈，不是加班补回来
         _db.set_kv("rest_schedule", json.dumps(
             {"wake_days": {"2026-10-09": "2026-10-09T12:00:00",
                            "2026-10-10": "2026-10-10T20:00:00"}}))
-        units2 = _work.plan(_dt(2026, 10, 10, 20, 30))
-        assert 0 < len(units2) < _cfg.WORK_DAILY_QUOTA, \
-            f"起太晚应该少做几件：{len(units2)} 件（配额 {_cfg.WORK_DAILY_QUOTA}）"
+        day2 = _life.today(_dt(2026, 10, 10, 20, 30))
+        units2, planned2 = day2["sessions"], day2["plan"]["chapters"]
+        assert units2, "醒了却没排班"
         assert _dt.fromisoformat(units2[0]["start"]) >= _dt(2026, 10, 10, 20, 0), \
             "晚起的班也不该排进被窝"
-        print("ok 惰性排班（没醒不排 + 进度条不涨 + 赖床从实际起床点起 + 少做几件）")
+        assert _dt.fromisoformat(units2[-1]["end"]) <= _dt(2026, 10, 11, 2, 0), \
+            "排班越过了睡觉时间"
+        # 读不完不加班补：睡前列不下的章节要么干脆不排、要么末段截断在睡前
+        # （两种都正常：取决于最后一段是"整段放不下"还是"放到一半撞上睡前"）
+        covered = sum(len(s["chapters"]) for s in units2)
+        assert covered < len(planned2) or units2[-1]["partial"], \
+            f"起太晚该读不完（圈了 {len(planned2)} 章，排进去 {covered} 章且末段没截断）"
+        # 对照：正常起床（12:00）时圈定的章节全排得下
+        assert len(units) == len(_life.today(now2)["plan"]["chapters"]), \
+            "正常起床时该把当天圈的章节都排完"
+        print("ok 惰性排班（没醒不排 + 进度条不涨 + 赖床从实际起床点起 + 睡前截断不追进度）")
     finally:
         config.WORK_SHAREABLE_ENABLED = saved_share
+        config.BOOKS_DIR = real_books
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
 
@@ -3009,6 +3026,7 @@ def test_random_memory_about_user():
 
 def test_proactive_context_injection():
     """主动消息带最近聊天 + 「别说好久没聊」规则（实测 #26：瞎编开场）。"""
+    import json
     import tempfile
 
     import context as _ctx
@@ -3022,8 +3040,17 @@ def test_proactive_context_injection():
         # 两小时前刚聊过的话题
         _db.add_message("user", "我在赶论文，头都大了")
         _db.add_message("assistant", "那你先忙，写完这段再找我唠")
+        # v0.89 §6：random 场景要有话题弹药才生成（无弹药返回 None，不空转发）
+        _db.set_kv("work_shareables", json.dumps(
+            [{"day": "2026-10-10", "seq": 1, "text": "读到一句挺有意思的话", "used": 0}]))
 
-        msgs = _ctx.build_proactive_messages("AWAKE", "random")
+        # 素材池是 50% 概率翻（其余走待办/承诺/兴趣/旧记忆），循环到命中为止
+        msgs = None
+        for _ in range(40):
+            msgs = _ctx.build_proactive_messages("AWAKE", "random")
+            if msgs:
+                break
+        assert msgs, "有弹药却没生成主动消息"
         contents = [m["content"] for m in msgs]
         assert any("论文" in c for c in contents), \
             "最近聊天没进主动消息上下文（还会瞎编开场）"
@@ -3141,16 +3168,15 @@ def test_account_management():
         config.BASE_DIR, config.DB_PATH = real_base, real_db
 
 
-def test_work_content_injection():
+def test_life_content_injection():
     """工作内容注入（实测 #28）：忙/心流时 prompt_hint 带「正在读什么」，
     TA 才答得上「你在忙啥」的追问，不会含糊回避、瞎编"读文献"。"""
     import json
     import tempfile
     from datetime import datetime as _dt, timedelta as _td
 
-    import config as _cfg
     import db as _db
-    import work as _work
+    import life as _life
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_share = config.WORK_SHAREABLE_ENABLED
@@ -3164,21 +3190,24 @@ def test_work_content_injection():
             "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
             "bubble_mult": 1.2, "reading_pref": "科幻",
             "drawn_at": "2026-10-09T00:00:00"}))
-        _db.set_kv("rest_schedule", json.dumps(
-            {"wake_days": {"2026-10-09": "2026-10-09T09:55:00"}}))
+        # 手造今日生活（v2）：不依赖真实书架，测试要确定
         morning = _dt(2026, 10, 9, 10, 0)
-        units = _work.plan(morning)
-        first_start = _dt.fromisoformat(units[0]["start"])
+        day = _mk_day("2026-10-09", morning,
+                      [int(_life.NOMINAL_SESSION_MIN * _life.speed())],
+                      book_title="三体", warmup=10)
+        first_start = _dt.fromisoformat(day["sessions"][0]["start"])
 
         # 忙（working）时：注入"正在读什么"，且带书名号（有具体书名）
-        hint = _work.prompt_hint(first_start + _td(minutes=30))
-        assert "我在读" in hint and "《" in hint, f"忙的时候没注入读的具体内容：{hint}"
+        hint = _life.prompt_hint(first_start + _td(minutes=30))
+        assert "我在读" in hint and "《三体》" in hint, f"忙的时候没注入读的具体内容：{hint}"
+        # 章节坐标也在（今天圈了几章 / 读完几章 / 正在第几章）
+        assert "今天圈了" in hint and "读完" in hint, f"缺章节坐标：{hint}"
         # 心流（flow）时同样注入
-        flow_hint = _work.prompt_hint(first_start + _td(minutes=2))
-        assert "我在读" in flow_hint, f"心流期没注入读的内容：{flow_hint}"
+        flow_hint = _life.prompt_hint(first_start + _td(minutes=2))
+        assert "《三体》" in flow_hint, f"心流期没注入读的内容：{flow_hint}"
 
         # 忙完了（off）不再注入"读什么"（注入只在手头有活的时候）
-        off = _work.prompt_hint(_dt(2026, 10, 10, 1, 0))
+        off = _life.prompt_hint(_dt(2026, 10, 10, 1, 0))
         assert "我在读" not in off, f"忙完了还挂着读的内容：{off}"
 
         # 红线：注入的是"自己的状态"，不踩反愧疚归因
@@ -3196,17 +3225,22 @@ def _persona_has_blame(text: str) -> bool:
 
 
 def test_material_share_injection():
-    """素材主动分享（实测 #28）：random 场景会翻素材池的读后感想当话题，翻过即消费。"""
+    """素材主动分享（实测 #28）+ v0.89 §6「无弹药不发」：random 场景会翻素材池的
+    读后感想当话题，翻过即消费；五源皆空则不发（治「车怠速」空转发）。"""
     import json
     import tempfile
 
     import context as _ctx
     import db as _db
-    import work as _work
+    import life as _life
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_work = config.WORK_ENABLED
-    config.WORK_ENABLED = False   # 隔离：否则 build_system_prompt 会触发 work 排班/结算/生成素材
+    saved_todos = config.TODOS_ENABLED
+    saved_self = config.SELF_MEMORY_ENABLED
+    config.WORK_ENABLED = False    # 隔离：否则 build_system_prompt 会触发生活排班/结算
+    config.TODOS_ENABLED = False   # 隔离待办源，只测素材池这一源
+    config.SELF_MEMORY_ENABLED = False
     tmp = Path(tempfile.mkdtemp())
     config.BASE_DIR, config.DB_PATH = tmp, tmp / "friend.db"
     try:
@@ -3223,16 +3257,24 @@ def test_material_share_injection():
         seen = False
         for _ in range(40):
             msgs = _ctx.build_proactive_messages("AWAKE", "random")
-            if "也无风雨也无晴" in msgs[-1]["content"]:
+            if msgs and "也无风雨也无晴" in msgs[-1]["content"]:
                 seen = True
                 break
         assert seen, "random 场景没翻到素材当话题"
 
         # 翻过的素材标记 used，不会再被取到
-        fresh = [x for x in _work._shareables() if not x.get("used")]
-        assert not fresh, f"翻过的素材没被消费：{_work._shareables()}"
-        print("ok 素材主动分享（random 翻读后感想当话题 + 翻过即消费）")
+        fresh = [x for x in _life._shareables() if not x.get("used")]
+        assert not fresh, f"翻过的素材没被消费：{_life._shareables()}"
+
+        # §6 无弹药不发：五源皆空 → build_proactive_messages 返回 None
+        # （core 据此不调 LLM、不发——旧实现会让 LLM 自由发挥编环境）
+        _db.set_kv("work_shareables", json.dumps([]))
+        assert _ctx.build_proactive_messages("AWAKE", "random") is None, \
+            "没有话题弹药就不该生成主动消息"
+        print("ok 素材主动分享（random 翻读后感想当话题 + 翻过即消费 + 无弹药不发）")
     finally:
+        config.SELF_MEMORY_ENABLED = saved_self
+        config.TODOS_ENABLED = saved_todos
         config.WORK_ENABLED = saved_work
         config.BASE_DIR, config.DB_PATH = real_base, real_db
         _db.init()
@@ -3352,6 +3394,7 @@ def test_likes_passive_split():
 
 def test_proactive_segment():
     """主动消息分段：LLM 用换行把两段话并成一条时，拆成两条连发（修 bug：两段话没分开）。"""
+    import json
     import tempfile
     import db as _db
     import llm as _llm
@@ -3375,7 +3418,15 @@ def test_proactive_segment():
         ch = DummyChannel()
         engine = Engine(ch)
         _llm.chat = lambda *a, **k: "刚从书里抬头\n\n《左传》看到襄公那段"
-        assert engine._proactive("random") is True
+        # v0.89 §6：random 要有话题弹药才发（素材池 50% 概率翻，多试几次必中）
+        got = False
+        for _ in range(40):
+            _db.set_kv("work_shareables", json.dumps(
+                [{"day": "2026-10-10", "seq": 1, "text": "读到襄公那段挺有感觉", "used": 0}]))
+            if engine._proactive("random") is True:
+                got = True
+                break
+        assert got, "有弹药却没发出主动消息"
         assert ch.sent == ["刚从书里抬头", "《左传》看到襄公那段"], \
             f"主动消息没按换行分段：{ch.sent}"
         print("ok 主动消息分段（换行拆成两条连发）")
@@ -3832,10 +3883,9 @@ def test_tone_main_track():
 
     import config as _cfg
     import db as _db
-    import reading as _reading
-    import tone as _tone
+    import life as _life
     import persona as _persona
-    import work as _work
+    import tone as _tone
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_share = config.WORK_SHAREABLE_ENABLED
@@ -3853,11 +3903,10 @@ def test_tone_main_track():
             "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
             "bubble_mult": 1.2, "reading_pref": "科幻",
             "drawn_at": "2026-10-09T00:00:00"}))
-        _db.set_kv("rest_schedule", json.dumps(
-            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
         morning = _dt(2026, 10, 9, 10, 0)
-        units = _work.plan(morning)
-        first_start = _dt.fromisoformat(units[0]["start"])
+        day = _mk_day("2026-10-09", morning,
+                      [int(_life.NOMINAL_SESSION_MIN * _life.speed())], warmup=10)
+        first_start = _dt.fromisoformat(day["sessions"][0]["start"])
 
         # 主轨 = mood（情绪），从属 = cost（相处姿势）：心流期 = 投入 + costly
         d = _tone.dominant(first_start + _td(minutes=2))
@@ -3869,19 +3918,11 @@ def test_tone_main_track():
         assert "松紧度" in hint, f"从属的相处姿势没进语气块：{hint}"
         assert not _persona.has_cost_blame(hint), f"语气主轨踩了反愧疚红线：{hint}"
 
-        # 书名号 bug：reading 标题裸存（不再自带《》），work 层只包一层（单《》）
-        for a in _reading.LIBRARY:
-            assert "《" not in a["title"] and "》" not in a["title"], \
-                f"内置素材标题不该自带书名号：{a['title']}"
-        whint = _work.prompt_hint(first_start + _td(minutes=30))
+        # 书名号：生活引擎只包一层（单《》，不出现《《）
+        whint = _life.prompt_hint(first_start + _td(minutes=30))
         assert "《" in whint and "《《" not in whint, f"书名号没修干净：{whint}"
 
         # 忙完（off）白天 → 轻松；夜里 → 平静（主轨跟时段走）
-        _db.set_kv("work_state", json.dumps({
-            "day": "2026-10-09", "quota": 1, "planned": 1,
-            "units": [{"start": first_start.isoformat(timespec="seconds"),
-                       "end": (first_start + _td(minutes=50)).isoformat(timespec="seconds")}],
-            "settled": 1, "energy": 100, "money": 20}))
         assert _tone.dominant(_dt(2026, 10, 9, 14, 0))["main"] == "轻松"
         assert _tone.dominant(_dt(2026, 10, 9, 22, 0))["main"] == "平静"
 
@@ -3908,16 +3949,16 @@ def test_tone_main_track():
 
 
 def test_consciousness_stream():
-    """自我意识流（S4，第一步核心闭环）：流表读写 + 状态行（含 money/energy）+
-    工作结算埋点 + 每轮注入。治"不知道攒了多少/今天干了啥"（实测 #36 #2/#3）。"""
+    """自我意识流（S4，第一步核心闭环）：流表读写 + 状态行（含读到哪/精力/心情）+
+    生活事件埋点 + 每轮注入。治"不知道今天干了啥"（实测 #36 #2/#3）。"""
     import json
     import tempfile
     from datetime import datetime as _dt, timedelta as _td
 
     import config as _cfg
     import db as _db
+    import life as _life
     import stream as _stream
-    import work as _work
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_share = config.WORK_SHAREABLE_ENABLED
@@ -3937,11 +3978,12 @@ def test_consciousness_stream():
             "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
             "bubble_mult": 1.2, "reading_pref": "科幻",
             "drawn_at": "2026-10-09T00:00:00"}))
-        _db.set_kv("rest_schedule", json.dumps(
-            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
+        # 手造今日生活（v2）：不依赖真实书架，测试要确定
         morning = _dt(2026, 10, 9, 10, 0)
-        units = _work.plan(morning)
-        first_start = _dt.fromisoformat(units[0]["start"])
+        day = _mk_day("2026-10-09", morning,
+                      [int(_life.NOMINAL_SESSION_MIN * _life.speed())],
+                      book_title="测试书", warmup=10)
+        first_start = _dt.fromisoformat(day["sessions"][0]["start"])
 
         # 1. 追加/读取：append 一条，recent 能查到且带生活日 day
         sid = _stream.append("wake", "我伸了懒腰，起床了", morning)
@@ -3950,19 +3992,26 @@ def test_consciousness_stream():
         assert rows and rows[0]["text"] == "我伸了懒腰，起床了", rows
         assert rows[0]["day"] == "2026-10-09", rows[0]
 
-        # 2. 状态行：忙/心流时有 phase/money/energy/mood
+        # 2. 状态行：忙/心流时有 phase/读到哪/精力/心情
         st = _stream.status_line(first_start + _td(minutes=2))
-        assert st["phase"] and st["money"] == 0 and st["energy"] == 100 and st["mood"], st
+        assert st["phase"] and st["reading"] and st["mood"], st
+        assert "读到《测试书》" in st["reading"], f"状态行该带读到哪：{st}"
+        assert st["energy"] >= 95, f"刚开工精力该还满：{st}"
 
-        # 3. 工作结算埋点：过了第一个单元的 end → 流里多一条"忙完第 1 件…"
-        _work.status(first_start + _td(minutes=51))
+        # 3. 生活事件埋点：开工 / 读到哪章 各自只记一次（once 去重，不刷屏）
+        _life.status(first_start + _td(minutes=2))
+        _life.status(first_start + _td(minutes=5))
         work_lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "work"]
-        assert any("忙完第 1 件" in t for t in work_lines), work_lines
+        assert len(work_lines) == 1, f"开工只该记一次：{work_lines}"
+        read_lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "reading"]
+        assert any("在读《测试书》" in t for t in read_lines), read_lines
 
-        # 4. prompt 注入：含"攒了多少/精力还剩/心情"（money/energy 进 prompt，治 #2）
-        hint = _stream.prompt_hint(first_start + _td(minutes=52))
-        assert "攒了多少" in hint and "精力还剩" in hint and "心情" in hint, hint
-        assert "20 块" in hint, f"余额没进 prompt：{hint}"
+        # 4. prompt 注入：含"读到哪/精力还剩/心情"；
+        #    v0.89 §5.1 数字给屏幕——不再念"攒了多少/多少块"
+        hint = _stream.prompt_hint(first_start + _td(minutes=6))
+        assert "读到《测试书》" in hint and "精力还剩" in hint and "心情" in hint, hint
+        assert "攒了多少" not in hint and "块" not in hint, \
+            f"prompt 里念了数字账本（数字该给 HUD）：{hint}"
 
         # 5. 睡着 / 关工作系统 → 不注入（没有"自己的日子"就无从谈意识）
         _db.set_state("SLEEPING")
@@ -3975,7 +4024,7 @@ def test_consciousness_stream():
         # 6. render_day：把当天流渲染成第一人称时间线（睡前浓缩的数据源）
         day_text = _stream.render_day("2026-10-09")
         assert "我伸了懒腰，起床了" in day_text, day_text
-        assert "忙完第 1 件" in day_text, day_text
+        assert "开始读今天圈的书了" in day_text, day_text
 
         # 7. 睡前浓缩：selfmem.review 收到当天流（mock LLM 捕获 system prompt 断言带流）
         import llm as _llm
@@ -3993,10 +4042,10 @@ def test_consciousness_stream():
             _llm.chat = real_chat
         assert "今天你自己是怎么过的" in captured.get("system", ""), \
             "selfmem.review 缺意识流数据源段：" + captured.get("system", "")
-        assert "忙完第 1 件" in captured.get("system", ""), \
+        assert "开始读今天圈的书了" in captured.get("system", ""), \
             "当天意识流没进 selfmem.review 的 prompt"
 
-        print("ok 自我意识流（流表读写 + 状态行含钱/精力 + 工作结算埋点 + 每轮注入 + 睡前浓缩）")
+        print("ok 自我意识流（流表读写 + 状态行含读到哪/精力 + 生活事件埋点 + 每轮注入 + 睡前浓缩）")
     finally:
         config.WORK_ENABLED = saved_work
         config.MOOD_ENABLED = saved_mood
@@ -4200,8 +4249,8 @@ def test_lore():
 
 
 def test_trueread():
-    """阅读真读（§3）+ 读书笔记双库（§4）+ 统一向量索引（§5）：
-    上课作息 8 半节 / 整数章节圈定 / tps 推导 / 章节末结算落 alpha/beta / 思考 buffer。"""
+    """阅读真读（v0.89 瘦身版，时间面已归 life）：书级书签跨天不重置 + 整数章节圈定
+    + 笔记判重 + 思考 buffer + 章节末结算落 alpha/beta + 打动进素材池。"""
     import json
     import tempfile
     from datetime import datetime as _dt
@@ -4212,7 +4261,7 @@ def test_trueread():
     import notes as _notes
     import trueread as _tr
 
-    real_base, real_db = config.BASE_DIR, config.DB_PATH
+    real_base, real_db, real_books = config.BASE_DIR, config.DB_PATH, config.BOOKS_DIR
     saved_tr = config.TRUE_READ_ENABLED
     config.TRUE_READ_ENABLED = True
     tmp = Path(tempfile.mkdtemp())
@@ -4227,17 +4276,7 @@ def test_trueread():
             "bubble_mult": 1.2, "reading_pref": "科幻",
             "drawn_at": "2026-10-09T00:00:00"}))
 
-        # 1) 上课作息：8 半节（上午 2 节 × 2 半节 + 下午 2 节 × 2 半节）
-        slots = _tr.half_periods(_dt(2026, 10, 9, 9, 0))
-        assert len(slots) == 8, f"应有 8 半节，实际 {len(slots)}"
-        assert slots[0]["start"].hour == 8 and slots[0]["start"].minute == 30, \
-            f"第一节应 8:30 开始：{slots[0]['start']}"
-        assert slots[0]["label"].startswith("上午第1节上"), slots[0]["label"]
-
-        # 2) 总上课时间 = 8 半节 × 40min = 320min
-        assert _tr.total_teaching_min() == 320, _tr.total_teaching_min()
-
-        # 3) txt 章节解析：第X章 正则切章
+        # 1) txt 章节解析：第X章 正则切章（时间面不在这里，这里只管"读到哪"）
         txt = ("第一章 起\n" + "正文甲" * 2000 + "\n"
                "第二章 承\n" + "正文乙" * 2000 + "\n"
                "第三章 转\n" + "正文丙" * 2000)
@@ -4246,20 +4285,26 @@ def test_trueread():
         assert len(chs) >= 3, f"第X章 正则该切出 ≥3 章：{len(chs)}"
         assert chs[0]["title"].startswith("第一章"), chs[0]["title"]
 
-        # 4) 当日任务：按整数章节圈定、受字数上限约束（宁少勿超）
-        plan = _tr.plan_day(_dt(2026, 10, 9, 10, 0))
-        assert plan["book_id"], "书架有书却没圈定任务"
-        assert plan["total_chars"] <= _cfg.READING_DAILY_CHARS, \
-            f"圈定字数超上限：{plan['total_chars']}"
-        assert plan["tps"] > 0, "tps 该是推导值"
+        # 2) 选书 + 圈章：从书签起按整数章节累计（宁少勿超）
+        book = _tr.pick_book()
+        assert book and book["id"] == "测试书.txt", f"没选中测试书：{book}"
+        picked, acc = _tr.plan_from(book["id"], 0, _cfg.READING_DAILY_CHARS)
+        assert picked and acc <= _cfg.READING_DAILY_CHARS, f"圈定字数超上限：{acc}"
 
-        # 5) 思考 buffer：append 边读边想的片段（now 传一致，避免跨天）
-        _now = _dt(2026, 10, 9, 10, 0)
-        assert _tr.append_thought("这段有点意思", _now) == 1
-        assert _tr.append_thought("又想到一个", _now) == 2
-        assert len(_tr.buffer(_now)) == 2
+        # 3) 书级书签 = 唯一阅读进度真相：**跨天不重置**（治"每天重读第一章"）
+        _tr.set_bookmark("测试书.txt", 1)
+        assert _tr.bookmark() == {"book_id": "测试书.txt", "ch_idx": 1}, _tr.bookmark()
+        rest, _ = _tr.plan_from("测试书.txt", 1, 10 ** 9)
+        assert len(rest) == 2, f"从第 2 章起该只剩 2 章：{rest}"
+        # align：与 life 的当日计划失步时以 life 为准对齐（冷启动跳章）
+        assert _tr.align("测试书.txt", 0)["ch_idx"] == 0, _tr.bookmark()
 
-        # 6) 读书笔记双库：alpha（短概述）挂 long_id → beta（完整转述）
+        # 4) 思考 buffer：append 边读边想（思考即笔记，章节末一起结算）
+        assert _tr.append_thought("这段有点意思") == 1
+        assert _tr.append_thought("又想到一个") == 2
+        assert len(_tr.buffer()) == 2
+
+        # 5) 读书笔记双库：alpha（短概述）挂 long_id → beta（完整转述）
         a, b = _notes.add_pair("测试书.txt", "测试书", "第一章",
                                "第一章讲了起", "这章说的是起，然后……", "测试书 / 第一章", 1200)
         assert a > 0 and b > 0
@@ -4268,35 +4313,45 @@ def test_trueread():
         beta = _db.get_reading_note(b)
         assert beta["kind"] == "beta" and "这章说的是起" in beta["content"]
 
-        # 7) alpha 注入：最近必带（按累计字数窗口）
+        # 5b) 判重（批0-②）：同一 (书, 章, kind) 再结算 = 覆盖，不堆第二条笔记
+        a2, b2 = _notes.add_pair("测试书.txt", "测试书", "第一章",
+                                 "换个说法的概述", "换个说法的转述", "测试书 / 第一章", 1200)
+        assert (a2, b2) == (a, b), f"同章重复结算该覆盖：{(a2, b2)} vs {(a, b)}"
+        assert _db.reading_note_count() == 2, f"不该有重复笔记：{_db.reading_note_count()}"
+
+        # 6) alpha 注入：最近必带（按累计字数窗口）
         hint = _notes.prompt_hint()
         assert "我最近读的书" in hint and "第一章" in hint, hint
 
-        # 8) 章节末结算（mock LLM 返回三行格式）
+        # 7) 章节末结算（mock LLM 返回三行格式）：落笔记 + 打动 → 带出可分享的一句
         import llm as _llm
         real_chat = _llm.chat
         _llm.chat = lambda messages, temperature=0.7, thinking=False, **k: (
             "短概述：第一章开了个头\n完整转述：这章讲的是起，然后承\n打动：是")
         try:
-            _tr.append_thought("这段值得记", _now)
-            result = _tr.settle_chapter(_now)
+            _tr.append_thought("这段值得记")
+            result = _tr.settle_chapter()
             assert result and result["moved"] is True, f"结算应产出笔记且打动：{result}"
             assert result["alpha_id"] > 0 and result["beta_id"] > 0
-            assert _db.reading_note_count() >= 3, "结算应落新笔记"
+            assert result.get("shareable_text"), "打动了要带出可分享的一句"
+            # 结算完书签推进一章（下一章从头攒思考）
+            assert _tr.bookmark()["ch_idx"] == 1, _tr.bookmark()
+            assert _tr.buffer() == [], "章节末结算后思考 buffer 该清空"
         finally:
             _llm.chat = real_chat
 
-        # 9) 真读关闭 → 不注入、不追加思考
+        # 8) 真读关闭 → 不注入、不追加思考
         config.TRUE_READ_ENABLED = False
         assert _tr.prompt_hint() == ""
-        assert _tr.append_thought("不该记") == 0
+        n_before = len(_tr.buffer())
+        assert _tr.append_thought("不该记") == n_before, "真读关了不该再攒思考"
         config.TRUE_READ_ENABLED = True
 
-        print("ok 阅读真读（上课作息 8 半节 + 章节圈定 + tps 推导 + 思考 buffer + 笔记双库 + 章节结算）")
+        print("ok 阅读真读（书级书签跨天 + 整数章节圈定 + 笔记判重 + 思考 buffer + 章节结算）")
     finally:
         config.TRUE_READ_ENABLED = saved_tr
+        config.BOOKS_DIR = real_books
         config.BASE_DIR, config.DB_PATH = real_base, real_db
-        config.BOOKS_DIR = Path(real_base) / "books"
         _db.init()
 
 
@@ -4310,7 +4365,7 @@ def test_unified_event_source():
     import db as _db
     import stream as _stream
     import todos as _todos
-    import work as _work
+    import life as _life
 
     real_base, real_db = config.BASE_DIR, config.DB_PATH
     saved_todos = config.TODOS_ENABLED
@@ -4338,7 +4393,7 @@ def test_unified_event_source():
         _db.set_kv("work_shareables", json.dumps(
             [{"day": "2026-10-09", "seq": 1, "text": "又想到一句", "used": 0,
               "todo_id": tid2}]))
-        text, got_id = _work.take_shareable_item()
+        text, got_id = _life.take_shareable_item()
         assert text == "又想到一句" and got_id == tid2, (text, got_id)
 
         # 3) 承诺到点 → 意识流注入条目（events 统一事件源）
@@ -4392,9 +4447,20 @@ def test_tuning_panel():
     assert sum(1 for it in items if it["level"] == "L1") > 0, "L1 首屏不能为空"
     assert sum(1 for it in items if it["level"] == "L2") > 0, "L2 高级不能为空"
 
-    # 2) 当前值覆盖全部登记键
+    # 2) 当前值覆盖全部登记键；默认值**单头真相**（v0.88 E1）：
+    #    catalog 的 default 直接取 config 当前常量，清单里不再手写
     cv = _tuning.current_values()
     assert set(cv) == set(keys), "current_values 漏了键"
+    for it in items:
+        raw = getattr(config, it["key"])
+        if it["type"] == "float":
+            want = f"{float(raw):g}"
+        elif it["type"] == "int":
+            want = str(int(raw))
+        else:
+            want = str(raw)
+        assert it["default"] == want, \
+            f"default 没从 config 取（双头维护会漂移）：{it['key']} = {it['default']} vs {want}"
 
     # 3) 非法值被拒（_coerce 抛错在 write_env 之前，不落盘）
     def _raises(key, val):
@@ -4405,12 +4471,29 @@ def test_tuning_panel():
             return True
     assert _raises("READING_DAILY_CHARS", "abc"), "非整数没被拒"
     assert _raises("BUBBLE_FIXED_PROB", "x"), "非数字没被拒"
-    assert _raises("SCHED_WORK_START", "25:00"), "非法小时没被拒"
-    assert _raises("SCHED_WORK_START", "8:60"), "非法分钟没被拒"
-    assert _raises("SCHED_WORK_START", "830"), "非 HH:MM 没被拒"
     assert _raises("COST_R_FLOW", "5"), "越界（>max）没被拒"
     assert _raises("NUDGE_PROBABILITY", "1.5"), "概率越界没被拒"
     assert _raises("NO_SUCH_KEY", "1"), "未登记键没被拒"
+
+    # time 类型的校验（面板里已无 time 键——SCHED_* 整族随 v0.89 退役，
+    # 但类型支持留着，直接验 _coerce 的 time 分支）
+    _time_item = {"k": "X_TIME", "l": "测试时间", "t": "time"}
+    for bad in ("25:00", "8:60", "830"):
+        try:
+            _tuning._coerce(_time_item, bad)
+            raise AssertionError(f"非法时间没被拒：{bad}")
+        except ValueError:
+            pass
+    assert _tuning._coerce(_time_item, "9:05") == "09:05", "时间该规范化成 HH:MM"
+
+    # 退役参数不能还挂在面板上（v0.89 批 A：20 → 11 个参数）
+    retired = {"SCHED_WORK_START", "SCHED_LUNCH_START", "SCHED_LUNCH_END",
+               "SCHED_WORK_END", "SCHED_HALF_PERIOD_MIN", "SCHED_INTRA_BREAK_MIN",
+               "SCHED_INTER_BREAK_MIN", "SCHED_MORNING_PERIODS", "SCHED_AFTERNOON_PERIODS",
+               "WORK_DAILY_QUOTA", "WORK_PAY_PER_UNIT", "WORK_UNIT_MINUTES",
+               "WORK_BREAK_MINUTES", "WORK_READ_PER_UNIT", "READING_ENABLED"}
+    left = set(keys) & retired
+    assert not left, f"退役参数还在面板里：{left}"
 
     # 4) save 序列：write_env 收到规范化字符串 + 触发 load_dotenv(force=True) + reload(config)
     written, reloaded = {}, []
@@ -4430,7 +4513,7 @@ def test_tuning_panel():
         _tuning.save_values({
             "READING_DAILY_CHARS": "12000",
             "BUBBLE_FIXED_PROB": 0.5,
-            "SCHED_WORK_START": "9:05",
+            "WORK_WARMUP_MIN": "70",
         })
     finally:
         _auth.write_env, config.load_dotenv, _il.reload = real_write, real_ld, real_reload
@@ -4438,7 +4521,7 @@ def test_tuning_panel():
     assert written == {
         "READING_DAILY_CHARS": "12000",
         "BUBBLE_FIXED_PROB": "0.5",
-        "SCHED_WORK_START": "09:05",
+        "WORK_WARMUP_MIN": "70",
     }, f"write_env 收到的规范化值不对：{written}"
     assert ("load", True) in reloaded, "该 load_dotenv(force=True) 热生效"
     assert ("reload", "config") in reloaded, "该 reload(config) 刷新常量"
@@ -4477,11 +4560,10 @@ if __name__ == "__main__":
     test_conversation_continuation()
     test_busy_signals_not_merged()
     test_random_chat_hours_follow_persona()
-    test_work_system()
-    test_lazy_work_plan()
+    test_life_engine()
+    test_lazy_life_plan()
     test_offline_inbox_and_rhythm()
     test_wake_semantics_and_tick()
-    test_reading_system()
     test_user_library()
     test_library_categories()
     test_epub_cover()
@@ -4497,7 +4579,7 @@ if __name__ == "__main__":
     test_random_memory_about_user()
     test_proactive_context_injection()
     test_quote_context_injection()
-    test_work_content_injection()
+    test_life_content_injection()
     test_material_share_injection()
     test_webui()
     test_account_management()

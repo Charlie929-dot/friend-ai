@@ -84,9 +84,10 @@
   .outline-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 16px;
     display: flex; flex-direction: column; align-items: flex-start; padding: 12px 0 12px 2px;
     overflow: hidden; }
+  /* v0.89 §7②：目录细线提亮（原来 50% 太淡、看不出是分天/分段的刻度） */
   .outline-rail i { flex: 1 1 0; min-height: 1px; max-height: 3px; width: 9px; border-radius: 99px;
-    background: color-mix(in srgb, var(--muted) 50%, transparent); }
-  .outline-rail i.l1 { width: 13px; }
+    background: color-mix(in srgb, var(--muted) 85%, transparent); }
+  .outline-rail i.l1 { width: 13px; background: color-mix(in srgb, var(--accent) 45%, var(--muted)); }
   .outline-rail i.cur { width: 13px; background: var(--accent); }
   /* 文字目录浮层：悬在聊天流上方（right of rail），不挤占布局 */
   .outline-panel { position: absolute; left: 18px; top: 8px; bottom: 8px; width: 212px;
@@ -703,8 +704,8 @@
           <div class="typing" id="typing" style="margin:9px 0 0;min-height:14px"></div>
           <div class="stat-grid">
             <div class="stat"><div class="s-label">精力</div><div class="s-val" id="mEnergy">0</div><div class="mini-bar e"><i id="barE" style="width:0%"></i></div></div>
-            <div class="stat"><div class="s-label">今日进度</div><div class="s-val"><em id="qDone">0</em><em class="q-den" id="qQuota">/0</em></div><div class="mini-bar p"><i id="barP" style="width:0%"></i></div></div>
-            <div class="stat"><div class="s-label">余额</div><div class="s-val" id="mMoney">0</div><div class="s-sub">TA 自己挣的</div></div>
+            <div class="stat"><div class="s-label">今日进度</div><div class="s-val"><em id="qDone">0</em><em class="q-den" id="qQuota">%</em></div><div class="mini-bar p"><i id="barP" style="width:0%"></i></div><div class="s-sub" id="qChap">—</div></div>
+            <div class="stat"><div class="s-label">经验</div><div class="s-val" id="mExp">0</div><div class="s-sub">今天读到多少的印记</div></div>
             <div class="stat"><div class="s-label">素材</div><div class="s-val" id="mMat">0</div><div class="s-sub">条新鲜事</div></div>
           </div>
         </div>
@@ -1193,7 +1194,8 @@ function addSys(t){
   chat().appendChild(d); afterAppend();
 }
 
-const PHASE_TEXT={idle:'还没开工',working:'忙自己的事',flow:'刚进入状态',break:'歇会儿',off:'今天忙完了',sleep:'睡着'};
+// v0.89：phase 键集合不变，文案跟着生活引擎改（它的一天 = 读书）
+const PHASE_TEXT={idle:'还没开工',working:'在读书',flow:'刚读进去',break:'歇会儿',off:'今天忙完了',sleep:'睡着'};
 function renderState(s){
   const p=s.work||{};
   const ph=$('phase');
@@ -1203,11 +1205,14 @@ function renderState(s){
   const mb=$('mood'); mb.textContent=s.mood?s.mood.label:''; mb.className='mood '+(s.mood?s.mood.tone:'');
   const e=p.energy||0;
   $('barE').style.width=e+'%';
-  $('barP').style.width=(p.quota?(p.done/p.quota*100):0)+'%';
-  $('qDone').textContent=(p.done||0);
-  $('qQuota').textContent='/'+(p.quota||0);
+  // v0.89 §5.2：进度按字数百分比 + 章节副标；"余额"改「经验」
+  $('barP').style.width=(p.progress||0)+'%';
+  $('qDone').textContent=(p.progress||0);
+  $('qChap').textContent=(p.book_title&&p.total_chapters)
+    ? ('《'+p.book_title+'》第 '+(p.chapter||0)+'/'+(p.total_chapters||0)+' 章'+(p.overtime?' · 读得晚':''))
+    : (p.phase==='off'?'今天的事忙完了':(p.book_title||''));
   $('mEnergy').textContent=e;
-  $('mMoney').textContent=p.money||0;
+  $('mExp').textContent=p.exp||0;
   $('mMat').textContent=(s.materials||0)+' 条';
   $('typing').textContent=s.typing?(s.name+' 正在回复…'):'';
   // 朋友档案

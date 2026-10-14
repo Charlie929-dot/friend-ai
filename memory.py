@@ -302,7 +302,7 @@ def _apply(item: dict, assistant_tail: bool = False, evidence: str = "") -> bool
 
     # 追加式时间线：不去重不合并（同主题的新进展是历史的一部分），
     # 仅跳过原文完全相同的（防相邻轮次把同一段话重复提取）
-    for m in db.all_memories(limit=200):
+    for m in db.all_memories(limit=config.MEMORY_RECALL_POOL):
         if m["content"] == content:
             return False
 
@@ -546,6 +546,10 @@ def _query_time_tokens(query: str) -> list[str]:
 # 身份/关系询问的意图词：词表在 corpus（语料，可扩充）
 _IDENTITY_QUERY = re.compile(corpus.IDENTITY_QUERY)
 
+# 语义全量池一次最多补进候选多少条（防「一条 query 命中几百条老记忆」把打分拖垮；
+# 正常 query 命中远少于此。代码常量，不进 config）
+_SEMANTIC_EXTRA_MAX = 50
+
 
 def _query_person_names(query: str) -> list[str]:
     """识别 query 里出现的人物名（朋友名 + 用户称呼 + 别名），用于 person 标签命中加权。"""
@@ -607,11 +611,16 @@ def expand_long_memory(mem: dict) -> str | None:
     return None
 
 
-def _semantic_scores(query: str, mems: list[dict]) -> dict[int, float] | None:
+def _semantic_scores(query: str, mems: list[dict],
+                     full_pool: bool = False) -> dict[int, float] | None:
     """语义向量相似度 {memory_id: 余弦相似度}。模型/依赖不可用时返回 None（退回纯字面）。
 
     治本「几点睡召不回熬夜」：字面 bigram 对不上就是零分，但向量能把"熬夜"和
     "几点睡"归到同一语义。向量惰性补算 + 持久化（db.memory_vectors），进程重启不重算。
+
+    full_pool=True（v0.88 M1）：打分基于**全量向量池**（db.all_memory_vectors），
+    不再受字面窗口 `MEMORY_RECALL_POOL` 限制——老记忆只要语义命中就还能被想起，
+    治「最新 N 条之外的记忆永久召不回来」。窗口内缺向量的条目仍会惰性补算进池。
     """
     import embeddings
     if not config.EMBEDDING_ENABLED or not embeddings.available():
@@ -620,7 +629,8 @@ def _semantic_scores(query: str, mems: list[dict]) -> dict[int, float] | None:
     if qv is None:
         return None
     qv = qv[0]
-    existing = db.get_memory_vectors([m["id"] for m in mems])
+    existing = (db.all_memory_vectors() if full_pool
+                else db.get_memory_vectors([m["id"] for m in mems]))
     missing = [m for m in mems if m["id"] not in existing]
     if missing:
         vecs = embeddings.embed([m["content"] for m in missing])
@@ -632,12 +642,15 @@ def _semantic_scores(query: str, mems: list[dict]) -> dict[int, float] | None:
                 existing[m["id"]] = blob
     import numpy as np
     scores: dict[int, float] = {}
-    for m in mems:
-        blob = existing.get(m["id"])
+    ids = list(existing.keys()) if full_pool else [m["id"] for m in mems]
+    for mid in ids:
+        blob = existing.get(mid)
         if blob is None:
             continue
         v = np.frombuffer(blob, dtype=np.float32)
-        scores[m["id"]] = float(np.dot(qv, v))
+        if v.shape[0] != qv.shape[0]:
+            continue
+        scores[mid] = float(np.dot(qv, v))
     return scores
 
 
@@ -648,7 +661,8 @@ def recall(query: str, top_k: int = 5, expand_long: bool = False) -> list[dict]:
     治「几点睡」召不回「熬夜」；模型不可用时自动退回纯字面）。
     命中后同组（category+theme 完全一致）的更新进展一起带出——
     AI 看到的是时间线的最新状态，不是过时记忆。"""
-    mems = [m for m in db.all_memories(limit=200)
+    # 字面/标签窗口（可配，MEMORY_RECALL_POOL）：语义不看这个窗口，走全量向量池
+    mems = [m for m in db.all_memories(limit=config.MEMORY_RECALL_POOL)
             if m.get("status", "ok") == "ok"]  # 待确认删除的不参与召回
     if not mems:
         return []
@@ -662,7 +676,17 @@ def recall(query: str, top_k: int = 5, expand_long: bool = False) -> list[dict]:
     # 意图感知：问"是谁/认识/记得"→ 人际记忆优先；query 点到人名 → person 标签命中优先
     identity_q = bool(_IDENTITY_QUERY.search(query))
     q_names = _query_person_names(query)
-    semantic = _semantic_scores(query, mems)
+    semantic = _semantic_scores(query, mems, full_pool=True)
+    # 语义命中但已滑出字面窗口的老记忆 → 补进候选（v0.88 M1：不再静默失忆）
+    if semantic:
+        win_ids = {m["id"] for m in mems}
+        extra_ids = sorted(
+            (i for i, cos in semantic.items()
+             if i not in win_ids and cos >= config.EMBEDDING_MIN_SIMILARITY),
+            key=lambda i: -semantic[i])[:_SEMANTIC_EXTRA_MAX]
+        if extra_ids:
+            mems.extend(m for m in db.memories_by_ids(extra_ids)
+                        if m.get("status", "ok") == "ok")
     scored = []
     for m in mems:
         # 五维标签全部参与匹配（人物/地点/主题往往是检索入口）
@@ -805,7 +829,7 @@ def run_memory_tool(name: str, args: dict) -> str:
 # ---------- 今天做过/读到的事（B 库）→ 注入当天上下文 ----------
 # 用户要的「一天所有信息交流都进记忆，阅读内容存 B 库并注入上下文，写日记后从
 # 上下文清除但记忆保留」：注入的筛选条件就是"创建于今天"——跨天自动不再注入，
-# 而 B 库记录本身保留。写入点在 work._gen_shareable（不额外调 LLM）。
+# 而 B 库记录本身保留。写入点在 life._note_shareable_text（不额外调 LLM）。
 _TODAY_NOTE_HINT = "这是我自己今天做过/读到的事，细节只有今天还记得清楚"
 
 
@@ -965,7 +989,7 @@ def random_memory(category: str | None = None) -> dict | None:
         p = (m.get("person") or "").strip()
         return p in ("对方", "TA") or (bool(uname) and uname in p)
 
-    mems = [m for m in db.all_memories(limit=200)
+    mems = [m for m in db.all_memories(limit=config.MEMORY_RECALL_POOL)
             if m.get("status", "ok") == "ok" and _about_user(m)]
     if category:
         mems = [m for m in mems if m["category"] == category]

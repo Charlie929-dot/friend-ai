@@ -112,6 +112,9 @@ EMBEDDING_ENABLED = os.environ.get("EMBEDDING_ENABLED", "on").lower() == "on"   
 EMBEDDING_MODEL_DIR = Path(os.environ.get("EMBEDDING_MODEL_DIR", str(BASE_DIR / "models" / "bge-small-zh-v1.5")))  # ONNX 模型目录（含 model.onnx + tokenizer.json）
 EMBEDDING_SEMANTIC_WEIGHT = float(os.environ.get("EMBEDDING_SEMANTIC_WEIGHT", "4.0"))  # 语义相似分在混合打分里的权重（字面 bigram 仍占 2.0/重叠）
 EMBEDDING_MIN_SIMILARITY = float(os.environ.get("EMBEDDING_MIN_SIMILARITY", "0.35"))   # 余弦相似度下限（低于此值不算语义命中，防噪声）
+# 字面/标签召回窗口（v0.88 M1：原来硬编码 200 = 超出窗口的老记忆永久召不回来）。
+# 语义召回**不受此窗口限制**——它走全量向量池，老记忆只要语义命中就还能想起。
+MEMORY_RECALL_POOL = int(os.environ.get("MEMORY_RECALL_POOL", "500"))
 
 # --- 艾宾浩斯记忆衰减（S4：遗忘 = 一次次总结；被想起得越多，记得越久） ---
 MEMORY_DECAY_ENABLED = os.environ.get("MEMORY_DECAY_ENABLED", "on").lower() == "on"   # 总开关（关了记忆只增不减）
@@ -124,20 +127,22 @@ TODAY_NOTES_ENABLED = os.environ.get("TODAY_NOTES_ENABLED", "on").lower() == "on
 TODAY_NOTES_MAX = int(os.environ.get("TODAY_NOTES_MAX", "3"))                          # 最多注入几条今日素材
 TODAY_NOTES_CHARS = int(os.environ.get("TODAY_NOTES_CHARS", "200"))                    # 每条正文注入截断字数（B 库存全文，注入只看摘要量）
 
-# --- 工作系统（S3「有自己的生活」：它自己的日子，工作循环 + 心流期） ---
+# --- 生活引擎（v0.89：原「工作系统」重写为 life.py，生活面参数 ~20 → ~11） ---
+# 节奏 = 章节边界（读到下一章算一段、读完一章歇一会），**没有下班铃**，唯一硬边界是睡前。
 WORK_ENABLED = os.environ.get("WORK_ENABLED", "on").lower() == "on"          # 总开关（关了它就没有"手头的事"，打断成本也无从算起）
-WORK_DAILY_QUOTA = int(os.environ.get("WORK_DAILY_QUOTA", "6"))              # 今日工作单元配额（做满才下班）
-WORK_UNIT_MINUTES = int(os.environ.get("WORK_UNIT_MINUTES", "50"))           # 一个工作单元多长
-WORK_BREAK_MINUTES = int(os.environ.get("WORK_BREAK_MINUTES", "15"))         # 单元之间歇多久（带抖动，不整齐才像人）
-WORK_FLOW_RATIO = float(os.environ.get("WORK_FLOW_RATIO", "0.2"))            # 单元前 20% 是心流期（这段时间打断代价最高）
+WORK_WARMUP_MIN = int(os.environ.get("WORK_WARMUP_MIN", "50"))               # 起床后磨蹭多久才开工（带抖动）
+LUNCH_MIN = int(os.environ.get("LUNCH_MIN", "120"))                          # 跨过中午的那次休息至少多长（午休是"涌现"的，不是排出来的）
+LATE_READ_HOUR = int(os.environ.get("LATE_READ_HOUR", "20"))                 # 这之后还在读 = 今天读得晚（叙事事件，不是加班机制）
+WORK_FLOW_RATIO = float(os.environ.get("WORK_FLOW_RATIO", "0.2"))            # 一段会话的前 20% 是心流期（这段时间打断代价最高）
 WORK_ENERGY_MAX = int(os.environ.get("WORK_ENERGY_MAX", "100"))              # 精力上限（E）
-WORK_ENERGY_COST = int(os.environ.get("WORK_ENERGY_COST", "12"))             # 每个单元消耗精力
-WORK_ENERGY_RECOVER = int(os.environ.get("WORK_ENERGY_RECOVER", "8"))        # 每段休息恢复精力
-WORK_PAY_PER_UNIT = int(os.environ.get("WORK_PAY_PER_UNIT", "20"))           # 每个单元产出（纯叙事余额，绝不绑真实付费/内购）
-WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() == "on"  # 每单元产出 1 条可分享素材（供 C 模块主动分享当内容源）
-READING_ENABLED = os.environ.get("READING_ENABLED", "on").lower() == "on"   # 工作=读书（reading.py 素材库）；关了素材退回泛化"手头的事"
-WORK_READ_PER_UNIT = int(os.environ.get("WORK_READ_PER_UNIT", "50"))      # 每个工作单元读几段用户书（约 50 段 ≈ 1.1 万字/单元，读一本 15 万字约 2 周）
-BOOKS_DIR = Path(os.environ.get("BOOKS_DIR", str(BASE_DIR / "books")))     # 用户书库目录：丢 txt/epub 进来，TA 优先读真书（子目录名=阅读偏好分类）
+# 精力语义改为**每分钟率**（v0.89 §3.5）：消耗率 = COST÷40min、恢复率 = RECOVER÷20min
+WORK_ENERGY_COST = int(os.environ.get("WORK_ENERGY_COST", "12"))
+WORK_ENERGY_RECOVER = int(os.environ.get("WORK_ENERGY_RECOVER", "8"))
+WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() == "on"  # 章节打动产出可分享素材（供 C 模块主动分享当内容源）
+BOOKS_DIR = Path(os.environ.get("BOOKS_DIR", str(BASE_DIR / "books")))     # 用户书库目录：丢 txt/epub 进来，TA 读真书（分类走 books/categories.json 映射表）
+# ⚠️ 已随 v0.89 退役的参数（见到就删，别再用）：WORK_UNIT_MINUTES / WORK_BREAK_MINUTES /
+# WORK_DAILY_QUOTA / WORK_PAY_PER_UNIT（"钱"改「经验」= 读书进度%）/ WORK_READ_PER_UNIT /
+# SCHED_* 整族（上课作息 8 半节 → 章节会话）/ READING_ENABLED（跳读退役，真读是唯一路径）
 
 # --- 打断成本（S3 招牌：它忙不忙/累不累 → 现在找它的代价 costIndex = R×(1+F)） ---
 COST_R_FLOW = float(os.environ.get("COST_R_FLOW", "1.0"))          # 心流期阻力（最高：刚进入状态，打断最伤）
@@ -202,22 +207,14 @@ TODOS_ENABLED = os.environ.get("TODOS_ENABLED", "on").lower() == "on"   # 总开
 # --- 世界观（§1 架空设定：外来者困在程序里、靠读书成长） ---
 LORE_ENABLED = os.environ.get("LORE_ENABLED", "on").lower() == "on"   # 总开关（关了不注入来历/canon 设定集）
 
-# --- 阅读真读（§3 v1.0 整体设计：上课作息 + 整数章节圈定 + 思考即笔记 + 章节末结算） ---
-# 工作=读书从"每单元读 N 段"升级为"真读"：按整数章节圈定当日任务，均分到 8 个半节，
-# 边读边想（reasoning_content 攒思考 buffer），章节末结算产出读书笔记 alpha/beta 双库。
+# --- 阅读真读（§3 v1.0 整体设计：整数章节圈定 + 思考即笔记 + 章节末结算） ---
+# 工作=读书：按整数章节圈定当日任务，边读边想（reasoning_content 攒思考 buffer），
+# 章节末结算产出读书笔记 alpha/beta 双库。
+# ⚠️ v0.89：时间面（几点读 / 读多久 / 歇多久）全归 life.py 的章节会话制，
+# 「上课作息 8 半节」的 SCHED_* 整族已退役（两套时间参数互不联动 = 实测症状 #7）。
 TRUE_READ_ENABLED = os.environ.get("TRUE_READ_ENABLED", "on").lower() == "on"   # 真读总开关
-READING_DAILY_CHARS = int(os.environ.get("READING_DAILY_CHARS", "10000"))   # 当日字数上限（非空白字符，宁少勿超）
+READING_DAILY_CHARS = int(os.environ.get("READING_DAILY_CHARS", "10000"))   # 当日字数上限（非空白字符，宁少勿超）；阅读速度由它推导（÷320min）
 READING_DAILY_CHARS_MIN = int(os.environ.get("READING_DAILY_CHARS_MIN", "200"))  # 当日圈定下限（一本书首章都不足则读完首章）
-# 上课作息（24 小时制 HH:MM；默认值均可调）
-SCHED_WORK_START = os.environ.get("SCHED_WORK_START", "08:30")   # 上班
-SCHED_LUNCH_START = os.environ.get("SCHED_LUNCH_START", "12:00")  # 午休开始
-SCHED_LUNCH_END = os.environ.get("SCHED_LUNCH_END", "14:00")      # 午休结束
-SCHED_WORK_END = os.environ.get("SCHED_WORK_END", "17:30")        # 下班
-SCHED_HALF_PERIOD_MIN = int(os.environ.get("SCHED_HALF_PERIOD_MIN", "40"))  # 半节时长
-SCHED_INTRA_BREAK_MIN = int(os.environ.get("SCHED_INTRA_BREAK_MIN", "15"))  # 节内休
-SCHED_INTER_BREAK_MIN = int(os.environ.get("SCHED_INTER_BREAK_MIN", "20"))  # 节间休
-SCHED_MORNING_PERIODS = int(os.environ.get("SCHED_MORNING_PERIODS", "2"))   # 上午节数
-SCHED_AFTERNOON_PERIODS = int(os.environ.get("SCHED_AFTERNOON_PERIODS", "2"))  # 下午节数
 # 章节解析：txt 优先"第X章"正则，fallback 按累计字数切章（不按段数）
 READING_TXT_FALLBACK_MIN = int(os.environ.get("READING_TXT_FALLBACK_MIN", "4000"))  # txt fallback 切章字数下限
 READING_TXT_FALLBACK_MAX = int(os.environ.get("READING_TXT_FALLBACK_MAX", "6000"))  # 上限

@@ -14,7 +14,7 @@ from datetime import datetime
 import config
 import cost
 import mood
-import work
+import life
 
 # 从属的相处姿势：由打断成本三态推出，但措辞挂在主轨之下（"对方找我时我怎么接"）。
 # 注意只描述自己的状态、不归因（反愧疚红线，见 corpus.COST_BLAME）。
@@ -31,7 +31,7 @@ def dominant(now: datetime | None = None) -> dict:
     关闭工作系统、或睡着时 main 为空（没有主轨，不注入语气块）。"""
     if not config.WORK_ENABLED:
         return {"main": "", "cost": "", "phase": "off"}
-    s = work.status(now)
+    s = life.status(now)
     if s["phase"] == "sleep":
         return {"main": "", "cost": "", "phase": "sleep"}
     m = mood.mood(now)

@@ -318,7 +318,8 @@ PROACTIVE_SCENARIOS = {
     "morning": "现在是早上，你刚醒，主动跟TA道早安。可以提提今天的天气/日期，或你打算读点什么，别每次都是同一句话。",
     "noon": "现在是中午，你主动跟TA聊两句，比如问吃午饭了没，或分享点你刚读到/刷到的。",
     "night": "现在是晚上，你要去睡了，主动跟TA道晚安。温柔一点。",
-    "random": "你想TA了，主动开启一个话题。话题从你的真实生活里来——正在读的书、聊到一半的事、刷手机看到的东西；别编造听歌/做饭/出门/逛店这类你并没有在做的场景。",
+    # v0.89 §6：删掉"刷手机看到的东西"——它等于邀请模型编造一个不存在的场景
+    "random": "你想TA了，主动开启一个话题。话题只能从你的真实生活里来——正在读的书、聊到一半的事；别编造听歌/做饭/出门/逛店这类你并没有在做的场景。",
     "bubble": "你们刚认识，你想冒个泡刷下存在感。发一条**很短**的消息：一句'在干啥呀'之类的，或者干脆只发一个无厘头的颜文字/表情。千万别每次都用同一个。",
     "nudge": "你们刚才正在聊天，TA说着说着突然没动静了，你等了好一会儿。发一句**很短**的等回复式的话，比如'人咧？''去忙啦？''喂喂'，或者只发个表情。别质问、别委屈，轻松一点。",
 }
@@ -381,7 +382,7 @@ def core_identity_prompt() -> str:
     """通用规则 + 名字 + 人格（**不含**"手头的事"这类会反过来再调它的动态段）。
 
     内部 prompt（如工作系统生成素材）用这个——用 build_system_prompt 会
-    build_system_prompt → work.prompt_hint → 生成素材 → build_system_prompt 无限递归。
+    build_system_prompt → life.prompt_hint → 生成素材 → build_system_prompt 无限递归。
     """
     import persona_pool
     card = persona_pool.load()
@@ -453,8 +454,8 @@ def dynamic_system_prompt(state: str, now: datetime | None = None) -> str:
              f"【当前状态】{state_hint}",
              stage_hint]
     # 手头的事（S3 工作系统）：它得知道自己正在忙什么，才谈得上"什么时候找它会打扰"
-    import work
-    whint = work.prompt_hint(now)
+    import life
+    whint = life.prompt_hint(now)
     if whint:
         parts.append(f"【手头的事】{whint}")
     return "\n".join(parts)

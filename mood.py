@@ -1,7 +1,7 @@
 """情绪状态（D 模块，10-09 解冻）：它自己的心情——HUD「心情」维度的数据源。
 
 心情 ≠ 工作阶段，也 ≠ 打断成本，三个是不同的视角：
-  - phase（work.status）回答"它在干嘛"（客观事实）；
+  - phase（life.status）回答"它在干嘛"（客观事实）；
   - 打断成本（cost）回答"现在找它，代价多大"（关系/边界维度，落到"有空/还行/正忙"）；
   - 心情（mood）回答"它此刻自己感觉怎么样"（情绪维度，落到"投入/放松/疲惫"）。
 
@@ -19,7 +19,7 @@
 from datetime import datetime
 
 import config
-import work
+import life
 
 # 心情词 → 情绪色彩（HUD 颜色用）：积极 / 中性 / 累 / 睡
 def _tone(label: str) -> str:
@@ -46,7 +46,7 @@ def mood(now: datetime | None = None) -> dict:
     """它此刻的心情。返回 {label, tone}；关闭或睡着时 label 为空 / "睡着"。"""
     if not config.MOOD_ENABLED:
         return {"label": "", "tone": ""}
-    s = work.status(now)
+    s = life.status(now)
     phase = s["phase"]
     now = now or datetime.now()
     if phase == "sleep":

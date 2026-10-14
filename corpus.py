@@ -331,6 +331,16 @@ SUBJECT_JUNK = [
     r"^\s*lcsh\s*:",
 ]
 
+# epub 非正文页（v0.89 §4.4，治「真读卡在还在读前言」）：书名页 / 版权页 / 目录 /
+# 制作说明这类 spine 项不该当章节读。匹配章节标题（中英文都收）。
+# ⚠️ 短章 ≠ 非正文（诗集一章可能就几十字），所以「字数少」必须叠加「位于书首」才判废。
+EPUB_FRONT_JUNK = [
+    r"title\s*page", r"half[-\s]?title", r"frontispiece", r"imprint", r"colophon",
+    r"copyright", r"版权", r"版权页", r"出版说明", r"制作说明",
+    r"table\s*of\s*contents", r"contents", r"目录",
+    r"standard\s*ebooks", r"producer", r"epub",
+]
+
 GENRES = [
     {"name": "精品小说", "tags": ["科幻", "奇幻", "悬疑推理", "言情", "武侠仙侠", "玄幻",
                                   "历史小说", "现实文学", "短篇", "轻小说", "热血"],

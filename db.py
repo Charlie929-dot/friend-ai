@@ -125,6 +125,13 @@ def init():
         # 统一向量索引：同 (source, ref_id) 幂等（意识流/beta 转述/对话摘要各一条）
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_event_vectors_src "
                   "ON event_vectors(source, ref_id)")
+        # 读书笔记判重（v0.89 批 0-②）：同一章的 alpha/beta 各只留一条——
+        # 治「游标每天重置 → 第一章日复一日落重复笔记」。先清历史重复再建索引，
+        # 否则老库里有重复行时 CREATE UNIQUE INDEX 会直接失败。
+        c.execute("DELETE FROM reading_notes WHERE id NOT IN "
+                  "(SELECT MIN(id) FROM reading_notes GROUP BY book_id, chapter, kind)")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_reading_notes_bc "
+                  "ON reading_notes(book_id, chapter, kind)")
         # 旧库迁移：记忆五维标签（时间/地点/人物/主题）后加的列
         cols = [r["name"] for r in c.execute("PRAGMA table_info(memories)")]
         for col in ("time_label", "place", "person", "theme"):
@@ -412,6 +419,20 @@ def all_memories(limit: int = 200) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def memories_by_ids(mem_ids: list[int]) -> list[dict]:
+    """按 id 取回完整记忆记录（语义全量池命中窗口外的条目时用）。"""
+    if not mem_ids:
+        return []
+    out: list[dict] = []
+    for i in range(0, len(mem_ids), 500):
+        chunk = mem_ids[i:i + 500]
+        q = "SELECT * FROM memories WHERE id IN (%s)" % ",".join("?" * len(chunk))
+        with _conn() as c:
+            rows = c.execute(q, chunk).fetchall()
+        out.extend(dict(r) for r in rows)
+    return out
+
+
 def find_memory_by_keyword(keyword: str) -> dict | None:
     with _conn() as c:
         row = c.execute(
@@ -473,6 +494,18 @@ def get_memory_vectors(mem_ids: list[int]) -> dict[int, bytes]:
         for r in rows:
             out[r["memory_id"]] = r["vec"]
     return out
+
+
+def all_memory_vectors(limit: int = 5000) -> dict[int, bytes]:
+    """全量向量池 {memory_id: vec}（v0.88 M1：语义召回不再受字面窗口限制）。
+
+    最新的 limit 条——向量是无损语义，老记忆靠它才不会「窗口一过就永久忘掉」。
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT memory_id, vec FROM memory_vectors ORDER BY memory_id DESC LIMIT ?",
+            (limit,)).fetchall()
+    return {r["memory_id"]: r["vec"] for r in rows}
 
 
 def delete_memory_vector(mem_id: int):
@@ -585,7 +618,7 @@ def today_long_notes(day: str | None = None, limit: int = 3) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-_TODAY_NOTE_TAG = "今日素材"   # B 库"今天做过/读到的事"的标记（写入在 work._gen_shareable）
+_TODAY_NOTE_TAG = "今日素材"   # B 库"今天做过/读到的事"的标记（写入在 life._note_shareable_text）
 
 
 def add_today_note(summary: str, content: str, title: str = "") -> int:
@@ -738,8 +771,21 @@ def purge_stream_before(day: str) -> int:
 def add_reading_note(book_id: str, book_title: str, chapter: str, kind: str,
                      summary: str, content: str = "", refs: str = "",
                      char_count: int = 0, long_id: int = 0) -> int:
-    """落一条读书笔记。kind: alpha(短概述)/beta(完整转述)。返回 id。"""
+    """落一条读书笔记。kind: alpha(短概述)/beta(完整转述)。返回 id。
+
+    ⚠️ `(book_id, chapter, kind)` 唯一（v0.89 批0-② 判重索引，治「每天重读第一章、
+    重复落笔记」）：同一章再结算一次 = **覆盖更新并返回原 id**，不堆第二条。
+    """
     with _conn() as c:
+        row = c.execute("SELECT id FROM reading_notes"
+                        " WHERE book_id=? AND chapter=? AND kind=?",
+                        (book_id, chapter, kind)).fetchone()
+        if row:
+            c.execute("UPDATE reading_notes SET book_title=?, summary=?, content=?,"
+                      " refs=?, char_count=?, long_id=? WHERE id=?",
+                      (book_title, summary, content, refs,
+                       int(char_count or 0), int(long_id or 0), row["id"]))
+            return int(row["id"])
         cur = c.execute(
             "INSERT INTO reading_notes(book_id, book_title, chapter, kind, summary,"
             " content, refs, char_count, long_id, created_at)"
@@ -780,6 +826,26 @@ def reading_notes_by_book(book_id: str = "", kind: str = "",
     with _conn() as c:
         rows = c.execute(q, args).fetchall()
     return [dict(r) for r in rows]
+
+
+def delete_reading_notes_by_book(book_id: str) -> int:
+    """删掉一本书的全部读书笔记（连带清它在统一向量索引里的 note_beta 向量）。
+
+    v0.88 R5 跨线项：删书只删文件会让笔记与向量变孤儿（回忆时召回到一本不存在的书）。
+    返回删掉的笔记条数。
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id FROM reading_notes WHERE book_id=?", (book_id,)).fetchall()
+        ids = [int(r["id"]) for r in rows]
+        if not ids:
+            return 0
+        c.execute("DELETE FROM reading_notes WHERE book_id=?", (book_id,))
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            c.execute("DELETE FROM event_vectors WHERE source='note_beta' "
+                      "AND ref_id IN (%s)" % ",".join("?" * len(chunk)), chunk)
+    return len(ids)
 
 
 def reading_note_count() -> int:
