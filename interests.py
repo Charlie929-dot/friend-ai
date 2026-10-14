@@ -7,7 +7,7 @@
 纯规则、不调 LLM（用户 2026-10-11 拍板）：
 - 阅读源（最强、确定性）：读完一篇 → 该 genre 直接 +1（life._settle_due 结算时埋点）。
 - 聊天源：独白里「兴趣信号词 + 主题词」共现 → 该主题 +1（conservative 防误判）。
-- 刷手机源：占位（爬虫是远期愿景，落地后再接）。
+- 刷手机源：**待 v0.94 §9 批 2 接**（刷到的东西用 INTEREST_TOPICS 词表跑 detect，纯规则、不调 LLM；目前占位）。
 同一主题累计 ≥ 阈值（INTEREST_PROMOTE_THRESHOLD）→ 转正（promoted）。
 
 存储：kv「interests」，按朋友隔离（各自 friend.db）。渲染进内核 prompt 的

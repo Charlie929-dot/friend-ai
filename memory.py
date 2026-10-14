@@ -22,6 +22,7 @@ import config
 import corpus
 import db
 import llm
+import tools
 
 EXTRACT_PROMPT = """你在回想并写下自己的记忆——从最近的对话里，记下对你（{WHO}）来说有趣、重要、和你有关系的事。
 
@@ -751,46 +752,9 @@ _TOOL_NO_HIT = "（回忆不起来了）"
 _TOOL_HIT_PREFIX = "想起来了："
 _TOOL_DETAIL_NO_HIT = "（细节回忆不起来了）"
 _TOOL_DETAIL_PREFIX = "想起来的具体内容："
-_TOOL_UNKNOWN = "（不知道这是什么能力）"
 _TOOL_LONG_MARK = "【还有长文，可以再回想一下】"
 _TOOL_FULL_PREFIX = "（想起来的完整内容）"
-
-MEMORY_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_memories",
-            "description": _TOOL_SEARCH_DESC,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "你想回想的事，用你自己的话说出来。可以多想几个相关的词一起回想：比如想'几点睡'，就一起想'睡觉时间 作息 熬夜 凌晨'。",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recall_detail",
-            "description": _TOOL_DETAIL_DESC,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "想展开细节的那件事（用你自己的话说，可多想几个相关词）。",
-                    },
-                },
-                "required": ["query"],
-            },
-        },
-    },
-]
+# 注：未知工具名的"（不知道这是什么能力）"已归 tools.py（机制层默认话术，非记忆域文案）。
 
 
 def _render_tool_memories(mems: list[dict]) -> str:
@@ -808,22 +772,69 @@ def _render_tool_memories(mems: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def run_memory_tool(name: str, args: dict) -> str:
-    """执行记忆检索工具，返回渲染好的文本结果（供 AI 阅读后继续回复）。"""
+# ---------- 工具 handler（v0.94 §3.1：schema/分发搬去 tools.py，这里只留能力本身）----------
+def tool_search_memories(args: dict) -> str:
+    """回想一件事（A 库召回，命中带出同组最新进展）。"""
     query = str(args.get("query", "")).strip()
     if not query:
         return _TOOL_NO_QUERY
-    if name == "search_memories":
-        hits = recall(query, top_k=5)
-        if not hits:
-            return _TOOL_NO_HIT
-        return _TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
-    if name == "recall_detail":
-        hits = recall(query, top_k=3, expand_long=True)
-        if not hits:
-            return _TOOL_DETAIL_NO_HIT
-        return _TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)
-    return _TOOL_UNKNOWN
+    hits = recall(query, top_k=5)
+    if not hits:
+        return _TOOL_NO_HIT
+    return _TOOL_HIT_PREFIX + "\n" + _render_tool_memories(hits)
+
+
+def tool_recall_detail(args: dict) -> str:
+    """把模糊印象展开成完整细节（B 库长文）。"""
+    query = str(args.get("query", "")).strip()
+    if not query:
+        return _TOOL_NO_QUERY
+    hits = recall(query, top_k=3, expand_long=True)
+    if not hits:
+        return _TOOL_DETAIL_NO_HIT
+    return _TOOL_DETAIL_PREFIX + "\n" + _render_tool_memories(hits)
+
+
+# 向工具层注册（v0.94）：加/改记忆工具只动这里，不再碰 tools / core。
+_SEARCH_MEMORIES = tools.register(tools.Spec(
+    name="search_memories",
+    desc=_TOOL_SEARCH_DESC,
+    params={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "你想回想的事，用你自己的话说出来。可以多想几个相关的词一起回想：比如想'几点睡'，就一起想'睡觉时间 作息 熬夜 凌晨'。",
+            },
+        },
+        "required": ["query"],
+    },
+    handler=tool_search_memories,
+))
+_RECALL_DETAIL = tools.register(tools.Spec(
+    name="recall_detail",
+    desc=_TOOL_DETAIL_DESC,
+    params={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "想展开细节的那件事（用你自己的话说，可多想几个相关词）。",
+            },
+        },
+        "required": ["query"],
+    },
+    handler=tool_recall_detail,
+))
+
+# 向后兼容别名（老引用 memory.MEMORY_TOOLS 仍可用），等价于搬家前的固定表。
+# 新代码请用 tools.specs()（按 gate 过滤）。
+MEMORY_TOOLS = [tools.schema(_SEARCH_MEMORIES), tools.schema(_RECALL_DETAIL)]
+
+
+def run_memory_tool(name: str, args: dict) -> str:
+    """向后兼容转发（旧 core 调用点）。新代码用 tools.run()。"""
+    return tools.run(name, args)
 
 
 # ---------- 今天做过/读到的事（B 库）→ 注入当天上下文 ----------
