@@ -325,8 +325,9 @@ def _make_handler(channel: WebChannel, on_message):
                 import library as _lib
                 p = persona.behavior_params()
                 try:
+                    # 「在读哪本」由 life 管（v0.91：library.progress 已随跳读退役）
                     self._json({"categories": _lib.categories(), "books": _lib.books(),
-                                "progress": _lib.progress(),
+                                "progress": {"book_id": life.reading_book()},
                                 "pref": {"category": p.get("reading_pref", ""),
                                          "tags": p.get("reading_tags") or []}})
                 except Exception as e:

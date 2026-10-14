@@ -636,8 +636,8 @@ def handle(cmd_line: str) -> str:
         if not items:
             return (f"我书架上还没有书。网页端「此刻的 TA → 书架」可以直接拖 txt/epub 进去，"
                     f"或者把文件丢进 {config.BOOKS_DIR} 目录（不用建子目录，我自动分类）。")
-        prog = _lib.progress()
-        cur_id = prog.get("book_id")
+        import life as _life            # 在读哪本由 life 管（v0.91：library.progress 已退役）
+        cur_id = _life.reading_book()
         import persona as _persona      # handle() 里后面还有局部 import persona，换个名免得打架
         pref = _persona.behavior_params().get("reading_pref", "")
         groups: dict[str, list] = {}

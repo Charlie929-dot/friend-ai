@@ -351,6 +351,16 @@ def status(now: datetime | None = None) -> dict:
             "chapter_title": ctitle, "overtime": overt, "settled": int(day.get("settled_idx") or 0)}
 
 
+def reading_book(now: datetime | None = None) -> str:
+    """今日在读的那本书 id（书架「正在读」徽章 / `/books` 命令用）。
+
+    v0.91：段级进度（`library.progress`）随跳读退役后，「在读哪本」的唯一来源。
+    书架接口原先读 `library.progress()`，函数没了却没人清调用点 → `/api/books`
+    抛 AttributeError 整个 500，网页书架一本都显示不出来（实测 #47）。
+    """
+    return (today(now).get("plan") or {}).get("book_id", "")
+
+
 def sessions(now: datetime | None = None) -> list[dict]:
     """今日排定的会话窗口（原 work.plan()，测试锚点用）。"""
     return today(now).get("sessions") or []
