@@ -25,12 +25,14 @@ REVIEW_PROMPT = """你是{name}。夜深了，你在写今天的日记，顺便�
 会给你两样东西：
 1. 【今日对话】——今天你和别人聊过的内容（1:1 私聊，就是你们俩之间的对话）
 2. 【你脑子里已有的记忆】——供参考，别硬套
+（还有一个可选的【今天我刷到的】——你今天刷手机看到的东西，可能没有）
 
 请你以{name}的第一人称完成，只输出一个 JSON（别输出其他任何文字）：
 {{
   "reflection": "复盘：今天你自己过得怎么样？聊得开不开心、有没有误解别人的意思、你心里什么感受？（一两句内心话，第一人称）",
   "diary": "日记正文：以{name}的口吻写你自己今天的一天。要有生活感、有情感，别写成流水账总结。引用今天真实发生的事（和谁聊了什么、你的心情），可以结合你记得的旧事。150字以内。",
   "mood": "今天的心情词（两个字以内，如：开心/平静/有点累；没有就空字符串）",
+  "info_memo": {{"text": "从【今天我刷到的】里挑一条你觉得值得长期记住的，一句话说清", "why": "为什么值得记住"}}，或 null（**最多一条**；没有刷到的、或都不值得记就填 null）,
   "memory_add": ["今天值得记住、但你之前可能漏记的新事实，一句话一条，第一人称视角（如『{user_name}说他下周要考试』）。没有就 []"],
   "memory_delete": ["你发现之前记错了、要作废的旧记忆关键词（原文里的关键片段）。没有就 []"]
 }}
@@ -38,6 +40,7 @@ REVIEW_PROMPT = """你是{name}。夜深了，你在写今天的日记，顺便�
 规则：
 - 日记和复盘里不要出现"AI""助手""系统"这类字眼，你就是{name}本人。
 - 只写今天真实发生的，别编造没发生的事。
+- info_memo 最多一条，别贪多；它记的是你自己觉得有意思/有用的东西，不是"为了别人"。
 - 没话可写也不要硬凑，reflection 可以很简单。"""
 
 
@@ -85,6 +88,18 @@ def daily_review(force: bool = False) -> str:
     known = [m["content"] for m in db.all_memories(limit=50)
              if m.get("status", "ok") == "ok"]
     user_msg = f"【今日完整对话】\n{convo}"
+    # 闸门 3 的输入（批 5）：今天刷到的，交给这次复盘挑最多 1 条（可选项，没有就不给）
+    info_items = []
+    if config.BROWSE_ENABLED:
+        import sources as _sources
+        info_items = _sources.items_today()
+    if info_items:
+        ilines = []
+        for it in info_items:
+            body = (it.get("summary") or it.get("title") or "").strip().replace("\n", " ")
+            src = (it.get("source") or "").strip()
+            ilines.append("- " + body + (f"（{src}）" if src else ""))
+        user_msg += "\n\n【今天我刷到的】\n" + "\n".join(ilines)
     if known:
         user_msg += "\n\n【你脑子里已有的记忆】\n" + "\n".join(f"- {x}" for x in known[:60])
 
@@ -101,6 +116,27 @@ def daily_review(force: bool = False) -> str:
         diary = raw.strip() or "（今天没写出日记）"
 
     db.add_diary(day, diary, reflection, mood)
+
+    # 闸门 3（批 5）：睡前复盘从今天刷到的里挑最多 1 条 → B 库 + 统一向量索引。
+    # ⚠️ 不走 memory._apply（它只返回 bool、拿不到 long_id，给不了 ref_id）——
+    # 照 trueread.settle_chapter 的双写先例（拍板 #7）；ref_id 挂 long_memories.id，
+    # 所以 info_items 90 天清理**不会**产生孤儿索引。
+    memo_added = 0
+    info_memo = data.get("info_memo")
+    if isinstance(info_memo, dict):
+        memo = str(info_memo.get("text") or "").strip()
+        why = str(info_memo.get("why") or "").strip()
+        if memo:
+            content = memo + (f"（{why}）" if why else "")
+            lmid = db.add_long_memory(summary=memo[:60], content=content,
+                                      category="事件", tags="刷到的")
+            try:
+                import vecindex
+                vecindex.index_event("info", lmid, memo,
+                                     datetime.now().isoformat(timespec="seconds"))
+            except Exception as e:      # 入索引失败不能连累日记本身
+                print(f"[diary] 刷到的入索引跳过：{e}")
+            memo_added = 1
 
     # 补记遗漏的新记忆（走 _apply 的确定性红线 + 去重）
     import memory
@@ -153,6 +189,8 @@ def daily_review(force: bool = False) -> str:
         parts.append(review_note)
     if forget_note:
         parts.append(f"遗忘：{forget_note}")
+    if memo_added:
+        parts.append("刷到的记下一条")
     if added or deleted:
         parts.append(f"补记 {added} 条 / 提议删 {deleted} 条")
     if purged:

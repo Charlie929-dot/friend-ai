@@ -810,6 +810,9 @@ _SEARCH_MEMORIES = tools.register(tools.Spec(
         "required": ["query"],
     },
     handler=tool_search_memories,
+    # v0.94 批 4 补：开关现在也活在 gate 里——否则 MEMORY_TOOLS_ENABLED=off 时，
+    # 外部查询信号触发 tool loop，specs()（只按 gate 过滤）会把记忆工具照样拼给模型。
+    gate=lambda: config.MEMORY_TOOLS_ENABLED,
 ))
 _RECALL_DETAIL = tools.register(tools.Spec(
     name="recall_detail",
@@ -825,6 +828,7 @@ _RECALL_DETAIL = tools.register(tools.Spec(
         "required": ["query"],
     },
     handler=tool_recall_detail,
+    gate=lambda: config.MEMORY_TOOLS_ENABLED,
 ))
 
 # 向后兼容别名（老引用 memory.MEMORY_TOOLS 仍可用），等价于搬家前的固定表。

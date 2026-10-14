@@ -120,7 +120,8 @@ CREATE TABLE IF NOT EXISTS info_items (
     summary TEXT NOT NULL DEFAULT '',  -- 模型给的一句话大意（**不存正文**，只存摘要）
     ts TEXT NOT NULL,
     shared INTEGER NOT NULL DEFAULT 0, -- 是否已被当主动话题说出去（防重复当弹药）
-    starred INTEGER NOT NULL DEFAULT 0 -- 预留：标记值得再看
+    starred INTEGER NOT NULL DEFAULT 0, -- 预留：标记值得再看
+    noted INTEGER NOT NULL DEFAULT 0   -- 是否已被"认真讨论过"补成今日素材（闸门 2 去重，批 5）
 );
 CREATE TABLE IF NOT EXISTS info_cache (
     url TEXT PRIMARY KEY,              -- 去重缓存（双用途：TTL 内不重复抓 + 同 URL 不重复入库）
@@ -174,6 +175,10 @@ def init():
             c.execute("ALTER TABLE messages ADD COLUMN quote_role TEXT NOT NULL DEFAULT ''")
         if "quote_content" not in mcols:
             c.execute("ALTER TABLE messages ADD COLUMN quote_content TEXT NOT NULL DEFAULT ''")
+        # 旧库迁移：刷到条目的"已补素材"标记（闸门 2 去重，批 5）
+        iccols = [r["name"] for r in c.execute("PRAGMA table_info(info_items)")]
+        if "noted" not in iccols:
+            c.execute("ALTER TABLE info_items ADD COLUMN noted INTEGER NOT NULL DEFAULT 0")
 
 
 def clear_all():
@@ -935,6 +940,13 @@ def mark_info_shared(item_id: int) -> bool:
     """打勾：这条已经被当主动话题说出去，别再当弹药重复提（§5.3）。"""
     with _conn() as c:
         cur = c.execute("UPDATE info_items SET shared=1 WHERE id=?", (item_id,))
+        return cur.rowcount > 0
+
+
+def mark_info_noted(item_id: int) -> bool:
+    """打勾：这条刷到的东西已经被"认真讨论过"、补成了今日素材，别再补（闸门 2 去重）。"""
+    with _conn() as c:
+        cur = c.execute("UPDATE info_items SET noted=1 WHERE id=?", (item_id,))
         return cur.rowcount > 0
 
 

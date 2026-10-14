@@ -22,7 +22,7 @@ def available() -> bool:
 
 
 def index_event(source: str, ref_id: int, text: str, ts: str) -> bool:
-    """把一条事件写进统一向量索引。source: stream / note_beta / dialog。
+    """把一条事件写进统一向量索引。source: stream / note_beta / dialog / info。
     文本空 / 向量不可用 → 跳过（返回 False，优雅降级）。"""
     text = " ".join((text or "").split()).strip()
     if not text or not available():
@@ -80,6 +80,8 @@ def render(events: list[dict]) -> str:
             lines.append(f"- （想起当时）{e['text']}")
         elif e["source"] == "note_beta":
             lines.append(f"- （读到时）{e['text']}")
+        elif e["source"] == "info":
+            lines.append(f"- （刷到过）{e['text']}")
         else:
             lines.append(f"- （那次聊到）{e['text']}")
     return "读到这里，你脑子里模模糊糊浮起这些：\n" + "\n".join(lines)

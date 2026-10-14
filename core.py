@@ -1,6 +1,7 @@
 """核心引擎：收发消息的业务逻辑，与 IM 通道解耦。"""
 import json
 import random
+import re
 import threading
 import time as _time
 from datetime import datetime, timedelta
@@ -18,6 +19,7 @@ import memory
 import offline
 import persona
 import selfmem
+import sources
 import stream
 import todos
 import tools
@@ -32,6 +34,37 @@ def _is_llm_error(text: str) -> bool:
     t = (text or "").strip()
     prefix = corpus.LLM_ERROR.split("{")[0]
     return bool(prefix) and t.startswith(prefix)
+
+
+def _note_browsed_discussed(batch: list[str]) -> None:
+    """闸门 2（批 5）：这轮被追问细节、且当天确实注入了【我今天刷到的】→ 把注入的那几条
+    补成 B 库"今日素材"（纯规则、零额外 LLM）。
+
+    位置：回复线程里、**LLM 失败早退之后**——回复都没生成成功，谈不上"认真讨论过"。
+    粒度粗糙（EXPAND_QUERY 是通用追问词，追问别的事也会命中）——量级有界、记进已知边界。
+    """
+    if not getattr(config, "BROWSE_ENABLED", True):
+        return
+    if not re.search(corpus.EXPAND_QUERY, " ".join(batch)):
+        return
+    import sources as _sources
+    items = _sources.items_today()
+    if not items:
+        return
+    n = 0
+    for it in items:
+        if it.get("noted"):
+            continue
+        summary = (it.get("title") or (it.get("summary") or "")[:40]).strip()
+        body = (it.get("summary") or it.get("title") or "").strip()
+        src = (it.get("source") or "").strip()
+        if src:
+            body = f"{body}（来自 {src}）"
+        db.add_today_note(summary=summary, content=body)
+        db.mark_info_noted(it["id"])
+        n += 1
+    if n:
+        print(f"[闸门2] 今天刷到的 {n} 条补成了今日素材")
 
 
 def _clear_carried_ids() -> None:
@@ -246,6 +279,8 @@ class Engine:
             print(f"[LLM] 回复生成失败，按提示落库不进上下文：{reply[:40]}")
             self._send(reply, kind="notice")
             return
+        # 闸门 2（批 5）：回复都生成成功了，才有"认真讨论过"可言（细则见函数注释）。
+        _note_browsed_discussed(batch)
         # 措辞红线（H 模块·反愧疚）：代价只呈现不归因。prompt 已约束，这里是兜底改写——
         # 归因措辞任何状态都不该出现，命中就换成"只说自己的状态"的安全句（不归因）。
         if persona.has_cost_blame(reply):

@@ -223,7 +223,7 @@ _GROUPS: list[dict] = [
             dict(k="HTTP_TIMEOUT_SEC", l="取数超时", v="L1", t="int",
                  h="外部请求超时（秒），超时当没刷到", min=1, step=1),
             dict(k="LOOKUP_ENABLED", l="按需查证开关", v="L1", t="bool",
-                 h="对话里允许它自己上网看一眼（未落地前无效果）"),
+                 h="对话里允许它自己上网看一眼（含贴链接让它看、按需看一眼）"),
             dict(k="LOOKUP_MAX_PER_REPLY", l="每轮取数上限", v="L1", t="int",
                  h="一轮回复最多几次网络取数", min=0, step=1),
             dict(k="LOOKUP_DAILY_LIMIT", l="每日取数上限", v="L1", t="int",

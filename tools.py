@@ -34,12 +34,16 @@ class Spec:
     handler: Callable[[dict], str]           # 收到 args → 返回给模型读的纯文本
     cost: int = 1                            # 预算权重（模块内静态表，不进 config）
     gate: Callable[[], bool] = lambda: True  # 开关（读 config）
+    cap: bool = False                        # 返回文本是否受 TOOL_RESULT_CHARS 截断
+    #   —— 长文展开类工具（recall_detail）必须保持 False，否则砍掉"展开全文"本身
 
 
 _REGISTRY: dict[str, Spec] = {}
 
 # 未知工具名 → 机制层默认话术（这是机制固定文案、不会扩充，不属语料 → 就地维护）
 _TOOL_UNKNOWN = "（不知道这是什么能力）"
+# 触发截断时的补充说明（同上：机制固定文案，不属语料）
+_TOOL_TRUNCATED = "…（后面还长，先看到这儿）"
 
 
 def register(spec: Spec) -> Spec:
@@ -69,25 +73,63 @@ def specs() -> list[dict]:
 # 命中则启用工具让 AI 主动查记忆；普通闲聊不含这些词，走快速路径（省 token、省延迟）。
 # 词表唯一真相在 corpus（语料，会扩充）；这里只做机制级编译。
 _RECALL_SIGNAL = re.compile(corpus.MEMORY_SEARCH_QUERY)
+# 外部查询信号（v0.94 批 4）：查证 / 时效 + 贴链接。
+_LOOKUP_SIGNAL = re.compile(corpus.LOOKUP_SIGNALS)
+_LOOKUP_FRESH = re.compile(corpus.LOOKUP_FRESH_SIGNALS)
+_LOOKUP_QUESTION = re.compile(corpus.LOOKUP_QUESTIONS)
+_LOOKUP_URL = re.compile(corpus.LOOKUP_URL_SIGNAL)
+
+
+def _lookup_signal(text: str) -> bool:
+    """外部查询信号（批 4）——完整目标形态（方案 §2.1）：
+
+        (MEMORY_TOOLS_ENABLED 且 回忆信号)
+        或 (LOOKUP_ENABLED 且 ((SEARCH_PROVIDER != "none" 且 (查证 或 时效)) 或 消息含 URL))
+
+    拆开说：
+    - 消息里贴了链接 → 永久可用——但**"永久"指不受 SEARCH_PROVIDER 门，仍受 LOOKUP_ENABLED 总门**；
+    - 查证 / 时效词 → 只在配了搜索源时算（否则工具表里没有能干这事的工具，触发就白跑一轮）。
+    """
+    if not getattr(config, "LOOKUP_ENABLED", True):
+        return False
+    if _LOOKUP_URL.search(text):
+        return True
+    if (getattr(config, "SEARCH_PROVIDER", "none") or "none") != "none":
+        return bool(_LOOKUP_SIGNAL.search(text)
+                    or (_LOOKUP_FRESH.search(text) and _LOOKUP_QUESTION.search(text)))
+    return False
 
 
 def should_use(batch_text: str) -> bool:
     """这批消息里有没有"工具该上场"的信号——任一命中即启用工具循环。
 
-    v0.94 批 1：只有回忆类信号（行为与搬家前完全一致）。
-    v0.94 批 4 会再加一类"外部查询"信号（corpus.LOOKUP_SIGNALS，受 LOOKUP_ENABLED 管）。
+    两个开关**各管各的信号**（别让 `MEMORY_TOOLS_ENABLED=off` 把外部查询一起掐死）。
     """
-    if not config.MEMORY_TOOLS_ENABLED:
-        return False
-    return bool(_RECALL_SIGNAL.search(batch_text))
+    if config.MEMORY_TOOLS_ENABLED and _RECALL_SIGNAL.search(batch_text):
+        return True
+    return _lookup_signal(batch_text)
 
 
 def run(name: str, args: dict) -> str:
-    """按名分发到对应 handler；未知工具名返回机制默认话术（替代旧 if 链）。"""
+    """按名分发到对应 handler；未知工具名返回机制默认话术（替代旧 if 链）。
+
+    `Spec.cap=True` 的工具，返回文本按 TOOL_RESULT_CHARS 截断（防烧 token）——
+    长文展开类保持 False（否则砍掉"展开"本身）。"""
     spec = _REGISTRY.get(name)
     if spec is None:
         return _TOOL_UNKNOWN
-    return spec.handler(args)
+    result = spec.handler(args)
+    if spec.cap:
+        result = _cap_result(result)
+    return result
+
+
+def _cap_result(text: str) -> str:
+    """机制层截断（只对 `cap=True` 的工具生效）。"""
+    limit = int(getattr(config, "TOOL_RESULT_CHARS", 1200) or 0)
+    if limit and len(text) > limit:
+        return text[:limit] + _TOOL_TRUNCATED
+    return text
 
 
 def _run_with_tools(messages: list[dict]) -> str:
@@ -140,7 +182,10 @@ def _run_with_tools(messages: list[dict]) -> str:
 
 
 def run_reply(messages: list[dict], batch: list[str]) -> str:
-    """生成回复：有工具信号 → tool loop；否则普通快速路径（原 core._generate_reply_text）。"""
+    """生成回复：有工具信号 → tool loop；否则普通快速路径（原 core._generate_reply_text）。
+
+    开头先 `begin_reply()`：清空"本轮已用取数次数"（拍板 #13，core 一行不用改）。"""
+    begin_reply()
     if should_use(" ".join(batch)):
         return _run_with_tools(messages)
     try:
