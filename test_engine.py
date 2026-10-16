@@ -678,6 +678,13 @@ def test_webui():
                 assert 'id="mTuning"' in html and 'id="tuneModal"' in html \
                     and 'id="tuneBody"' in html and 'id="tuneAdv"' in html, \
                     "页面缺调优参数面板结构"
+                # 模型设置（v0.101）：模型那格从 <datalist> 改真 <select>
+                # （datalist 没有可见箭头，手机/内置浏览器直接不弹，等于只能手填）
+                assert 'id="lmModelSel"' in html and 'lmModels' not in html, \
+                    "模型该是真下拉（datalist 已退役）"
+                # 聊天区"正在输入"气泡（v0.101）：复用一直没接线的 .typing-bubble
+                assert 'setTypingBubble' in html and 'typing-bubble' in html, \
+                    "聊天区缺正在输入气泡接线"
 
                 st = c.get(base + "/api/state").json()
                 assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"
@@ -694,6 +701,15 @@ def test_webui():
                 t0 = tc["groups"][0]["items"][0]
                 assert "key" in t0 and "value" in t0 and "level" in t0, \
                     f"调优参数项缺字段：{t0}"
+
+                # 正在输入（v0.101）：窗口只由 generating 决定。旧实现的 typing() 叠了个
+                # +8 秒假窗口——回复已经发出来了气泡还挂着。WebChannel 不再覆写 typing()。
+                assert st["typing"] is False, f"空闲时不该显示正在输入：{st['typing']}"
+                ch.generating = True
+                assert c.get(base + "/api/state").json()["typing"] is True, "生成中该显示正在输入"
+                ch.generating = False
+                assert c.get(base + "/api/state").json()["typing"] is False, \
+                    "生成结束该立刻收起（不再有 +8 秒残影）"
 
                 r = c.post(base + "/api/send", json={"text": "你好呀"}).json()
                 assert r["echo"] is True, f"普通消息应回显用户输入：{r}"

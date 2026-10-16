@@ -846,9 +846,9 @@
           </div>
           <div class="lm-row">
             <label>模型</label>
-            <input id="lmModel" list="lmModels" placeholder="deepseek-flash">
-            <datalist id="lmModels"></datalist>
-            <div class="lm-tip">「测试连接」成功后，下拉会自动列出该供应商可用的模型；也可以直接手填。</div>
+            <select id="lmModelSel" style="margin-bottom:8px"></select>
+            <input id="lmModel" placeholder="或直接手填模型名">
+            <div class="lm-tip">「测试连接」成功后，上面的下拉会列出该供应商可用的模型；列表里没有的（或拉不到的）在下面手填。</div>
           </div>
           <div class="lm-row">
             <label>思考强度 effort</label>
@@ -1244,6 +1244,26 @@ function addSys(t){
   d.className='msg sys'; d.textContent=t;
   chat().appendChild(d); afterAppend();
 }
+/* 聊天区的"正在输入"气泡：复用 .typing-bubble 的三个跳动小点（此前只有样式没人用）。
+   只在它"正在回你"时出现（core 生成回复全程开关），不占目录、不进消息表、不可引用。 */
+let typingNode = null;
+function setTypingBubble(on){
+  if(!on){
+    if(typingNode){ typingNode.remove(); typingNode=null; }
+    return;
+  }
+  const el = chat();
+  if(!typingNode){
+    typingNode = document.createElement('div');
+    typingNode.className = 'msg ai';
+    typingNode.setAttribute('aria-label', '正在输入');
+    typingNode.innerHTML = '<div class="bubble-row"><div class="bubble typing-bubble"><i></i><i></i><i></i></div></div>';
+  }
+  if(el.lastChild !== typingNode){          // 永远吊在聊天流最末（新消息会把它顶上去）
+    el.appendChild(typingNode);
+    if(initialDone && isNearBottom()) scrollToBottom(false);
+  }
+}
 
 // v0.89：phase 键集合不变，文案跟着生活引擎改（它的一天 = 读书）
 const PHASE_TEXT={idle:'还没开工',working:'在读书',flow:'刚读进去',break:'歇会儿',off:'今天忙完了',sleep:'睡着'};
@@ -1266,6 +1286,7 @@ function renderState(s){
   $('mExp').textContent=p.exp||0;
   $('mMat').textContent=(s.materials||0)+' 条';
   $('typing').textContent=s.typing?(s.name+' 正在回复…'):'';
+  setTypingBubble(!!s.typing);
   // 朋友档案
   $('pName').textContent=s.name||'—';
   curName=s.name||'';
@@ -1593,6 +1614,15 @@ const LM_PROVIDERS = [
 ];
 $('lmProvider').innerHTML = LM_PROVIDERS.map((p,i)=>'<option value="'+i+'">'+esc(p.name)+'</option>').join('');
 $('lmProvider').onchange = ()=>{ const u=LM_PROVIDERS[$('lmProvider').value].url; if(u) $('lmBase').value=u; };
+/* 模型下拉：真 <select>（<datalist> 在手机浏览器/内置浏览器里不弹，等于只能手填）。
+   第一项是"手填"，选了具体模型就写进下面的输入框——保存仍只读输入框。 */
+function fillModelSel(ids, cur){
+  const sel=$('lmModelSel');
+  sel.innerHTML='<option value="">（从下面手填）</option>'
+    +ids.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join('');
+  sel.value=(ids.indexOf(cur)>=0)?cur:'';
+}
+$('lmModelSel').onchange = ()=>{ const v=$('lmModelSel').value; if(v) $('lmModel').value=v; };
 $('lmKeyEye').onclick = ()=>{ const k=$('lmKey'); k.type = k.type==='password' ? 'text' : 'password';
   $('lmKeyEye').textContent = k.type==='password' ? '显示' : '隐藏'; };
 $('lmTest').onclick = async()=>{
@@ -1604,10 +1634,10 @@ $('lmTest').onclick = async()=>{
                            model:$('lmModel').value.trim()})})).json();
     if(r.ok){
       if((r.models||[]).length){
-        $('lmModels').innerHTML=r.models.map(id=>'<option value="'+esc(id)+'"></option>').join('');
+        fillModelSel(r.models, $('lmModel').value.trim());
         $('lmMsg').textContent='✓ 连接正常 · '+r.models.length+' 个模型（下拉可选）';
         if(!$('lmModel').value.trim()) $('lmModel').value=r.models[0];
-      } else $('lmMsg').textContent='✓ 连接正常（模型列表没给，模型名手填即可）';
+      } else { fillModelSel([], ''); $('lmMsg').textContent='✓ 连接正常（模型列表没给，模型名手填即可）'; }
     } else $('lmMsg').textContent='✗ '+((r.error||'连接失败').slice(0,160));
   }catch(e){ $('lmMsg').textContent='✗ '+e.message; }
 };
@@ -1626,9 +1656,9 @@ async function openModelPanel(){
     $('lmProvider').value = pi>=0 ? pi : LM_PROVIDERS.length-1;
     $('lmEffort').value=(cfg.effort||'low');
     $('lmTemp').value=(cfg.temperature==null?0.8:cfg.temperature);
-    $('lmModels').innerHTML=(d.models||[]).map(m=>
-      '<option value="'+esc(m.id)+'">'+esc(m.id+'（'+(m.owned_by||m.id)+'）')+'</option>').join('');
-    const n=(d.models||[]).length;
+    const ids=(d.models||[]).map(m=>m.id);
+    fillModelSel(ids, cfg.model||'');
+    const n=ids.length;
     $('lmSub').textContent=n?('全局配置 · 当前可用 '+n+' 个模型'):'全局配置 · 改完立即生效';
   }catch(e){
     $('lmMsg').textContent='⚠ 拉取失败：'+e.message;
