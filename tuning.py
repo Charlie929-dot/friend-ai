@@ -141,6 +141,8 @@ _GROUPS: list[dict] = [
                  h="每 40 分钟消耗多少精力（换算成每分钟率）", min=0, step=1),
             dict(k="WORK_ENERGY_RECOVER", l="精力恢复", v="L2", t="int",
                  h="每 20 分钟恢复多少精力（换算成每分钟率）", min=0, step=1),
+            dict(k="WORK_ENERGY_REST_BELOW", l="精力歇点", v="L2", t="int",
+                 h="精力低于此值，下次休息延长到回血再开工", min=0, step=1),
         ],
     },
     {

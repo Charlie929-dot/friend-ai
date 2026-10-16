@@ -86,8 +86,9 @@ def test_bubble_fixed_corpus():
 
     tmp = Path(tempfile.mkdtemp())
     real_chat = _llm.chat
+    # WORK_ENABLED=False：guard 离线拦截与真实作息耦合（约定 #10），冒泡测试只要固定语料路径
     with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
-                       BUBBLE_FIXED_PROB=1.0):
+                       BUBBLE_FIXED_PROB=1.0, WORK_ENABLED=False):
         try:
             ch = DummyChannel()
             engine = Engine(ch)

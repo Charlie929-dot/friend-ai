@@ -71,22 +71,30 @@ def can_send_proactive(now: datetime | None = None, scenario: str = "") -> tuple
     if game.current():
         return False, "游戏中"
 
+    # 3. 离线专注（flow/working）：TA 在忙自己的事，不主动闲聊（v0.99 修：
+    #    random_chat 在它读书时连发 4 条）。必须在 guard_enabled 短路**之前**——
+    #    这是作息语义不是打扰偏好，guard 关着也得拦。早安/晚安是作息锚点事件不拦
+    #    （早睡浮动可能撞上最后一段会话还在跑，拦了晚安会无声消失）。
+    import offline
+    if scenario not in ("morning", "night") and offline.is_offline(now):
+        return False, f"离线专注中（{offline.offline_reason(now)}）"
+
     if not guard_enabled():
         return True, "ok"
 
-    # 3. 忙碌静默期
+    # 4. 忙碌静默期
     quiet_until = db.get_kv("quiet_until")
     if quiet_until and datetime.fromisoformat(quiet_until) > now:
         return False, f"静默期至 {quiet_until}"
 
-    # 4. 每日上限（冒泡走独立额度）
+    # 5. 每日上限（冒泡走独立额度）
     if scenario == "bubble":
         if db.get_counter("bubble_count") >= config.BUBBLE_DAILY_LIMIT:
             return False, "已达每日冒泡上限"
     elif db.get_counter("proactive_count") >= config.DAILY_PROACTIVE_LIMIT:
         return False, "已达每日主动消息上限"
 
-    # 5. 连续未回复上限（所有类型共用：连发都不理就该停了）
+    # 6. 连续未回复上限（所有类型共用：连发都不理就该停了）
     if db.get_counter("unanswered_proactive") >= config.MAX_UNANSWERED_PROACTIVE:
         return False, "连续主动消息未获回复，今日停止主动"
 

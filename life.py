@@ -202,9 +202,13 @@ def _reading_plan() -> dict:
 
 def _make_sessions(wake: datetime, plan: dict, bed: datetime) -> list[dict]:
     """排会话：读到下一个章节边界算一段（短章贪心合并到 ≳ 名义时长），
-    读完一章歇一会，睡前是唯一硬边界。"""
+    读完一章歇一会（精力掉得狠就歇到回血），睡前是唯一硬边界。"""
     sp = speed()
     target = NOMINAL_SESSION_MIN * sp
+    cap = float(config.WORK_ENERGY_MAX)
+    cost_rate = config.WORK_ENERGY_COST / NOMINAL_SESSION_MIN   # 与 energy() 同一套率
+    rec_rate = config.WORK_ENERGY_RECOVER / NOMINAL_REST_MIN
+    e = cap
     queue = list(plan.get("chapters") or [])
     t = wake + timedelta(minutes=_jitter(config.WORK_WARMUP_MIN))
     sessions: list[dict] = []
@@ -227,7 +231,16 @@ def _make_sessions(wake: datetime, plan: dict, bed: datetime) -> list[dict]:
         sessions.append({"start": t.isoformat(timespec="seconds"),
                          "end": end.isoformat(timespec="seconds"),
                          "chapters": picked, "partial": False})
-        t = end + timedelta(minutes=_rest_minutes(dur, end))
+        rest = _rest_minutes(dur, end)
+        # 精力挂进休息策略（v0.99）：这段读完精力会掉到线下 → 歇到「再读一整段
+        # 名义会话也不破线」才开工（多歇 0–30% 更像人）。歇穿到睡前也认——
+        # 太累 = 今天早点忙完，剩下的明天按字数重圈（不追进度哲学不变）。
+        e = max(0.0, e - dur * cost_rate)
+        if queue and e < config.WORK_ENERGY_REST_BELOW:
+            need = (config.WORK_ENERGY_REST_BELOW + config.WORK_ENERGY_COST - e) / rec_rate
+            rest = max(rest, 1 + int(need * random.uniform(1.0, 1.3)))
+        e = min(cap, e + rest * rec_rate)
+        t = end + timedelta(minutes=rest)
     return sessions
 
 

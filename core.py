@@ -537,9 +537,18 @@ class Engine:
             db.incr_counter("proactive_count")
         db.incr_counter("unanswered_proactive")
         # 分段连发：主动消息没走 _generate_reply 的分段，LLM 会用换行把两段话并成一条
-        # （如"热粥"+"《左传》"黏一起）。按换行拆开逐条发，像真人连发几条。
-        for seg in (s.strip() for s in reply.split("\n") if s.strip()):
+        # （如"热粥"+"《左传》"黏一起）。按换行拆开逐条发，像真人连发几条；
+        # 段间隔与正常回复同一套口径（v0.99 修：原来 4 条同一秒拍出来）。
+        for i, seg in enumerate(s.strip() for s in reply.split("\n") if s.strip()):
+            if i > 0:
+                _time.sleep(min(max(len(seg) * config.SEND_SECONDS_PER_CHAR,
+                                    config.SEND_MIN_SECONDS), config.SEND_MAX_SECONDS))
             self._send(seg, kind="proactive")
+        # 意识流补记"我说了什么"（v0.99 修：主动消息原来不留流，自我叙事断片；
+        # 独白不加是设计——主动消息本来就是"我自己想说"，单层生成）
+        said = " ".join(reply.split())
+        if said:
+            stream.append("reply", f"我说：{said}")
         # §5 拍板 #6③：主动消息发出后，把携带的素材 id 按 id 打勾（废弃 6 字字面指纹）
         _settle_carried_ids()
         return True

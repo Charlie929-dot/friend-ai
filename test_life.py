@@ -163,6 +163,54 @@ def test_lazy_life_plan():
         print("ok 惰性排班（没醒不排 + 进度条不涨 + 赖床从实际起床点起 + 睡前截断不追进度）")
 
 
+def test_proactive_guard_and_energy_rest():
+    """guard 离线拦截（v0.99：专注时不主动闲聊，早安/晚安豁免）
+    + 精力挂进休息策略（低于歇点 → 歇到回血再开工）。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import db as _db
+    import guard as _guard
+    import life as _life
+
+    tmp = Path(tempfile.mkdtemp())
+    # WORK_ENERGY_REST_BELOW=90：抬高歇点 → 每段读完都触发回血（默认 40 只偶尔触发）
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       BOOKS_DIR=tmp / "books", WORK_SHAREABLE_ENABLED=False,
+                       WORK_ENERGY_REST_BELOW=90):
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "nightowl", "label": "夜猫子", "name": "阿夜", "quirk": "",
+            "text": "你是个夜猫子。", "wake_hour": 10, "sleep_hour": 2,
+            "bubble_mult": 1.2, "drawn_at": "2026-10-09T00:00:00"}))
+        _db.set_kv("rest_schedule", json.dumps(
+            {"wake_day": "2026-10-09", "wake_at": "2026-10-09T09:55:00"}))
+        _mk_book(config.BOOKS_DIR, n_ch=6)
+        day = _life.today(_dt(2026, 10, 9, 10, 0))
+        units = day["sessions"]
+        assert units, "今天没排出会话"
+
+        # 1. guard：会话进行中（离线专注）拦闲聊类主动消息；早安/晚安是作息锚点不拦
+        mid = _dt.fromisoformat(units[0]["start"]) + _td(minutes=10)
+        ok, reason = _guard.can_send_proactive(now=mid, scenario="random")
+        assert not ok and "离线" in reason, f"专注时该拦主动闲聊：{ok} {reason}"
+        ok, _ = _guard.can_send_proactive(now=mid, scenario="night")
+        assert ok, "晚安是作息锚点事件，不该被离线拦截"
+        # 休息相位不拦——这就是天然口子：歇着的时候照常说话
+        ok, _ = _guard.can_send_proactive(
+            now=_dt.fromisoformat(units[0]["end"]) + _td(minutes=1), scenario="random")
+        assert ok, "休息相位不该拦（歇着的时候照常说话）"
+
+        # 2. 精力歇点：歇点 90 → 之后每次开工精力都该补回「歇点 + 一段消耗」（封顶上限）
+        target = min(config.WORK_ENERGY_MAX,
+                     config.WORK_ENERGY_REST_BELOW + config.WORK_ENERGY_COST)
+        for u in units[1:]:
+            e = _life.energy(day, _dt.fromisoformat(u["start"]))
+            assert e >= target - 1, \
+                f"精力 {e} 低于歇点没歇够（目标 {target}）：开工 {u['start']}"
+        print("ok guard 离线拦截（早/晚安豁免）+ 精力歇点回血")
+
+
 def test_offline_inbox_and_rhythm():
     """S3 休眠完整版：离线判定（睡/工作专注=离线）+ 离线留言 inbox + 作息自主浮动与幂等。"""
     import json

@@ -122,6 +122,54 @@ def test_proactive_segment():
             _llm.chat = real_chat
 
 
+def test_proactive_pacing_and_stream():
+    """主动消息段间停顿 + 意识流补记（v0.99 修：4 条同一秒拍出来、流里没影子）。"""
+    import json
+    import tempfile
+    import time as _time
+    import db as _db
+    import llm as _llm
+    import stream as _stream
+    from core import Engine
+
+    class DummyChannel:
+        def __init__(self):
+            self.sent = []
+        def send(self, text):
+            self.sent.append((_time.monotonic(), text))
+
+    tmp = Path(tempfile.mkdtemp())
+    real_chat = _llm.chat
+    # WORK_ENABLED=False：隔离，否则 build_system_prompt 会触发排班/结算/生成素材
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       WORK_ENABLED=False, **_FAST_TIMING):
+        try:
+            ch = DummyChannel()
+            engine = Engine(ch)
+            _llm.chat = lambda *a, **k: "刚从书里抬头\n\n《左传》看到襄公那段"
+            # random 要有话题弹药才发（素材池 50% 概率翻，多试几次必中）
+            got = False
+            for _ in range(40):
+                _db.set_kv("work_shareables", json.dumps(
+                    [{"day": "2026-10-10", "seq": 1, "text": "读到襄公那段挺有感觉", "used": 0}]))
+                if engine._proactive("random") is True:
+                    got = True
+                    break
+            assert got, "有弹药却没发出主动消息"
+            assert [t for _, t in ch.sent] == ["刚从书里抬头", "《左传》看到襄公那段"], \
+                f"主动消息没按换行分段：{ch.sent}"
+            # 段间隔：第二段发出前要停一下（快档 SEND_MIN=0.01s，留裕量断言 ≥5ms）
+            gap = ch.sent[1][0] - ch.sent[0][0]
+            assert gap >= 0.005, f"两段之间没有停顿（间隔 {gap * 1000:.1f}ms）"
+            # 意识流补记「我说：…」——主动消息也是自我叙事的一部分
+            assert any(r["kind"] == "reply" and "我说：" in r["text"]
+                       for r in _stream.recent(20)), "主动消息没进意识流"
+            print("ok 主动消息段间停顿 + 意识流补记")
+        finally:
+            engine.stop()
+            _llm.chat = real_chat
+
+
 def test_interest_cultivation():
     """兴趣修炼（S4）：偏好从读/聊/刷三源动态养成，内核钉死不动。
     纯规则：信号词+主题词共现记线索，同一主题累计 N 次自动转正，不调 LLM。

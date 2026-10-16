@@ -138,6 +138,7 @@ WORK_ENERGY_MAX = int(os.environ.get("WORK_ENERGY_MAX", "100"))              # �
 # 精力语义改为**每分钟率**（v0.89 §3.5）：消耗率 = COST÷40min、恢复率 = RECOVER÷20min
 WORK_ENERGY_COST = int(os.environ.get("WORK_ENERGY_COST", "12"))
 WORK_ENERGY_RECOVER = int(os.environ.get("WORK_ENERGY_RECOVER", "8"))
+WORK_ENERGY_REST_BELOW = int(os.environ.get("WORK_ENERGY_REST_BELOW", "40"))    # 精力低于此值 → 下次休息延长到回血（休息策略吃精力）
 WORK_SHAREABLE_ENABLED = os.environ.get("WORK_SHAREABLE_ENABLED", "on").lower() == "on"  # 章节打动产出可分享素材（供 C 模块主动分享当内容源）
 BOOKS_DIR = Path(os.environ.get("BOOKS_DIR", str(BASE_DIR / "books")))     # 用户书库目录：丢 txt/epub 进来，TA 读真书（分类走 books/categories.json 映射表）
 # ⚠️ 已随 v0.89 退役的参数（见到就删，别再用）：WORK_UNIT_MINUTES / WORK_BREAK_MINUTES /

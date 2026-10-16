@@ -132,7 +132,10 @@ def test_game_mode():
     import guard as _guard
 
     tmp = Path(tempfile.mkdtemp())
-    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db"):
+    # WORK_ENABLED=False：guard 的离线拦截跟「现在几点/在读不在读」耦合（约定 #10），
+    # 关掉工作系统才能稳定测游戏状态机本身的拦截逻辑
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       WORK_ENABLED=False):
         # 泛泛说"玩游戏"不开局，提到具体游戏名才开
         game.on_user_text("我们玩个游戏吧")
         assert game.current() is None, "泛泛的游戏意愿不应触发状态机"
