@@ -33,9 +33,11 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 # v0.80：deepseek-chat 已不在官方可用列表里，默认换成 DeepSeek-V4.1-Flash
 # （1M 上下文，是"整段会话全量读"的前提）。老模型的旧配置仍可手动填回。
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-flash")
-# 思考强度：low/high/max。只对 V4 系模型传（老模型不认这个字段，传了会报错）。
-# 默认 low——日常聊天要的是快和省，不是深度推理；想更慢更细可在网页端「模型设置」调。
-DEEPSEEK_EFFORT = os.environ.get("DEEPSEEK_EFFORT", "low")
+# 思考强度（v0.102 起跨供应商）：DeepSeek V4=effort(low/high/max)、Kimi K3=reasoning_effort
+# (low/high/max)、OpenAI/OpenRouter 等=reasoning_effort(minimal/low/medium/high)。
+# 字段名与档位由 llm._PROVIDERS 声明（各家公开标准），这里只存「当前档位值」。
+DEEPSEEK_EFFORT = os.environ.get("DEEPSEEK_EFFORT", "low")  # 旧键，向后兼容
+LLM_REASONING_EFFORT = os.environ.get("LLM_REASONING_EFFORT", "") or DEEPSEEK_EFFORT
 # 聊天层温度（说话的随机性）。网页端「模型设置」可改，改完写回 .env 热生效。
 CHAT_TEMPERATURE = float(os.environ.get("CHAT_TEMPERATURE", "0.8"))
 

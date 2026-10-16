@@ -20,6 +20,34 @@ import corpus
 # V4 系模型才认 effort 字段（low/high/max）；老模型传了会报错，所以按 id 判断。
 _V4_MODEL_IDS = {"deepseek-flash", "deepseek-v4-pro"}
 
+# --- 供应商声明（v0.102：模型面板从「写死 DeepSeek」改「声明式 provider」）---
+# 每个 provider 只声明三件事：name + 默认 base_url + 「思考强度」的字段名/档位/默认值。
+# 档位用各家公开文档的原值（不归一化、不发明一套公共档位再映射——那才是维护陷阱）；
+# reasoning=None 表示该 provider 没有思考强度参数（面板隐藏这一格）。
+# 模型列表仍从 GET /models 动态拉（list_models），不进这张表。
+_PROVIDERS = [
+    {"id": "deepseek", "name": "DeepSeek 官方", "base_url": "https://api.deepseek.com",
+     "reasoning": {"field": "effort", "options": ["low", "high", "max"], "default": "low"}},
+    {"id": "openai", "name": "OpenAI", "base_url": "https://api.openai.com/v1",
+     "reasoning": {"field": "reasoning_effort", "options": ["minimal", "low", "medium", "high"], "default": "medium"}},
+    {"id": "moonshot", "name": "月之暗面 Kimi", "base_url": "https://api.moonshot.cn/v1",
+     "reasoning": {"field": "reasoning_effort", "options": ["low", "high", "max"], "default": "max"}},
+    {"id": "openrouter", "name": "OpenRouter", "base_url": "https://openrouter.ai/api/v1",
+     "reasoning": {"field": "reasoning_effort", "options": ["minimal", "low", "medium", "high"], "default": "medium"}},
+    {"id": "tencent-plan", "name": "腾讯云 Token Plan（个人版）", "base_url": "https://api.lkeap.cloud.tencent.com/plan/v3",
+     "reasoning": {"field": "reasoning_effort", "options": ["minimal", "low", "medium", "high"], "default": "medium"}},
+    {"id": "tencent-lkeap", "name": "腾讯云 LKEAP / 混元", "base_url": "https://api.lkeap.cloud.tencent.com/v1",
+     "reasoning": {"field": "reasoning_effort", "options": ["minimal", "low", "medium", "high"], "default": "medium"}},
+    {"id": "siliconflow", "name": "硅基流动 SiliconFlow", "base_url": "https://api.siliconflow.cn/v1",
+     "reasoning": {"field": "reasoning_effort", "options": ["minimal", "low", "medium", "high"], "default": "medium"}},
+    {"id": "dashscope", "name": "阿里云百炼", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+     "reasoning": {"field": "reasoning_effort", "options": ["minimal", "low", "medium", "high"], "default": "medium"}},
+    {"id": "ollama", "name": "Ollama 本地", "base_url": "http://127.0.0.1:11434/v1",
+     "reasoning": None},
+    {"id": "custom", "name": "自定义", "base_url": "",
+     "reasoning": None},
+]
+
 
 class LLMUnavailable(Exception):
     pass
@@ -31,12 +59,56 @@ def _current_model() -> str:
 
 
 def _current_effort() -> str:
-    return (config.DEEPSEEK_EFFORT or "").strip().lower()
+    return (config.LLM_REASONING_EFFORT or "").strip().lower()
 
 
 def _is_v4(model: str) -> bool:
     m = (model or "").strip().lower()
     return m in _V4_MODEL_IDS or "v4" in m
+
+
+def providers() -> list[dict]:
+    """供应商声明列表（给网页端「模型设置」动态渲染思考强度档位用）。"""
+    return _PROVIDERS
+
+
+def _find_provider(base_url: str) -> dict | None:
+    """按 base_url 匹配供应商声明；匹配不到返回 None。"""
+    base = (base_url or "").strip().rstrip("/")
+    for p in _PROVIDERS:
+        if p["base_url"].rstrip("/") == base:
+            return p
+    return None
+
+
+def _current_provider() -> dict | None:
+    """当前配置命中的供应商声明；匹配不到返回 None（=自定义，无思考强度声明）。"""
+    return _find_provider(config.DEEPSEEK_BASE_URL)
+
+
+def reasoning_options(base_url: str) -> list[str] | None:
+    """给定 base_url 的思考强度档位（该供应商无此参数返回 None）。给校验/面板用。"""
+    r = (_find_provider(base_url) or {}).get("reasoning")
+    return r["options"] if r else None
+
+
+def _apply_reasoning(payload: dict) -> None:
+    """把「思考强度」按当前供应商的声明翻译成对应字段。
+
+    DeepSeek 用 effort、Kimi/OpenAI 等用 reasoning_effort、无声明的不传——
+    档位值用各家公开标准（见 _PROVIDERS），存的值对不上当前档位时回退到该家默认。
+    DeepSeek 特例：effort 只对 V4 系模型认，老模型传了会报错，所以老模型跳过。"""
+    p = _current_provider()
+    r = (p or {}).get("reasoning")
+    if not r:
+        return
+    effort = _current_effort()
+    options = r["options"]
+    if effort not in options:
+        effort = r["default"]
+    if r["field"] == "effort" and not _is_v4(payload["model"]):
+        return  # DeepSeek 老模型不认 effort
+    payload[r["field"]] = effort
 
 
 def _payload(messages: list[dict], temperature: float, max_tokens: int,
@@ -61,9 +133,8 @@ def _payload(messages: list[dict], temperature: float, max_tokens: int,
         payload["max_tokens"] = max_tokens
     if tools:
         payload["tools"] = tools
-    # effort 只在 V4 上发（默认 low：日常聊天要快和省，不是深度推理）
-    if _is_v4(payload["model"]) and _current_effort() in ("low", "high", "max"):
-        payload["effort"] = _current_effort()
+    # 思考强度（effort / reasoning_effort / 不传）：按当前供应商声明翻译（见 _apply_reasoning）
+    _apply_reasoning(payload)
     if thinking is not None:
         # 关/开思考开关（DeepSeek V4.1 Flash）：官方走 extra_body.chat_template_kwargs
         payload["extra_body"] = {
@@ -110,12 +181,15 @@ def _message(data: dict) -> dict:
 
 def current_config() -> dict:
     """当前 LLM 配置（给网页端「模型设置」面板回填用）。"""
+    p = _current_provider()
     return {
         "base_url": config.DEEPSEEK_BASE_URL,
         "api_key": config.DEEPSEEK_API_KEY,
         "model": _current_model(),
         "effort": _current_effort(),
         "temperature": config.CHAT_TEMPERATURE,
+        "provider": (p or {}).get("id", "custom"),
+        "reasoning": (p or {}).get("reasoning"),
     }
 
 
@@ -135,7 +209,7 @@ def save_config(model: str = "", effort: str = "",
     if model:
         updates["DEEPSEEK_MODEL"] = str(model).strip()
     if effort:
-        updates["DEEPSEEK_EFFORT"] = str(effort).strip().lower()
+        updates["LLM_REASONING_EFFORT"] = str(effort).strip().lower()
     if temperature is not None:
         updates["CHAT_TEMPERATURE"] = str(temperature)
     if not updates:

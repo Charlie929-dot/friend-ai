@@ -850,14 +850,10 @@
             <input id="lmModel" placeholder="或直接手填模型名">
             <div class="lm-tip">「测试连接」成功后，上面的下拉会列出该供应商可用的模型；列表里没有的（或拉不到的）在下面手填。</div>
           </div>
-          <div class="lm-row">
-            <label>思考强度 effort</label>
-            <select id="lmEffort">
-              <option value="low">low（默认：快和省，日常聊天够用）</option>
-              <option value="high">high（想得细一些，慢一点）</option>
-              <option value="max">max（最细，最慢最贵）</option>
-            </select>
-            <div class="lm-tip">只对 V4 系模型有意义，老模型会自动忽略。</div>
+          <div class="lm-row" id="lmEffortRow" style="display:none">
+            <label>思考强度</label>
+            <select id="lmEffort"></select>
+            <div class="lm-tip" id="lmEffortTip"></div>
           </div>
           <div class="lm-row">
             <label>聊天温度 temperature</label>
@@ -1600,20 +1596,32 @@ document.addEventListener('click',(e)=>{ if(!e.target.closest('.menu-wrap')) acc
 $('mHelp').onclick=()=>{ accMenu.style.display='none'; openDrawer('R'); $('foldDebug').open=true; runCmd('/help','帮助'); };
 $('mRestart').onclick=()=>restartService();
 
-/* ===== 模型设置（v0.80：全局，写 .env 热生效；v0.99 升级：供应商/Key/测试连接） ===== */
-const LM_PROVIDERS = [
-  { name: 'DeepSeek 官方', url: 'https://api.deepseek.com' },
-  { name: '腾讯云 Token Plan（个人版）', url: 'https://api.lkeap.cloud.tencent.com/plan/v3' },
-  { name: '腾讯云 LKEAP / 混元', url: 'https://api.lkeap.cloud.tencent.com/v1' },
-  { name: '月之暗面 Kimi', url: 'https://api.moonshot.cn/v1' },
-  { name: '硅基流动 SiliconFlow', url: 'https://api.siliconflow.cn/v1' },
-  { name: '阿里云百炼', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
-  { name: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
-  { name: 'Ollama 本地', url: 'http://127.0.0.1:11434/v1' },
-  { name: '自定义', url: '' }
-];
-$('lmProvider').innerHTML = LM_PROVIDERS.map((p,i)=>'<option value="'+i+'">'+esc(p.name)+'</option>').join('');
-$('lmProvider').onchange = ()=>{ const u=LM_PROVIDERS[$('lmProvider').value].url; if(u) $('lmBase').value=u; };
+/* ===== 模型设置（v0.80：全局写 .env 热生效；v0.99 供应商/Key/测试；
+   v0.102 供应商声明从后端拉，思考强度档位按供应商动态渲染，不再写死 DeepSeek effort） ===== */
+let LM_PROVIDERS = [];   // 从 /api/llm/config 的 providers 字段拉
+function providerAt(i){ return LM_PROVIDERS[i] || null; }
+function renderProviders(list){
+  LM_PROVIDERS = list || [];
+  $('lmProvider').innerHTML = LM_PROVIDERS.map((p,i)=>
+    '<option value="'+i+'">'+esc(p.name)+'</option>').join('');
+}
+function renderEffort(reasoning, curEffort){
+  const row=$('lmEffortRow'), sel=$('lmEffort');
+  if(!reasoning){ row.style.display='none'; return; }
+  row.style.display='';
+  const opts=reasoning.options||[];
+  sel.innerHTML=opts.map(o=>{
+    const tag=o===reasoning.default?'（默认）':'';
+    return '<option value="'+esc(o)+'">'+esc(o)+tag+'</option>';
+  }).join('');
+  sel.value=(opts.indexOf(curEffort)>=0)?curEffort:(reasoning.default||'');
+  $('lmEffortTip').textContent='字段 '+reasoning.field+'；只对支持推理的模型生效，其余模型会自动忽略。';
+}
+$('lmProvider').onchange = ()=>{
+  const p=providerAt($('lmProvider').value);
+  if(p && p.base_url) $('lmBase').value=p.base_url;
+  renderEffort(p?p.reasoning:null, $('lmEffort').value);
+};
 /* 模型下拉：真 <select>（<datalist> 在手机浏览器/内置浏览器里不弹，等于只能手填）。
    第一项是"手填"，选了具体模型就写进下面的输入框——保存仍只读输入框。 */
 function fillModelSel(ids, cur){
@@ -1649,12 +1657,14 @@ async function openModelPanel(){
   try{
     const d=await (await fetch('/api/llm/config')).json();
     const cfg=d.config||{};
+    renderProviders(d.providers);
     $('lmBase').value=cfg.base_url||'';
     $('lmKey').value=cfg.api_key||'';
     $('lmModel').value=cfg.model||'';
-    const pi=LM_PROVIDERS.findIndex(p=>p.url && p.url.replace(/\/+$/,'')===(cfg.base_url||'').replace(/\/+$/,''));
-    $('lmProvider').value = pi>=0 ? pi : LM_PROVIDERS.length-1;
-    $('lmEffort').value=(cfg.effort||'low');
+    const pi=LM_PROVIDERS.findIndex(p=>p.base_url && p.base_url.replace(/\/+$/,'')===(cfg.base_url||'').replace(/\/+$/,''));
+    $('lmProvider').value = pi>=0 ? pi : (LM_PROVIDERS.length-1);
+    const p=providerAt($('lmProvider').value);
+    renderEffort(p?p.reasoning:null, cfg.effort||'');
     $('lmTemp').value=(cfg.temperature==null?0.8:cfg.temperature);
     const ids=(d.models||[]).map(m=>m.id);
     fillModelSel(ids, cfg.model||'');

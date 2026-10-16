@@ -369,11 +369,12 @@ def _make_handler(channel: WebChannel, on_message):
                                         "kind": r["kind"], "text": r["text"]}
                                        for r in rows]})
             elif u.path == "/api/llm/config":
-                # 模型设置（v0.80）：当前全局配置 + 官方可用模型列表（开面板时拉一次，
-                # 上新模型会自动出现在下拉里）。effort 只对 V4 系模型有意义。
+                # 模型设置（v0.80 / v0.102）：当前全局配置 + 官方可用模型列表（开面板时
+                # 拉一次，上新模型自动进下拉）+ 供应商声明（思考强度档位按供应商动态渲染）。
                 import llm as _llm
                 self._json({"config": _llm.current_config(),
-                            "models": _llm.list_models()})
+                            "models": _llm.list_models(),
+                            "providers": _llm.providers()})
             elif u.path == "/api/tuning/config":
                 # 调优参数面板（v0.86）：全项目实测优化参数的清单 + 当前值，前端渲染
                 # L1 首屏 / L2 高级折叠。读用，改走 POST。
@@ -730,12 +731,16 @@ def _make_handler(channel: WebChannel, on_message):
                 if not 0.0 <= temp <= 2.0:
                     self._json({"error": "温度要在 0–2 之间"}, 400)
                     return
-            if effort and effort not in ("low", "high", "max"):
-                self._json({"error": "effort 只能是 low / high / max"}, 400)
-                return
             if base_url and not base_url.startswith(("http://", "https://")):
                 self._json({"error": "接口地址得是 http(s):// 开头"}, 400)
                 return
+            # 思考强度档位按供应商声明校验（v0.102，不再写死 DeepSeek 的 low/high/max）
+            opts = _llm.reasoning_options(base_url or config.DEEPSEEK_BASE_URL)
+            if effort and opts and effort not in opts:
+                self._json({"error": f"思考强度只能是 {' / '.join(opts)}"}, 400)
+                return
+            if effort and opts is None:
+                effort = ""   # 该供应商无思考强度参数，不落盘
             try:
                 cfg = _llm.save_config(model=model, effort=effort, temperature=temp,
                                        base_url=base_url, api_key=api_key)

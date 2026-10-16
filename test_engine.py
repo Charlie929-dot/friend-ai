@@ -812,6 +812,71 @@ def test_webui():
             _webui.WEB_DIR = real_web_dir
 
 
+def test_llm_provider_reasoning():
+    """模型面板供应商声明（v0.102）：provider 列表完整 + 思考强度按供应商翻译成
+    对应字段（DeepSeek=effort、Kimi/OpenAI=reasoning_effort、Ollama/自定义=不传），
+    档位对不上回退默认、DeepSeek 老模型跳过。"""
+    import llm as _llm
+
+    # 1) 供应商声明完整：每个都有 id/name/base_url，reasoning 字段名/档位合法
+    ps = _llm.providers()
+    assert len(ps) >= 9, f"供应商声明不该少于 9 个：{len(ps)}"
+    for p in ps:
+        assert p.get("id") and p.get("name") and "base_url" in p, f"provider 缺字段：{p}"
+        r = p.get("reasoning")
+        assert r is None or (r.get("field") in ("effort", "reasoning_effort")
+                             and r.get("options") and r.get("default") in r["options"]), \
+            f"reasoning 声明不合法：{p}"
+
+    # 2) base_url 匹配供应商
+    assert (_llm._find_provider("https://api.deepseek.com") or {})["id"] == "deepseek"
+    assert (_llm._find_provider("https://api.moonshot.cn/v1") or {})["id"] == "moonshot"
+    assert (_llm._find_provider("http://127.0.0.1:11434/v1") or {})["id"] == "ollama"
+    assert _llm._find_provider("https://unknown.example.com/v1") is None
+
+    # 3) _apply_reasoning：按供应商把思考强度塞进正确字段
+    with _patch_config(DEEPSEEK_BASE_URL="https://api.deepseek.com",
+                       LLM_REASONING_EFFORT="high", DEEPSEEK_MODEL="deepseek-flash"):
+        pl = {"model": "deepseek-flash"}
+        _llm._apply_reasoning(pl)
+        assert pl.get("effort") == "high", f"DeepSeek V4 该传 effort=high：{pl}"
+    with _patch_config(DEEPSEEK_BASE_URL="https://api.deepseek.com",
+                       LLM_REASONING_EFFORT="high", DEEPSEEK_MODEL="deepseek-chat"):
+        pl = {"model": "deepseek-chat"}
+        _llm._apply_reasoning(pl)
+        assert "effort" not in pl, f"DeepSeek 老模型不该传 effort：{pl}"
+    with _patch_config(DEEPSEEK_BASE_URL="https://api.moonshot.cn/v1",
+                       LLM_REASONING_EFFORT="high", DEEPSEEK_MODEL="kimi-k3"):
+        pl = {"model": "kimi-k3"}
+        _llm._apply_reasoning(pl)
+        assert pl.get("reasoning_effort") == "high", f"Kimi 该传 reasoning_effort：{pl}"
+    with _patch_config(DEEPSEEK_BASE_URL="https://api.openai.com/v1",
+                       LLM_REASONING_EFFORT="medium", DEEPSEEK_MODEL="gpt-5"):
+        pl = {"model": "gpt-5"}
+        _llm._apply_reasoning(pl)
+        assert pl.get("reasoning_effort") == "medium", f"OpenAI 该传 reasoning_effort：{pl}"
+    # 档位对不上（DeepSeek 的 max 不在 OpenAI 档位里）→ 回退该家默认 medium
+    with _patch_config(DEEPSEEK_BASE_URL="https://api.openai.com/v1",
+                       LLM_REASONING_EFFORT="max", DEEPSEEK_MODEL="gpt-5"):
+        pl = {"model": "gpt-5"}
+        _llm._apply_reasoning(pl)
+        assert pl.get("reasoning_effort") == "medium", f"档位对不上该回退默认 medium：{pl}"
+    # 无思考强度声明（Ollama）→ 不传任何字段
+    with _patch_config(DEEPSEEK_BASE_URL="http://127.0.0.1:11434/v1",
+                       LLM_REASONING_EFFORT="high", DEEPSEEK_MODEL="llama3"):
+        pl = {"model": "llama3"}
+        _llm._apply_reasoning(pl)
+        assert "effort" not in pl and "reasoning_effort" not in pl, \
+            f"Ollama 无思考强度，不该传任何字段：{pl}"
+
+    # 4) reasoning_options：校验/面板接口返回各家的档位
+    assert _llm.reasoning_options("https://api.deepseek.com") == ["low", "high", "max"]
+    assert _llm.reasoning_options("https://api.openai.com/v1") == ["minimal", "low", "medium", "high"]
+    assert _llm.reasoning_options("http://127.0.0.1:11434/v1") is None
+
+    print("ok 模型供应商声明（provider 列表 + 思考强度按供应商翻译 effort/reasoning_effort/不传 + 档位回退默认）")
+
+
 def test_account_management():
     """账号管理（网页改密码/TOTP）：write_env 只动目标键、其他行原样保留；
     改密码热生效；TOTP 绑定后动态码可验、解绑后关闭。"""
