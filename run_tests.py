@@ -30,7 +30,7 @@ MODULES = [
 # 防漏闸门：全量期望用例数（E4 拆分时 = 71；v0.94 批 2 → 76；批 3 → 80；
 # v0.98 批 4-5 加 test_info 6 项 → 86）。数量对不上就直接报错——
 # 避免"某个文件被漏收集"或"新用例所在模块没进 MODULES"这类静默跳过。
-EXPECTED_TOTAL = 86
+EXPECTED_TOTAL = 87
 
 
 def _collect(module):

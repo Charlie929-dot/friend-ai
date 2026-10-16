@@ -174,9 +174,6 @@ class Engine:
             return 0
         self._flush_outbox()  # 你回来了：先把离开期间 TA 的留言重放给你
         mid = db.add_message("user", text, quote=quote)
-        # 统一事件源（§5 拍板 #6①）：用户消息作为独立事件进意识流——记法"XX说：…"。
-        # TA 的脑子里，别人说的话和 TA 自己的事一样，都是"今天发生的事"。
-        stream.append("user", f"{persona.user_name()}说：{text}")
         # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
         if guard.is_urgent(text):
             guard.open_urgent_window()
@@ -188,12 +185,16 @@ class Engine:
         db.reset_counter("unanswered_proactive")  # 用户回复了，清零连续未回复
         self._reset_bubble_timer()  # 聊上了，冒泡倒计时重新计
 
-        # 离线留言：TA 专注工作/睡觉时你发的话，攒着等 TA 上线正经回（急事除外）
+        # 离线留言：TA 专注工作/睡觉时你发的话，攒着等 TA 上线正经回（急事除外）。
+        # 意识流不在这里记——上线 flush_inbox 时记一次「留言了，我看看」再逐条补记，
+        # 免得离线期间一条留言一行提示刷屏（实测反馈：连发 9 条 = 9 行重复）。
         if offline.is_offline() and not guard.is_urgent(text):
-            offline.push_inbox(text)
-            stream.append("inbox", f"{persona.user_name()}给我留言了，我看看")
-            self._send_offline_notice()
+            if offline.push_inbox(text) == 1:
+                self._send_offline_notice()  # 只在离线段第一条时轻提示一声
             return mid
+        # 统一事件源（§5 拍板 #6①）：用户消息作为独立事件进意识流——记法"XX说：…"。
+        # TA 的脑子里，别人说的话和 TA 自己的事一样，都是"今天发生的事"。
+        stream.append("user", f"{persona.user_name()}说：{text}")
         # 在线但有积压留言（TA 刚转在线、tick 还没跑到）：先回留言再回这条新的
         if offline.pending_inbox_count():
             self.flush_inbox()
@@ -463,10 +464,15 @@ class Engine:
             self._send(corpus.pick(corpus.OFFLINE_FOCUS_NOTICES, "offline_focus"), kind="notice")
 
     def flush_inbox(self) -> None:
-        """上线了：把离线期间攒下的留言正经回应一遍（后台线程，复用 _sending 互斥）。"""
+        """上线了：把离线期间攒下的留言正经回应一遍（后台线程，复用 _sending 互斥）。
+        意识流在这里补记：先一行「留言了，我看看」，再逐条「XX说：…」——
+        入库时刻是补记时刻（睡着的那段时间 TA 对留言无感知，醒来才一并"看见"）。"""
         items = offline.take_inbox()
         if not items:
             return
+        stream.append("inbox", f"{persona.user_name()}给我留言了，我看看")
+        for m in items:
+            stream.append("user", f"{persona.user_name()}说：{m['text']}")
         texts = [m["text"] for m in items]
         threading.Thread(target=self._reply_inbox_worker, args=(texts,), daemon=True).start()
 

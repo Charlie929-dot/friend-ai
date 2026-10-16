@@ -762,7 +762,9 @@
           </div>
         </details>
 
-        <button class="btn" id="btnBooks">我的书架</button>
+        <details class="fold" id="foldBooks">
+          <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>我的书架<span class="ec-sub" id="bkEntryCount"></span></summary>
+        </details>
 
         <details class="fold" id="foldDebug">
           <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/></svg>调试面板</summary>
@@ -826,10 +828,27 @@
         </div>
         <div class="lm-body">
           <div class="lm-row">
+            <label>供应商（仅支持 OpenAI 兼容协议 API）</label>
+            <select id="lmProvider"></select>
+            <div class="lm-tip">选供应商自动填接口地址；自建端点或列表里没有的选「自定义」手填。</div>
+          </div>
+          <div class="lm-row">
+            <label>API Key</label>
+            <div style="display:flex;gap:8px">
+              <input id="lmKey" type="password" placeholder="sk-…" style="flex:1;min-width:0">
+              <button class="btn" id="lmKeyEye" type="button" title="显示/隐藏">显示</button>
+            </div>
+          </div>
+          <div class="lm-row">
+            <label>接口地址 Base URL</label>
+            <input id="lmBase" placeholder="https://api.deepseek.com" style="margin-bottom:8px">
+            <button class="btn" id="lmTest" type="button" style="width:100%">测试连接（顺带自动检查模型）</button>
+          </div>
+          <div class="lm-row">
             <label>模型</label>
             <input id="lmModel" list="lmModels" placeholder="deepseek-flash">
             <datalist id="lmModels"></datalist>
-            <div class="lm-tip">下拉是服务端当前可用的模型（官方上新会自动出现），也可以直接手填。</div>
+            <div class="lm-tip">「测试连接」成功后，下拉会自动列出该供应商可用的模型；也可以直接手填。</div>
           </div>
           <div class="lm-row">
             <label>思考强度 effort</label>
@@ -1560,7 +1579,38 @@ document.addEventListener('click',(e)=>{ if(!e.target.closest('.menu-wrap')) acc
 $('mHelp').onclick=()=>{ accMenu.style.display='none'; openDrawer('R'); $('foldDebug').open=true; runCmd('/help','帮助'); };
 $('mRestart').onclick=()=>restartService();
 
-/* ===== 模型设置（v0.80：全局，写 .env 热生效） ===== */
+/* ===== 模型设置（v0.80：全局，写 .env 热生效；v0.99 升级：供应商/Key/测试连接） ===== */
+const LM_PROVIDERS = [
+  { name: 'DeepSeek 官方', url: 'https://api.deepseek.com' },
+  { name: '腾讯云 Token Plan（个人版）', url: 'https://api.lkeap.cloud.tencent.com/plan/v3' },
+  { name: '腾讯云 LKEAP / 混元', url: 'https://api.lkeap.cloud.tencent.com/v1' },
+  { name: '月之暗面 Kimi', url: 'https://api.moonshot.cn/v1' },
+  { name: '硅基流动 SiliconFlow', url: 'https://api.siliconflow.cn/v1' },
+  { name: '阿里云百炼', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  { name: 'OpenRouter', url: 'https://openrouter.ai/api/v1' },
+  { name: 'Ollama 本地', url: 'http://127.0.0.1:11434/v1' },
+  { name: '自定义', url: '' }
+];
+$('lmProvider').innerHTML = LM_PROVIDERS.map((p,i)=>'<option value="'+i+'">'+esc(p.name)+'</option>').join('');
+$('lmProvider').onchange = ()=>{ const u=LM_PROVIDERS[$('lmProvider').value].url; if(u) $('lmBase').value=u; };
+$('lmKeyEye').onclick = ()=>{ const k=$('lmKey'); k.type = k.type==='password' ? 'text' : 'password';
+  $('lmKeyEye').textContent = k.type==='password' ? '显示' : '隐藏'; };
+$('lmTest').onclick = async()=>{
+  $('lmMsg').textContent='测试连接中…';
+  try{
+    const r=await (await fetch('/api/llm/test',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({base_url:$('lmBase').value.trim(), api_key:$('lmKey').value.trim(),
+                           model:$('lmModel').value.trim()})})).json();
+    if(r.ok){
+      if((r.models||[]).length){
+        $('lmModels').innerHTML=r.models.map(id=>'<option value="'+esc(id)+'"></option>').join('');
+        $('lmMsg').textContent='✓ 连接正常 · '+r.models.length+' 个模型（下拉可选）';
+        if(!$('lmModel').value.trim()) $('lmModel').value=r.models[0];
+      } else $('lmMsg').textContent='✓ 连接正常（模型列表没给，模型名手填即可）';
+    } else $('lmMsg').textContent='✗ '+((r.error||'连接失败').slice(0,160));
+  }catch(e){ $('lmMsg').textContent='✗ '+e.message; }
+};
 $('mModel').onclick=()=>{ accMenu.style.display='none'; openModelPanel(); };
 function closeModelPanel(){ $('lmModal').classList.remove('open'); }
 async function openModelPanel(){
@@ -1569,7 +1619,11 @@ async function openModelPanel(){
   try{
     const d=await (await fetch('/api/llm/config')).json();
     const cfg=d.config||{};
+    $('lmBase').value=cfg.base_url||'';
+    $('lmKey').value=cfg.api_key||'';
     $('lmModel').value=cfg.model||'';
+    const pi=LM_PROVIDERS.findIndex(p=>p.url && p.url.replace(/\/+$/,'')===(cfg.base_url||'').replace(/\/+$/,''));
+    $('lmProvider').value = pi>=0 ? pi : LM_PROVIDERS.length-1;
     $('lmEffort').value=(cfg.effort||'low');
     $('lmTemp').value=(cfg.temperature==null?0.8:cfg.temperature);
     $('lmModels').innerHTML=(d.models||[]).map(m=>
@@ -1584,7 +1638,8 @@ $('lmClose').onclick=closeModelPanel;
 $('lmCancel').onclick=closeModelPanel;
 $('lmBack').onclick=closeModelPanel;
 $('lmSave').onclick=async()=>{
-  const body={ model: $('lmModel').value.trim(), effort: $('lmEffort').value,
+  const body={ base_url: $('lmBase').value.trim(), api_key: $('lmKey').value.trim(),
+               model: $('lmModel').value.trim(), effort: $('lmEffort').value,
                temperature: $('lmTemp').value };
   $('lmMsg').textContent='保存中…';
   try{
@@ -1685,6 +1740,7 @@ async function loadBooks(){
   const n=(bkData.books||[]).length;
   const pref=bkData.pref||{};
   $('bkSub').textContent = n ? (n+' 本书') : '';
+  $('bkEntryCount').textContent = n ? (n+' 本') : '';
   $('bkPref').textContent = pref.category
     ? ('TA 的口味：'+pref.category+((pref.tags&&pref.tags.length)?(' · '+pref.tags.join('/')):''))
     : '';
@@ -1816,7 +1872,7 @@ function closeBooks(){ $('bkModal').classList.remove('open'); }
       headers:{'Content-Type':'application/json'},body:'{}'})).json().catch(()=>({changed:0}));
     loadBooks(); alert('重新分类完成，改了 '+(d.changed||0)+' 本（手动指定的没动）');
   };
-  $('btnBooks').onclick=openBooks;
+  $('foldBooks').addEventListener('click', e=>{ e.preventDefault(); openBooks(); });
   $('bkClose').onclick=closeBooks;
   $('bkBack').onclick=closeBooks;
   document.addEventListener('keydown', e=>{
@@ -2100,6 +2156,7 @@ $('send').onclick=send;
 initialLoad();
 loadFriends();
 loadMemories();
+loadBooks();           // 书架入口折叠行要显示「N 本」计数，开页拉一次
 loadEmoji();          // 预载表情库（带图表情的「文字→图」映射要在渲染气泡前就位）
 setInterval(poll,900);
 setInterval(loadMemories,30000);

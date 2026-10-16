@@ -1042,3 +1042,45 @@ def test_session_context():
 
 def _raise_llm():
     raise __import__("llm").LLMUnavailable("模拟独白层挂了")
+
+
+def test_offline_inbox_stream_dedup():
+    """离线留言（实测反馈）：离线期间意识流不逐条刷「留言了」，
+    上线 flush 时记一次「XX给我留言了，我看看」再逐条补记「XX说：…」；
+    睡话轻提示也只在离线段第一条发一声。"""
+    import tempfile
+    import db as _db
+    import offline as _off
+    import stream as _stream
+    from core import Engine
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       WORK_ENABLED=False):
+        class Ch:
+            def __init__(self): self.sends = []
+            def send(self, text): self.sends.append(text)
+            def typing(self): pass
+
+        ch = Ch()
+        eng = Engine(ch)
+        try:
+            _db.set_state("SLEEPING")              # 睡着 = 离线
+            eng.on_user_message("哈喽，好久没聊了")
+            eng.on_user_message("最近感觉好忙，不知道在忙啥")
+            assert _off.pending_inbox_count() == 2, "留言没进队列"
+            kinds = [(r["kind"], r["text"]) for r in _stream.recent(50)]
+            assert not [t for k, t in kinds if "留言了" in t], f"离线期间不该记留言提示：{kinds}"
+            assert not [t for k, t in kinds if k == "user"], f"留言该等上线再补记：{kinds}"
+            assert len(ch.sends) == 1, f"睡话轻提示只该发一声：{ch.sends}"
+
+            eng._reply_inbox_worker = lambda texts: None   # 只验意识流记账，不真回
+            eng.flush_inbox()
+            kinds = [(r["kind"], r["text"]) for r in _stream.recent(50)]
+            notices = [t for k, t in kinds if k == "inbox" and "留言了" in t]
+            says = [t for k, t in kinds if k == "user" and "说：" in t]
+            assert len(notices) == 1, f"「留言了」应只记一次：{notices}"
+            assert len(says) == 2, f"留言的消息行该补记 2 条：{says}"
+        finally:
+            eng.stop()
+    print("ok 离线留言意识流（离线不刷屏，上线一次「留言了」+ 逐条补记）")

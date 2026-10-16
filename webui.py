@@ -426,6 +426,9 @@ def _make_handler(channel: WebChannel, on_message):
             if u.path == "/api/llm/config":
                 self._do_llm_config()
                 return
+            if u.path == "/api/llm/test":
+                self._do_llm_test()
+                return
             if u.path == "/api/tuning/config":
                 self._do_tuning_config()
                 return
@@ -718,6 +721,8 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             model = str(data.get("model") or "").strip()
             effort = str(data.get("effort") or "").strip().lower()
+            base_url = str(data.get("base_url") or "").strip()
+            api_key = str(data.get("api_key") or "").strip()
             raw_temp = data.get("temperature", None)
             temp = None
             if raw_temp not in (None, ""):
@@ -732,12 +737,29 @@ def _make_handler(channel: WebChannel, on_message):
             if effort and effort not in ("low", "high", "max"):
                 self._json({"error": "effort 只能是 low / high / max"}, 400)
                 return
+            if base_url and not base_url.startswith(("http://", "https://")):
+                self._json({"error": "接口地址得是 http(s):// 开头"}, 400)
+                return
             try:
-                cfg = _llm.save_config(model=model, effort=effort, temperature=temp)
+                cfg = _llm.save_config(model=model, effort=effort, temperature=temp,
+                                       base_url=base_url, api_key=api_key)
             except Exception as e:
                 self._json({"error": f"保存失败：{e}"}, 500)
                 return
             self._json({"ok": True, "config": cfg})
+
+        def _do_llm_test(self):
+            """测试连接：用面板里填的地址/密钥/模型（留空用当前配置）实际连一次。
+            只验证，不落盘——保存仍走 /api/llm/config。"""
+            import llm as _llm
+            try:
+                data = self._read_json()
+            except Exception:
+                data = {}
+            self._json(_llm.test_connection(
+                base_url=str(data.get("base_url") or ""),
+                api_key=str(data.get("api_key") or ""),
+                model=str(data.get("model") or "")))
 
         def _do_tuning_config(self):
             """保存调优参数：校验 + 写回 .env（全局）+ 热生效，不重启。"""

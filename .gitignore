@@ -43,3 +43,6 @@ __pycache__/
 
 # AGENTS.md
 AGENTS.md
+
+# JiuwenSwarm runtime file operation logs
+.agent_history/

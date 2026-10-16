@@ -111,6 +111,8 @@ def _message(data: dict) -> dict:
 def current_config() -> dict:
     """当前 LLM 配置（给网页端「模型设置」面板回填用）。"""
     return {
+        "base_url": config.DEEPSEEK_BASE_URL,
+        "api_key": config.DEEPSEEK_API_KEY,
         "model": _current_model(),
         "effort": _current_effort(),
         "temperature": config.CHAT_TEMPERATURE,
@@ -118,13 +120,18 @@ def current_config() -> dict:
 
 
 def save_config(model: str = "", effort: str = "",
-                temperature: float | None = None) -> dict:
+                temperature: float | None = None,
+                base_url: str = "", api_key: str = "") -> dict:
     """保存模型配置：写回 .env + 热生效（**全局**，不按朋友库隔离）。
 
     为什么是全局：模型/effort/温度是"这台部署怎么跑"的事，不是"这个朋友是谁"的事
     ——放朋友库里换个人就变了，跟网页端"全局配置"的预期对不上（实测 #42 附带的坑：
     /model 原先把 override 存在各库 kv 里）。"""
     updates: dict = {}
+    if str(base_url).strip():
+        updates["DEEPSEEK_BASE_URL"] = str(base_url).strip().rstrip("/")
+    if str(api_key).strip():
+        updates["DEEPSEEK_API_KEY"] = str(api_key).strip()
     if model:
         updates["DEEPSEEK_MODEL"] = str(model).strip()
     if effort:
@@ -157,6 +164,39 @@ def list_models() -> list[dict]:
         return [x for x in items if isinstance(x, dict) and x.get("id")]
     except (httpx.HTTPError, ValueError, KeyError, AttributeError):
         return []
+
+
+def test_connection(base_url: str = "", api_key: str = "", model: str = "") -> dict:
+    """测试连接（网页端「模型设置」按钮）。参数留空就用当前配置，**不落盘**。
+
+    先 GET /models 拉模型列表（顺带就是"自动检查模型"）；部分兼容端点不实现
+    /models，这时只要填了模型名就退一步发一条 1 token 的补全验证连通性。
+    返回 {"ok": bool, "models": [id...], "error": str}。"""
+    base = (base_url or config.DEEPSEEK_BASE_URL or "").strip().rstrip("/")
+    key = (api_key or config.DEEPSEEK_API_KEY or "").strip()
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    models: list[str] = []
+    try:
+        resp = httpx.get(f"{base}/models", headers=headers, timeout=15)
+        resp.raise_for_status()
+        models = sorted({x["id"] for x in (resp.json().get("data") or [])
+                         if isinstance(x, dict) and x.get("id")})
+    except (httpx.HTTPError, ValueError, KeyError):
+        pass  # /models 不通不直接判死，往下用补全验证
+    if models:
+        return {"ok": True, "models": models, "error": ""}
+    model = (model or "").strip()
+    if not model:
+        return {"ok": False, "models": [],
+                "error": "拉不到模型列表（端点可能没实现 /models），填上模型名再测"}
+    try:
+        resp = httpx.post(f"{base}/chat/completions", headers=headers, timeout=30, json={
+            "model": model, "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1})
+        resp.raise_for_status()
+    except (httpx.HTTPError, ValueError, KeyError) as e:
+        return {"ok": False, "models": [], "error": str(e)}
+    return {"ok": True, "models": [], "error": ""}
 
 
 def chat_with_reasoning(messages: list[dict], temperature: float | None = None,
