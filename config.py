@@ -84,6 +84,8 @@ PROACTIVE_CONTEXT_MAX_MESSAGES = int(os.environ.get("PROACTIVE_CONTEXT_MAX_MESSA
 # 作息（24 小时制，实际触发时间会有随机抖动）
 WAKE_HOUR = int(os.environ.get("WAKE_HOUR", "8"))
 SLEEP_HOUR = int(os.environ.get("SLEEP_HOUR", "23"))
+# 中午时点：v0.103 起不再驱动「午间话题」主动消息（该通道已删），
+# 仅被 life.py 的「跨过中午的午休变长」逻辑用（午休是涌现的，不是排出来的）。
 NOON_HOUR = int(os.environ.get("NOON_HOUR", "12"))
 
 # --- 初见阶段（relationship_stage = "new"）的冒泡策略 ---
@@ -91,10 +93,15 @@ BUBBLE_IDLE_MIN_MINUTES = int(os.environ.get("BUBBLE_IDLE_MIN_MINUTES", "30"))  
 BUBBLE_IDLE_MAX_MINUTES = int(os.environ.get("BUBBLE_IDLE_MAX_MINUTES", "60"))
 BUBBLE_DAILY_LIMIT = int(os.environ.get("BUBBLE_DAILY_LIMIT", "12"))            # 冒泡独立额度，不占主动消息上限
 
-# --- 会话级时间观：聊到一半对方没声了，等多久轻催一下 ---
-NUDGE_IDLE_MIN_MINUTES = int(os.environ.get("NUDGE_IDLE_MIN_MINUTES", "10"))
-NUDGE_IDLE_MAX_MINUTES = int(os.environ.get("NUDGE_IDLE_MAX_MINUTES", "20"))
-NUDGE_PROBABILITY = float(os.environ.get("NUDGE_PROBABILITY", "0.6"))  # 剩下 40% 选择安静等待（真人也不是每次都催）
+# --- 分享冲动（v0.103 批 2「念头驱动」）：素材产出即冲动 + 每日分享预算 ---
+SHARE_IMPULSE_ENABLED = os.environ.get("SHARE_IMPULSE_ENABLED", "on").lower() == "on"  # 总开关
+SHARE_IMPULSE_DAILY_LIMIT = int(os.environ.get("SHARE_IMPULSE_DAILY_LIMIT", "3"))  # 每日主动开口的分享预算（防刷屏）
+
+# --- 日历（v0.103 批 3）：临期日历项 → 念头 → 主动开口 ---
+CALENDAR_ENABLED = os.environ.get("CALENDAR_ENABLED", "on").lower() == "on"  # 总开关
+
+# --- 娱乐模式（游戏） ---
+GAME_IDLE_EXPIRE_MINUTES = int(os.environ.get("GAME_IDLE_EXPIRE_MINUTES", "45"))  # 游戏空闲多久自动过期（防陈年规则注入每条回复）
 
 # --- 固定语料策略 ---
 BUBBLE_FIXED_PROB = float(os.environ.get("BUBBLE_FIXED_PROB", "0.35"))  # 冒泡直接抽固定语料的概率（省 token）

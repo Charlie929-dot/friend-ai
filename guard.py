@@ -66,13 +66,8 @@ def can_send_proactive(now: datetime | None = None, scenario: str = "") -> tuple
     if db.get_state() == "SLEEPING":
         return False, "睡觉中"
 
-    # 2. 娱乐模式：游戏进行中暂停一切主动消息（冒泡/问候/轻催），结束自动恢复
-    import game
-    if game.current():
-        return False, "游戏中"
-
-    # 3. 离线专注（flow/working）：TA 在忙自己的事，不主动闲聊（v0.99 修：
-    #    random_chat 在它读书时连发 4 条）。必须在 guard_enabled 短路**之前**——
+    # 2. 离线专注（flow/working）：TA 在忙自己的事，不主动闲聊（v0.99 修：
+    #    主动消息在它读书时连发 4 条）。必须在 guard_enabled 短路**之前**——
     #    这是作息语义不是打扰偏好，guard 关着也得拦。早安/晚安是作息锚点事件不拦
     #    （早睡浮动可能撞上最后一段会话还在跑，拦了晚安会无声消失）。
     import offline

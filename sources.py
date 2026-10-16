@@ -356,15 +356,28 @@ def _digest(items: list[Item]) -> list[Item]:
 
 
 def _store(items: list[Item], day: str) -> int:
-    """落 info_items + 写 URL 缓存。单条失败只跳过这条。"""
+    """落 info_items + 写 URL 缓存。单条失败只跳过这条。
+
+    v0.103 批 2「刷到好东西即冲动」：刷到新的未分享条目，就把第一条灌进意识流、
+    置分享冲动待开口标记——刷到好东西的当时就想聊，不必等定时器。
+    """
     n = 0
+    first_body = ""
     for it in items:
         try:
             db.add_info_item(day, it.source, it.kind, it.title, it.url, it.summary)
             db.cache_put(it.url, it.title, it.summary)
+            if not first_body:
+                first_body = (it.summary or it.title or "").strip()
             n += 1
         except Exception:                   # noqa: BLE001
             continue
+    if n and first_body and getattr(config, "SHARE_IMPULSE_ENABLED", True):
+        try:
+            import stream
+            stream.note_impulse(first_body)
+        except Exception:                   # noqa: BLE001
+            pass
     return n
 
 

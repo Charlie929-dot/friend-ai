@@ -544,7 +544,11 @@ def _shareables() -> list[dict]:
 
 
 def _note_shareable_text(text: str, now: datetime | None = None) -> None:
-    """读到有触动的地方 → 进素材池 + 今日素材 + 待办（不额外调 LLM）。"""
+    """读到有触动的地方 → 进素材池 + 今日素材 + 待办（不额外调 LLM）。
+
+    v0.103 批 2「素材产出即冲动」：顺手把这份触动灌进意识流、置一个分享冲动的
+    待开口标记——真读读到触动的当时就想聊，不必等定时器。
+    """
     if not text:
         return
     now = now or datetime.now()
@@ -558,6 +562,8 @@ def _note_shareable_text(text: str, now: datetime | None = None) -> None:
     db.set_kv(_SHARE_KEY, json.dumps(items[-_SHARE_KEEP:], ensure_ascii=False))
     if config.TODAY_NOTES_ENABLED:
         db.add_today_note("今天读到一句有触动的话", text)
+    if config.SHARE_IMPULSE_ENABLED:
+        stream.note_impulse(text, now)
 
 
 def take_shareable() -> str:

@@ -185,16 +185,23 @@ _PROACTIVE_CONTEXT_RULE = (
 def build_proactive_messages(state: str, scenario: str) -> list[dict] | None:
     """主动消息的 messages：最近聊天上下文 + 场景指令。
 
-    random 场景拿不到真实弹药时返回 **None**（v0.89 §6）——调用方（core）据此
-    **不调 LLM、不发**，而不是让模型自由发挥编一个"我刚刷手机看到…"。
+    impulse 场景拿不到真实弹药时返回 **None**（v0.89 §6 / v0.103 批 2）——调用方
+    （core）据此 **不调 LLM、不发**，而不是让模型自由发挥编一个"我刚刷手机看到…"。
     """
     prompt = persona.build_proactive_prompt(state, scenario)
     prompt[-1]["content"] += f"\n{_PROACTIVE_CONTEXT_RULE}"
-    if scenario == "random" and not _inject_random_topic(prompt):
+    if scenario == "impulse" and not _inject_impulse_material(prompt):
+        return None
+    if scenario == "calendar" and not _inject_calendar_material(prompt):
         return None
     recent = db.session_context(config.PROACTIVE_CONTEXT_MAX_MESSAGES)
     # 自我记忆：主动开口最该兑现的是"我答应过的事"——那是它自己的承诺，比寒暄有分量
     extra = []
+    # 锚点（早/晚安）带念头：分享冲动等念头在开口时浮出（P2/P5）
+    if scenario in ("morning", "night"):
+        shint = stream.prompt_hint()
+        if shint:
+            extra.append({"role": "system", "content": shint})
     if config.SELF_MEMORY_ENABLED:
         hint = selfmem.prompt_hint()
         if hint:
@@ -207,16 +214,14 @@ def build_proactive_messages(state: str, scenario: str) -> list[dict] | None:
     return prompt
 
 
-def _inject_random_topic(prompt: list[dict]) -> bool:
-    """random 场景的话题弹药：**从真实发生过的事里取一件**。返回有没有取到。
+def _inject_impulse_material(prompt: list[dict]) -> bool:
+    """分享冲动（impulse）场景的话题弹药：**从真实发生过的事里取一件**。返回有没有取到。
 
-    v0.89 §6（治「车怠速」连发四条）：**六源皆空** → 返回 False →
-    `build_proactive_messages` 返回 None → core **不调 LLM、不发**。
-    这是**删除一条路径**（旧实现无弹药时让 LLM 自由发挥编环境），不是加闸门。
-
-    **六源全序**（v0.97 批 3 补全序）：素材池（读到有触动的话，50% 概率）→ 刷到的
-    （今天刷到还没说出去的）→ 待办（想说还没说的事）→ 承诺（我答应过还没兑现的）→
-    兴趣（最近喜欢上的）→ 旧记忆。
+    v0.103 批 2：原 `_inject_random_topic` 六源机制随 random 场景退役，源头并入
+    冲动生成——冲动开口的弹药照旧从真实生活里取，**六源全序**：素材池（读到有触动的
+    话，50% 概率）→ 刷到的（今天刷到还没说出去的）→ 待办（想说还没说的事）→ 承诺
+    （我答应过还没兑现的）→ 兴趣（最近喜欢上的）→ 旧记忆。六源皆空返回 False →
+    `build_proactive_messages` 返回 None → core 不调 LLM、不发。
     """
     import db as _db
 
@@ -288,4 +293,31 @@ def _inject_random_topic(prompt: list[dict]) -> bool:
             f"可以就着它聊，比如问问后续；想聊别的也行。）")
         return True
     return False
+
+
+def _inject_calendar_material(prompt: list[dict]) -> bool:
+    """calendar 场景的弹药：临期日历项（events.calendar_tick 触到点时写进 kv）。返回有没有取到。"""
+    import json
+    import db as _db
+    raw = _db.get_kv("calendar_pending", "")
+    _db.set_kv("calendar_pending", "")
+    if not raw:
+        return False
+    try:
+        ev = json.loads(raw)
+    except ValueError:
+        return False
+    what = (ev.get("what") or "").strip()
+    if not what:
+        return False
+    bits = [f"「{what}」"]
+    if ev.get("when"):
+        bits.append(f"时间 {ev['when'][5:16]}")
+    if ev.get("prepare"):
+        bits.append(f"准备状态：{ev['prepare']}")
+    prompt[-1]["content"] += (
+        f"\n（你心里惦记着TA的一件事：{'，'.join(bits)}。"
+        f"用你自己的话自然地关心一下——问问进展、表示你还在记着，"
+        f"别像闹钟一样生硬地提醒。）")
+    return True
 

@@ -20,14 +20,14 @@ def test_proactive_context_injection():
         # 两小时前刚聊过的话题
         _db.add_message("user", "我在赶论文，头都大了")
         _db.add_message("assistant", "那你先忙，写完这段再找我唠")
-        # v0.89 §6：random 场景要有话题弹药才生成（无弹药返回 None，不空转发）
+        # v0.103 批 2：impulse 场景要有话题弹药才生成（无弹药返回 None，不空转发）
         _db.set_kv("work_shareables", json.dumps(
             [{"day": "2026-10-10", "seq": 1, "text": "读到一句挺有意思的话", "used": 0}]))
 
         # 素材池是 50% 概率翻（其余走待办/承诺/兴趣/旧记忆），循环到命中为止
         msgs = None
         for _ in range(40):
-            msgs = _ctx.build_proactive_messages("AWAKE", "random")
+            msgs = _ctx.build_proactive_messages("AWAKE", "impulse")
             if msgs:
                 break
         assert msgs, "有弹药却没生成主动消息"
@@ -105,12 +105,12 @@ def test_proactive_segment():
             ch = DummyChannel()
             engine = Engine(ch)
             _llm.chat = lambda *a, **k: "刚从书里抬头\n\n《左传》看到襄公那段"
-            # v0.89 §6：random 要有话题弹药才发（素材池 50% 概率翻，多试几次必中）
+            # v0.103 批 2：impulse 要有话题弹药才发（素材池 50% 概率翻，多试几次必中）
             got = False
             for _ in range(40):
                 _db.set_kv("work_shareables", json.dumps(
                     [{"day": "2026-10-10", "seq": 1, "text": "读到襄公那段挺有感觉", "used": 0}]))
-                if engine._proactive("random") is True:
+                if engine._proactive("impulse") is True:
                     got = True
                     break
             assert got, "有弹药却没发出主动消息"
@@ -147,12 +147,12 @@ def test_proactive_pacing_and_stream():
             ch = DummyChannel()
             engine = Engine(ch)
             _llm.chat = lambda *a, **k: "刚从书里抬头\n\n《左传》看到襄公那段"
-            # random 要有话题弹药才发（素材池 50% 概率翻，多试几次必中）
+            # impulse 要有话题弹药才发（素材池 50% 概率翻，多试几次必中）
             got = False
             for _ in range(40):
                 _db.set_kv("work_shareables", json.dumps(
                     [{"day": "2026-10-10", "seq": 1, "text": "读到襄公那段挺有感觉", "used": 0}]))
-                if engine._proactive("random") is True:
+                if engine._proactive("impulse") is True:
                     got = True
                     break
             assert got, "有弹药却没发出主动消息"
@@ -168,6 +168,58 @@ def test_proactive_pacing_and_stream():
         finally:
             engine.stop()
             _llm.chat = real_chat
+
+
+def test_share_impulse():
+    """分享冲动（v0.103 批 2「念头驱动」）：素材产出即冲动 → 注入意识流 + 置待开口标记；
+    每日预算内主动开口，预算尽只留念头（早/晚安或下次回复浮出）。"""
+    import tempfile
+    import db as _db
+    import stream as _stream
+    from core import Engine
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       SHARE_IMPULSE_ENABLED=True, SHARE_IMPULSE_DAILY_LIMIT=1,
+                       CONSCIOUS_STREAM_ENABLED=True):
+
+        class Ch:
+            def send(self, text): pass
+
+        eng = Engine(Ch())
+        try:
+            calls = []
+            eng.proactive = lambda scenario: (calls.append(scenario) or True)
+
+            # 无冲动标记 → 不开口
+            eng.check_share_impulse()
+            assert not calls, "没有冲动标记不该开口"
+
+            # 素材产出 → 念头注入意识流 + 置待开口标记
+            _stream.note_impulse("读到一句挺有感触的话")
+            assert _db.get_kv("share_impulse_pending") == "1", "该置待开口标记"
+            assert any(r["kind"] == "impulse" and "挺有感触" in r["text"]
+                       for r in _stream.recent(20)), "念头该进意识流"
+
+            # 预算内 → 主动开口（impulse 场景），标记清空
+            eng.check_share_impulse()
+            assert calls == ["impulse"], f"预算内该开口：{calls}"
+            assert _db.get_kv("share_impulse_pending") == "", "开口后该清待开口标记"
+
+            # 预算尽（limit=1，已用一次）→ 只清标记、不再开口
+            _db.incr_counter("share_impulse_count")
+            _stream.note_impulse("又想到一句")
+            eng.check_share_impulse()
+            assert calls == ["impulse"], f"预算尽不该再开口：{calls}"
+
+            # 开关关 → 不置标记
+            config.SHARE_IMPULSE_ENABLED = False
+            _stream.note_impulse("关掉后不该有")
+            assert _db.get_kv("share_impulse_pending") == "", "关开关后不该置标记"
+        finally:
+            config.SHARE_IMPULSE_ENABLED = True
+            eng.stop()
+    print("ok 分享冲动（素材产出即冲动 + 念头注入意识流 + 每日预算防刷屏）")
 
 
 def test_interest_cultivation():

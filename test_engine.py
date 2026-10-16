@@ -71,31 +71,30 @@ def test_refresh_reschedules_jobs():
     engine = types.SimpleNamespace(
         wake_up=lambda: None, go_sleep=lambda: None,
         proactive=lambda s: None, check_bubble=lambda: None,
-        check_nudge=lambda: None,
+        check_share_impulse=lambda: None,
         _do_sleep=lambda: None, _do_wake=lambda: None, flush_inbox=lambda: None)
     sch = scheduler.start(engine)
 
-    old_noon = config.NOON_HOUR
-    os.environ["NOON_HOUR"] = "15"
     commands.handle("/refresh")
 
     # 模拟 main.py 的 /refresh 善后
     real_engine = types.SimpleNamespace(sched=sch, _reset_bubble_timer=lambda: None)
     scheduler.reschedule_all(sch, real_engine)
 
-    noon_fields = {f.name: str(f) for f in sch.get_job("noon").trigger.fields}
-    assert noon_fields["hour"] == "15", f"noon 任务未重排：{noon_fields}"
     # wake/sleep 跟随人格卡（当前 friend.db 里的朋友），无人格卡才是 config 默认
     import persona as _p
     wake_fields = {f.name: str(f) for f in sch.get_job("wake").trigger.fields}
     assert wake_fields["hour"] == str(_p.behavior_params()["wake_hour"]), \
         f"wake 任务异常：{wake_fields}"
+    # v0.103 批 1：noon/random_chat/nudge 三个无理由定时通道已删，不能再有这些 job
+    for gone in ("noon", "random_chat", "nudge"):
+        assert sch.get_job(gone) is None, f"{gone} 任务该被删掉，还留着：{sch.get_job(gone)}"
+    # 新增的念头驱动 tick 该在（分享冲动 + 日历）
+    assert sch.get_job("share_impulse") is not None, "分享冲动 tick 没挂上"
+    assert sch.get_job("calendar") is not None, "日历 tick 没挂上"
 
-    os.environ["NOON_HOUR"] = str(old_noon)
-    import importlib
-    importlib.reload(config)
     sch.shutdown()
-    print("ok /refresh 后定时任务重排（noon/wake/random_chat）")
+    print("ok /refresh 后定时任务重排（wake/sleep 跟随人格 + 三无理由通道已删 + 念头 tick 在）")
 
 
 def test_startup_pick_friend():
@@ -125,15 +124,19 @@ def test_startup_pick_friend():
 
 
 def test_game_mode():
-    """娱乐模式：开局/结束检测、规则注入、游戏中暂停主动消息、/status 显示。"""
+    """娱乐模式：开局/结束检测、规则注入、猜方作业、45 分钟空闲过期、/status 显示。
+
+    v0.103 批 1 起：游戏**不再**拦主动消息（游戏里想到个分享 = 闲聊，很常见），
+    所以这里不再断言「游戏中暂停主动消息」。
+    """
+    import json as _json
     import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
     import db as _db
     import game
-    import guard as _guard
 
     tmp = Path(tempfile.mkdtemp())
-    # WORK_ENABLED=False：guard 的离线拦截跟「现在几点/在读不在读」耦合（约定 #10），
-    # 关掉工作系统才能稳定测游戏状态机本身的拦截逻辑
     with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
                        WORK_ENABLED=False):
         # 泛泛说"玩游戏"不开局，提到具体游戏名才开
@@ -144,11 +147,6 @@ def test_game_mode():
         # 规则注入
         inj = game.prompt_injection()
         assert "成语接龙" in inj and "规则" in inj
-        # 游戏中：主动消息全部暂停
-        ok, reason = _guard.can_send_proactive(scenario="bubble")
-        assert not ok and reason == "游戏中", f"游戏中未拦截冒泡：{ok} {reason}"
-        ok, reason = _guard.can_send_proactive(scenario="morning")
-        assert not ok and reason == "游戏中", f"游戏中未拦截问候：{ok} {reason}"
         # /status 显示游戏状态
         out = commands.handle("/status")
         assert "游戏中：成语接龙" in out, f"/status 缺游戏状态：{out}"
@@ -156,19 +154,57 @@ def test_game_mode():
         game.on_user_text("要不玩海龟汤")
         assert game.current()["game"] == "soup", "换游戏失败"
         assert "海龟汤" in game.prompt_injection()
-        # 结束游戏 → 主动消息恢复
+        # 猜方作业：soup 规则里要教 TA「对方考你时每轮只问一个是/否问题」
+        soup_rules = game.GAMES["soup"]["rules"]
+        assert "是/否" in soup_rules or "是不是" in soup_rules, "soup 缺猜方作业规则"
+        # 结束游戏
         game.on_user_text("不玩了")
         assert game.current() is None, "游戏未结束"
         assert game.prompt_injection() is None
-        ok, _ = _guard.can_send_proactive(scenario="bubble")
-        assert ok, "游戏结束后主动消息未恢复"
         # 不在游戏时说"不玩了"不应报错
         game.on_user_text("不玩了")
-        print("ok 娱乐模式（开局/换游戏/结束/主动消息暂停恢复/状态显示）")
+        print("ok 娱乐模式（开局/换游戏/猜方作业/结束/状态显示）")
 
 
-def test_session_end_and_outbox():
-    """话题结束 AI 判断（AI回复信号 + LLM判官）+ outbox 未读队列重放。"""
+def test_game_idle_expire():
+    """游戏 45 分钟空闲过期（v0.103 批 1）：空闲 = now − max(started_at, 消息表最后一条
+    消息时间)；超时清 kv（不经 stop）；有消息（含 TA 自己主动问过）就算活着。"""
+    import json as _json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import db as _db
+    import game
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       WORK_ENABLED=False, GAME_IDLE_EXPIRE_MINUTES=45):
+        # 开局，但 started_at 是 1 小时前、又没有消息 → 过期
+        game.start("soup")
+        _db.set_kv("game_state", _json.dumps({
+            "game": "soup",
+            "started_at": (_dt.now() - _td(minutes=60)).isoformat(timespec="seconds"),
+        }, ensure_ascii=False))
+        assert game.current() is None, "空闲超 45 分钟该自动过期"
+        assert _db.get_kv("game_state") == "", "过期该直接清 kv"
+
+        # 有最后一条消息（1 小时前开局，但 10 分钟前有消息）→ 还活着
+        game.start("soup")
+        _db.set_kv("game_state", _json.dumps({
+            "game": "soup",
+            "started_at": (_dt.now() - _td(minutes=60)).isoformat(timespec="seconds"),
+        }, ensure_ascii=False))
+        _db.add_message("user", "是不是跟水有关？")
+        # 把消息时间改回 10 分钟前（add_message 用 now，直接改库）
+        with _db._conn() as c:
+            c.execute("UPDATE messages SET ts=? WHERE id=(SELECT MAX(id) FROM messages)",
+                      ((_dt.now() - _td(minutes=10)).isoformat(timespec="seconds"),))
+        assert game.current() is not None, "最近有消息不该过期（还活着）"
+        print("ok 游戏空闲过期（超时清 kv + 有消息即存活）")
+
+
+def test_outbox_replay():
+    """outbox 未读队列：主动消息攒着，用户回来（启动/开口）时重放并清空。"""
     import json as _json
     import tempfile
     import db as _db
@@ -187,32 +223,13 @@ def test_session_end_and_outbox():
     real_chat = _llm.chat
     real_extract = _memory.extract_async
     _memory.extract_async = lambda: None  # 测试不碰真实 LLM
-    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db"):
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       WORK_ENABLED=False):
         try:
             ch = DummyChannel()
             engine = Engine(ch)
 
-            # 1) AI 回复自带结束信号 → 会话关闭（不轻催）
-            _db.set_kv("session_open", "1")
-            _llm.chat = lambda *a, **k: "晚安啦，好梦"
-            engine._generate_reply(["我要睡了"])
-            assert _db.get_kv("session_open") == "0", "AI 回复含晚安未关闭会话"
-
-            # 2) LLM 判官：关键词都没抓住时由模型判
-            _db.set_kv("session_open", "1")
-            _llm.chat = lambda *a, **k: "是"
-            assert engine._judge_session_end(["那我先走啦"], "嗯嗯，去吧！") is True
-            assert _db.get_kv("session_open") == "0", "LLM 判官未关闭会话"
-            _db.set_kv("session_open", "1")
-            _llm.chat = lambda *a, **k: "否"
-            assert engine._judge_session_end(["等下我有个问题"], "你说") is False
-            assert _db.get_kv("session_open") == "1", "LLM 判官误关会话"
-            # LLM 不可用/乱答 → 不动会话
-            _llm.chat = lambda *a, **k: "（stub：还没配 key）"
-            assert engine._judge_session_end(["哈哈"], "哈哈") is False
-            assert _db.get_kv("session_open") == "1"
-
-            # 3) outbox 未读队列：主动消息攒着，用户回来时重放并清空
+            # outbox 未读队列：主动消息攒着，用户回来时重放并清空
             _llm.chat = lambda *a, **k: "（test）"
             engine._send("冒个泡～", kind="proactive")
             engine._send("中午吃了没", kind="proactive")
@@ -237,7 +254,7 @@ def test_session_end_and_outbox():
             ch.sent.clear()
             engine.on_user_message("在吗")
             assert not any("条留言" in s for s in ch.sent), "空队列也重放了"
-            print("ok 话题结束 AI 判断 + outbox 未读队列重放")
+            print("ok outbox 未读队列重放")
         finally:
             engine.stop()  # 停掉后台回复线程，别让它拿真实 llm.chat 调 API 卡住 PATH_LOCK
             _llm.chat = real_chat
@@ -268,7 +285,6 @@ def test_typing_indicator():
 
             ch = Ch()
             eng = Engine(ch)
-            eng._judge_session_end = lambda *a, **k: None
             real_chat = _mem.llm.chat
             real_extract = _mem.extract_async
             _mem.llm.chat = lambda *a, **k: "好呀好呀\n就这么说定了"
@@ -337,7 +353,6 @@ def test_interrupt_detection():
             config.TYPING_MAX_SECONDS = 1.0
             ch = Ch()
             eng = Engine(ch)
-            eng._judge_session_end = lambda *a, **k: None
             # 按内容应答而非调用顺序——早期测试的判官线程可能晚触发，偷走按序 mock 的回复
             def fake_chat1(messages, **k):
                 last = messages[-1]["content"]
@@ -366,7 +381,6 @@ def test_interrupt_detection():
             config.SEND_SECONDS_PER_CHAR = 0.01
             ch2 = Ch()
             eng2 = Engine(ch2)
-            eng2._judge_session_end = lambda *a, **k: None
             def fake_chat2(messages, **k):
                 last = messages[-1]["content"]
                 if "停一下我插句嘴" in last:
@@ -1012,7 +1026,6 @@ def test_inner_monologue():
         try:
             ch = Ch()
             eng = _core.Engine(ch)
-            eng._judge_session_end = lambda *a, **k: None
             import memory as _mem
             real_extract = _mem.extract_async
             _mem.extract_async = lambda *a, **k: None
@@ -1043,7 +1056,6 @@ def test_inner_monologue():
             # 独白层崩掉 → 必须退化成单层，话还得说出来
             ch2 = Ch()
             eng2 = _core.Engine(ch2)
-            eng2._judge_session_end = lambda *a, **k: None
             _mem.extract_async = lambda *a, **k: None
             _llm.chat = lambda messages, temperature=0.8, max_tokens=0, **k: (
                 _raise_llm() if "内心独白环节" in "\n".join(

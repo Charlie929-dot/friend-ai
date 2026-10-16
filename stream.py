@@ -85,6 +85,20 @@ def note_phase(phase: str, text: str, now: datetime | None = None) -> int:
     return append(phase, text, now)
 
 
+def note_impulse(text: str, now: datetime | None = None) -> int:
+    """分享冲动（v0.103 批 2）：读到触动/刷到好东西的当时就想聊。
+
+    做两件事：①把念头注入意识流（留存，下次回复/早晚安开口还会浮出，guard 拦住或
+    LLM 不可用也不丢）；②置一个待开口标记（`core.check_share_impulse` 每分钟看一次，
+    当日预算内主动开口，预算尽只作念头）。返回追加的意识流 id（0=没写）。
+    """
+    text = (text or "").strip()
+    if not text or not config.SHARE_IMPULSE_ENABLED:
+        return 0
+    db.set_kv("share_impulse_pending", "1")
+    return append("impulse", f"突然想跟TA分享点什么：{text}", now)
+
+
 def status_line(now: datetime | None = None) -> dict:
     """当前状态行（此刻的我）：phase/money/energy/mood。
     关闭工作系统或睡着时返回空 dict（没有"自己的日子"就无从谈意识）。"""

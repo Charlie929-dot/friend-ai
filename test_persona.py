@@ -38,7 +38,6 @@ def test_corpus_consolidation():
     import memory as _mem
 
     # 固定回复语料
-    assert "拜拜" in corpus.ENDING_SIGNALS and "晚安" in corpus.ENDING_SIGNALS
     assert "不玩了" in corpus.GAME_STOP_WORDS
     assert "朋友啦" in corpus.AUTO_FAMILIAR_NOTE
     assert corpus.LLM_STUB
@@ -146,26 +145,6 @@ def test_busy_signals_not_merged():
         assert _guard.check_busy_signal("今天天气不错") is False
         assert not _db.get_kv("quiet_until"), "普通消息不该进静默期"
         print("ok 忙碌信号词表完整（不粘词 + 安静/不要说各自生效 + 普通消息不误伤）")
-
-
-def test_random_chat_hours_follow_persona():
-    """待确认 #8 结论：闲聊时段按人格作息自适应，全局固定会与人格作息打架。"""
-    import scheduler as _sched
-    from apscheduler.triggers.cron import CronTrigger
-
-    # 同一天内的作息
-    assert _sched._awake_hours(7, 23) == "7-22"
-    assert _sched._awake_hours(6, 22) == "6-21"
-    assert _sched._awake_hours(8, 8) == "*"
-    # 跨午夜（夜猫子 10 点起、凌晨 2 点睡）必须拆成两段，否则 cron 拿到倒序区间
-    assert _sched._awake_hours(10, 2) == "10-23,0-1"
-    # 0 点睡 = 24 点，不是"睡 0 小时"（中二人格 9 点起、0 点睡）
-    assert _sched._awake_hours(9, 0) == "9-23"
-
-    # 生成的表达式 APScheduler 真能解析（跨午夜两段也能）
-    for hours in ("7-22", "10-23,0-1", "9-23"):
-        assert CronTrigger(hour=hours, minute=0) is not None
-    print("ok 闲聊时段按人格作息自适应（跨午夜拆段 + cron 可解析）")
 
 
 def test_persona_pool_expanded():

@@ -5,12 +5,15 @@
   游戏过程本身不硬编码，规则全部写进 prompt，由 LLM 按规则陪玩。
 - 触发：用户消息里提到具体游戏名（"玩成语接龙""来局海龟汤"）→ 开局；
   说"不玩了/结束游戏"→ 结束。泛泛说"玩游戏"不触发（AI 会自然接话商量玩啥）。
-- 游戏进行中：guard 拦截一切主动消息（冒泡/问候/轻催），结束后自动恢复；
+- 游戏进行中：不拦主动消息（v0.103 批 1 起，游戏里想到个分享 = 闲聊，很常见）；
   作息状态切换（入睡/醒来）不受影响——该睡还是睡。
+- 空闲过期：45 分钟没任何消息（含 TA 自己主动问过一句也算活着）自动清局，
+  防陈年规则注入每条回复（卫生问题，不是状态机）。
 """
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import config
 import corpus
 import db
 
@@ -34,6 +37,9 @@ GAMES = {
             "（汤面+汤底都要心里有数，选定就别改，前后不能矛盾），然后只告诉TA汤面。"
             "TA可以提问，你只回答「是」「不是」「不重要」「部分是」，问题太偏可以给小提示。"
             "TA猜出关键真相（汤底）就揭晓完整答案并夸TA。如果TA想换你猜，也可以换角色。"
+            "轮到TA考你（TA出题你猜）时，你要按猜方作业来：每轮只问一个「是/否」问题，"
+            "问完就停下来等TA回答，别连珠炮、别自问自答，也别急着亮答案——"
+            "一步一步猜，角色可互换、谁出题谁答「是/不是」。"
             "回复保持平时的简短口语化风格。"
         ),
     },
@@ -42,14 +48,38 @@ GAMES = {
 # 结束游戏的信号（在 corpus.GAME_STOP_WORDS 统一维护）
 
 def current() -> dict | None:
-    """当前游戏状态（{"game": key, "started_at": iso}），没在玩返回 None。"""
+    """当前游戏状态（{"game": key, "started_at": iso}），没在玩返回 None。
+
+    带空闲过期（v0.103 批 1）：空闲 = now − max(started_at, 消息表最后一条消息时间)，
+    超过 `GAME_IDLE_EXPIRE_MINUTES` 直接清 kv（**不经 `stop()`**——`stop()` 会递归
+    调 `current()` 套娃，审查已踩明的坑）。
+    """
     raw = db.get_kv("game_state")
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        g = json.loads(raw)
     except ValueError:
         return None
+    if not isinstance(g, dict) or not g.get("game"):
+        return None
+    # 空闲过期：任何一方（含 TA 自己主动问过一句）都算这局还活着
+    last_active = None
+    try:
+        started = datetime.fromisoformat(g.get("started_at", ""))
+    except (ValueError, TypeError):
+        started = None
+    last_msg = db.last_message_time()
+    try:
+        last_active = datetime.fromisoformat(last_msg) if last_msg else started
+    except (ValueError, TypeError):
+        last_active = started
+    if not last_active:
+        return g          # 没有 started_at 也没消息，无法判断，先按在玩处理
+    if datetime.now() - last_active > timedelta(minutes=config.GAME_IDLE_EXPIRE_MINUTES):
+        db.set_kv("game_state", "")     # 直接清，不经 stop()（防套娃递归）
+        return None
+    return g
 
 
 def start(key: str) -> None:

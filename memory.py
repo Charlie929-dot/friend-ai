@@ -60,6 +60,14 @@ when 必须是完整的绝对时刻：参照【现在时间】把"12点""今晚1
 只有你亲口答应、要在具体时刻做的事才加 care；对方自己的计划（"我明天要考试"）
 不是你的承诺，不要加 care。加 care 时这条记忆的 content 就写这句承诺本身。
 
+【日历——确定时间的事】对方或你自己提到的、有**明确日期**的计划/任务/日程——比如
+对方说"我明天晚上要ppt汇报""下周五交论文"，或你自己安排"我明天要读完第三章"——
+这类有确定时间的事，给这条记忆额外加一项 "calendar"：
+  "calendar": {"what": "对方明天晚上要ppt汇报", "when": "YYYY-MM-DD HH:MM", "kind": "plan"}
+when 必须是完整的绝对时刻（没精确到时刻的用当天 09:00 占位）；kind 取「plan」
+（对方的计划）或「task」（你自己的任务）。只有确定日期的事才加 calendar，没有
+明确时间的一次性闲聊别加。
+
 【类别说明】这些类别可以描述任何一个人——你自己、对方、或提到的别人。
 画像=某个人是谁（称呼/城市/身份）；偏好=喜欢/讨厌；计划=打算做的事；
 事件=已经发生的事；人际=某个人与别人的关系；情绪=状态与感受。
@@ -261,6 +269,14 @@ def _apply(item: dict, assistant_tail: bool = False, evidence: str = "") -> bool
             db.add_memory(f"我答应过：{care['what']}（{when_norm[5:16]}）",
                           "计划", "", when_norm[:10], "", "", "")
             print(f"[memory] 记住承诺：{care['what']} @{when_norm}")
+
+    # 日历（v0.103 批 3）：确定时间的计划/任务/日程 → 存日历项（临期念头驱动开口）
+    cal = item.get("calendar")
+    if isinstance(cal, dict) and cal.get("what") and cal.get("when"):
+        import events
+        when_norm = events.add_calendar(cal["what"], cal["when"], cal.get("kind", "plan"))
+        if when_norm:
+            print(f"[memory] 记住日历：{cal['what']} @{when_norm}")
 
     # A/B 两级库：带 long+full 的是"一句两句说不完"的长内容——摘要进 A 库
     # （memories，召回只看它），全文进 B 库（long_memories），A 库带 long_id 伪链接

@@ -315,7 +315,7 @@ def test_browse_topic_ammo():
         _db.set_kv("work_shareables", json.dumps([]))       # 素材池空 → 隔离 50% 那支
 
         def _ammo() -> str:
-            msgs = _ctx.build_proactive_messages("AWAKE", "random")
+            msgs = _ctx.build_proactive_messages("AWAKE", "impulse")
             return msgs[-1]["content"] if msgs else ""
 
         # 只放「刷到的」→ 命中它，且携带 id 落 kv
@@ -363,7 +363,7 @@ def test_browse_topic_ammo():
                            WORK_ENABLED=False, BROWSE_ENABLED=False, TODOS_ENABLED=False,
                            SELF_MEMORY_ENABLED=False, INTEREST_PROMOTE_ENABLED=False,
                            CONSCIOUS_STREAM_ENABLED=False):
-            assert _ctx.build_proactive_messages("AWAKE", "random") is None, \
+            assert _ctx.build_proactive_messages("AWAKE", "impulse") is None, \
                 "无弹药却生成了主动消息（会空转发）"
     print("ok 主动弹药六源全序（素材→刷到的→待办→承诺→兴趣→旧记忆 + 打勾不重复 + 无弹药不发）")
 

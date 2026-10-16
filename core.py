@@ -217,12 +217,6 @@ class Engine:
         if long_note:
             self._send(corpus.pick(corpus.LONG_TEXT_NOTES, "long_note"), kind="chat")
 
-        # 会话级时间观：判断这段会话是继续还是告一段落
-        if any(s in text for s in corpus.ENDING_SIGNALS):
-            db.set_kv("session_open", "0")      # 道别了，不催
-        else:
-            db.set_kv("session_open", "1")      # 会话进行中，启动等待计时
-            self._reset_nudge_timer()
         return mid
 
     # --- 后台回复线程：读完才回，回完这段再处理新攒的消息 ---
@@ -305,7 +299,6 @@ class Engine:
             if typing_fn:
                 typing_fn()
             _time.sleep(duration)
-        interrupted = False
         for i, seg in enumerate(segments):
             if i > 0:
                 # v0.89 §7①：间隔取决于**下一句**多长（真人是打完这句再发这句，
@@ -315,7 +308,6 @@ class Engine:
             # 插话检测（发送前最后一刻检查）：TA 打字/连发期间你又说话了——
             # 停发剩余段，先听你说（不再补发"你说，我听着"这类让步语——用户明确不要）
             if self._interrupted():
-                interrupted = True
                 break
             self._send(seg, kind="chat")
 
@@ -333,17 +325,6 @@ class Engine:
             if config.TODOS_ENABLED:
                 for t in todos.mark_done(said):
                     print(f"[待办] 打勾：{t[:30]}")
-
-        # 话题结束判断：AI 自己的回复带结束信号 → 直接关闭会话（不轻催）；
-        # 关键词都没抓住时，让 AI 异步判一下这段聊天是不是自然结束了。
-        # 被打断（插话）说明聊天正酣，跳过收尾判断。
-        if interrupted:
-            pass
-        elif any(s in reply for s in corpus.ENDING_SIGNALS):
-            db.set_kv("session_open", "0")
-        else:
-            threading.Thread(target=self._judge_locked,
-                             args=(batch, reply), daemon=True).start()
 
         memory.extract_async()  # 后台提取这段对话里值得记住的事
         self.check_auto_familiar()
@@ -423,30 +404,6 @@ class Engine:
         v0.94 §3.1：分流与工具循环已收拢到 tools（工具层纯机制），这里只做一行转发。"""
         return tools.run_reply(messages, batch)
 
-    def _judge_locked(self, batch: list[str], reply: str) -> None:
-        with db.PATH_LOCK:  # 与切换朋友互斥
-            self._judge_session_end(batch, reply)
-
-    # --- 话题结束的 AI 判官：关键词没抓住的收尾由模型判断 ---
-    def _judge_session_end(self, batch: list[str], reply: str) -> bool:
-        """这段聊天自然结束了吗？结束了关闭会话（不再轻催）。返回是否判定结束。"""
-        if db.get_kv("session_open", "1") != "1":
-            return False  # 已经关了（用户关键词或 AI 回复命中）
-        convo = "\n".join(f"用户：{x}" for x in batch) + f"\n{persona.friend_name()}：{reply}"
-        try:
-            ans = llm.chat([
-                {"role": "system", "content": (
-                    "判断这段聊天是否已经自然结束（一方道别、说去忙/去睡、"
-                    "对话收尾双方都不期待继续）。只回答一个字：是 或 否。")},
-                {"role": "user", "content": convo},
-            ], temperature=0.1, thinking=False)   # 短回执（是/否）：关思考省 token
-        except llm.LLMUnavailable:
-            return False
-        if ans.strip().startswith("是"):
-            db.set_kv("session_open", "0")
-            return True
-        return False
-
     # --- 未读留言队列：用户不在时主动消息攒着，回来时重放（按朋友隔离） ---
     def _flush_outbox(self) -> None:
         items = take_outbox()
@@ -518,7 +475,7 @@ class Engine:
         if reply is None:
             prompt = context.build_proactive_messages(state, scenario)
             if prompt is None:
-                # v0.89 §6：random 场景没有真实弹药就不发（旧行为是让 LLM 自由发挥
+                # v0.103：impulse 场景没有真实弹药就不发（旧行为是让 LLM 自由发挥
                 # 编一个"我刚刷手机看到…"，于是出现连发几条都跟事实对不上的情况）
                 print(f"[proactive:{scenario}] 没有真实的事可说，这次不发")
                 _clear_carried_ids()
@@ -535,6 +492,8 @@ class Engine:
             self._reset_bubble_timer()
         else:
             db.incr_counter("proactive_count")
+            if scenario == "impulse":
+                db.incr_counter("share_impulse_count")
         db.incr_counter("unanswered_proactive")
         # 分段连发：主动消息没走 _generate_reply 的分段，LLM 会用换行把两段话并成一条
         # （如"热粥"+"《左传》"黏一起）。按换行拆开逐条发，像真人连发几条；
@@ -577,28 +536,20 @@ class Engine:
             import scheduler as sched_mod
             sched_mod.reschedule_all(self.sched, self)
 
-    # --- 会话级等待：聊到一半对方没声了，10-20 分钟后可能轻催一下 ---
-    def _reset_nudge_timer(self) -> None:
-        delay = random.randint(config.NUDGE_IDLE_MIN_MINUTES,
-                               config.NUDGE_IDLE_MAX_MINUTES)
-        db.set_kv("next_nudge_at",
-                  (datetime.now() + timedelta(minutes=delay)).isoformat(timespec="seconds"))
-        db.set_kv("nudged", "0")
+    # --- 分享冲动（v0.103 批 2「念头驱动」）：素材产出/刷到好东西时置的待开口标记 ---
+    def check_share_impulse(self) -> None:
+        """调度器每分钟调用：有分享念头待开口、且当日预算内 → 主动开口。
 
-    def check_nudge(self) -> None:
-        """调度器每分钟调用：会话开着 + 等到点了 → 轻催（每次沉默最多一次）。"""
-        if db.get_state() == "SLEEPING":
+        预算尽只留念头（念头已在意识流里，早/晚安或下次回复会自然浮出）。
+        """
+        if not config.SHARE_IMPULSE_ENABLED:
             return
-        if db.get_kv("session_open", "0") != "1":
+        if db.get_kv("share_impulse_pending") != "1":
             return
-        if db.get_kv("nudged", "0") == "1":
+        db.set_kv("share_impulse_pending", "")
+        if db.get_counter("share_impulse_count") >= config.SHARE_IMPULSE_DAILY_LIMIT:
             return
-        next_at = db.get_kv("next_nudge_at")
-        if not next_at or datetime.now() < datetime.fromisoformat(next_at):
-            return
-        if random.random() < config.NUDGE_PROBABILITY:
-            self.proactive("nudge")
-        db.set_kv("nudged", "1")  # 不管这次催没催，这段沉默只等一回
+        self.proactive("impulse")
 
     def check_bubble(self) -> None:
         """调度器每分钟调用：初见阶段 + 到了冒泡时间 → 冒泡。"""

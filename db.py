@@ -243,6 +243,17 @@ def add_message(role: str, content: str, kind: str = "chat", quote: dict | None 
         return int(cur.lastrowid or 0)
 
 
+def last_message_time() -> str | None:
+    """消息表里最后一条消息的时间（ISO 字符串），没有消息返回 None。
+
+    供游戏空闲过期用（v0.103 批 1）：空闲 = now − max(started_at, 最后一条消息时间)，
+    任何一方（含 TA 自己主动问过一句）都算这局还活着。
+    """
+    with _conn() as c:
+        row = c.execute("SELECT ts FROM messages ORDER BY id DESC LIMIT 1").fetchone()
+        return row["ts"] if row else None
+
+
 def delete_message(msg_id: int) -> dict | None:
     """撤回一条消息：只允许撤回对方自己发的（role='user'），返回被删消息
     {id, role, content} 供上层记意识流；没有这条 / 不是 user 消息返回 None。"""

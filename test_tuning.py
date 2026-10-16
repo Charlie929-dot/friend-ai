@@ -55,7 +55,7 @@ def test_tuning_panel():
     assert _raises("READING_DAILY_CHARS", "abc"), "非整数没被拒"
     assert _raises("BUBBLE_FIXED_PROB", "x"), "非数字没被拒"
     assert _raises("COST_R_FLOW", "5"), "越界（>max）没被拒"
-    assert _raises("NUDGE_PROBABILITY", "1.5"), "概率越界没被拒"
+    assert _raises("BUBBLE_FIXED_PROB", "1.5"), "概率越界没被拒"
     assert _raises("NO_SUCH_KEY", "1"), "未登记键没被拒"
 
     # time 类型的校验（面板里已无 time 键——SCHED_* 整族随 v0.89 退役，

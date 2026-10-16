@@ -317,12 +317,13 @@ def _sleepy_hint() -> str:
 
 PROACTIVE_SCENARIOS = {
     "morning": "现在是早上，你刚醒，主动跟TA道早安。可以提提今天的天气/日期，或你打算读点什么，别每次都是同一句话。",
-    "noon": "现在是中午，你主动跟TA聊两句，比如问吃午饭了没。想分享点什么的话，只能分享你手上真有的（正在读的、聊到一半的、真的刷到了的）；没有就只问候一句，别硬编一个。",
     "night": "现在是晚上，你要去睡了，主动跟TA道晚安。温柔一点。",
-    # v0.89 §6：删掉"刷手机看到的东西"——它等于邀请模型编造一个不存在的场景
-    "random": "你想TA了，主动开启一个话题。话题只能从你的真实生活里来——正在读的书、聊到一半的事；别编造听歌/做饭/出门/逛店这类你并没有在做的场景。",
     "bubble": "你们刚认识，你想冒个泡刷下存在感。发一条**很短**的消息：一句'在干啥呀'之类的，或者干脆只发一个无厘头的颜文字/表情。千万别每次都用同一个。",
-    "nudge": "你们刚才正在聊天，TA说着说着突然没动静了，你等了好一会儿。发一句**很短**的等回复式的话，比如'人咧？''去忙啦？''喂喂'，或者只发个表情。别质问、别委屈，轻松一点。",
+    # v0.103 批 2「念头驱动」：开口必须有理由——分享冲动（素材产出/刷到好东西）
+    # 或临期日历项（挂念/了解近况）。具体内容由 context._inject_impulse_material 注入。
+    "impulse": "你刚冒出一个想跟TA分享的念头。话题只能从你的真实经历里来——正在读的书、聊到一半的事、真的刷到的、真的想到的；别编造听歌/做饭/出门/逛店这类你并没有在做的场景。",
+    # v0.103 批 3：临期日历项到点了，TA 挂念这件事（了解近况 + 提醒，不是闹钟式推送）。
+    "calendar": "你心里惦记着TA的一件事（上面注入的是具体内容）。用你自己的话自然地开口关心一下——问问进展、表示你在记着，别像闹钟一样生硬地提醒。",
 }
 
 NEW_STAGE_HINT = (
@@ -565,7 +566,7 @@ def utterance_instruction(monologue: str) -> str:
 
 def build_proactive_prompt(state: str, scenario: str) -> list[dict]:
     """构造一条主动消息的对话请求。scenario 见 PROACTIVE_SCENARIOS。"""
-    scene = PROACTIVE_SCENARIOS.get(scenario, PROACTIVE_SCENARIOS["random"])
+    scene = PROACTIVE_SCENARIOS.get(scenario) or PROACTIVE_SCENARIOS["impulse"]
     return [
         {"role": "system", "content": build_system_prompt(state)},
         {"role": "user", "content": f"（内心活动，不用回复这句话本身）{scene}现在给TA发一条消息。"},

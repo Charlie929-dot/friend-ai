@@ -192,13 +192,13 @@ def test_proactive_guard_and_energy_rest():
 
         # 1. guard：会话进行中（离线专注）拦闲聊类主动消息；早安/晚安是作息锚点不拦
         mid = _dt.fromisoformat(units[0]["start"]) + _td(minutes=10)
-        ok, reason = _guard.can_send_proactive(now=mid, scenario="random")
+        ok, reason = _guard.can_send_proactive(now=mid, scenario="impulse")
         assert not ok and "离线" in reason, f"专注时该拦主动闲聊：{ok} {reason}"
         ok, _ = _guard.can_send_proactive(now=mid, scenario="night")
         assert ok, "晚安是作息锚点事件，不该被离线拦截"
         # 休息相位不拦——这就是天然口子：歇着的时候照常说话
         ok, _ = _guard.can_send_proactive(
-            now=_dt.fromisoformat(units[0]["end"]) + _td(minutes=1), scenario="random")
+            now=_dt.fromisoformat(units[0]["end"]) + _td(minutes=1), scenario="impulse")
         assert ok, "休息相位不该拦（歇着的时候照常说话）"
 
         # 2. 精力歇点：歇点 90 → 之后每次开工精力都该补回「歇点 + 一段消耗」（封顶上限）
@@ -458,6 +458,80 @@ def test_care_events():
         print("ok 关怀事件（承诺提取/幂等/醒着提醒/睡着醒来补/过期错过）")
 
 
+def test_calendar_events():
+    """日历（v0.103 批 3）：临期多触点 + 聊过取消 + 准备状态 + 年重复 + 触点触发念头。"""
+    import json
+    import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
+    import db as _db
+    import events as _ev
+    import stream as _stream
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       CALENDAR_ENABLED=True, CONSCIOUS_STREAM_ENABLED=True):
+        now = _dt.now()
+        # 1) 非年重复：未来才存、同 what 幂等、算好 next_touch
+        when = _ev.add_calendar("小徐明天晚上要ppt汇报",
+                                (now + _td(days=2)).strftime("%Y-%m-%d %H:%M"), kind="plan")
+        assert when, "未来日历项该存"
+        assert _ev.add_calendar("小徐明天晚上要ppt汇报",
+                                (now + _td(days=3)).strftime("%Y-%m-%d %H:%M")) is None, "同 what 应幂等"
+        ev = _ev.pending_calendar()[0]
+        assert ev["next_touch"], "该算出 next_touch"
+
+        # 2) 准备状态随对话更新
+        assert _ev.set_prepare("小徐明天晚上要ppt汇报", "在做了") is True
+        assert _ev.pending_calendar()[0]["prepare"] == "在做了"
+
+        # 3) 聊过取消：清 next_touch（近期不再重复提醒）
+        assert _ev.mark_talked("小徐明天晚上要ppt汇报") is True
+        ev2 = _ev.pending_calendar()[0]
+        assert ev2["talked"] == 1 and not ev2["next_touch"], "聊过该取消近期提醒"
+
+        # 4) 年重复：MM-DD 生成今年/明年事件
+        _ev.add_calendar("国庆节", "10-01", kind="holiday", annual=True)
+        ann = [e for e in _ev.calendar_events() if e["what"] == "国庆节"]
+        assert ann and ann[0]["annual"] is True and ann[0]["month"] == 10 and ann[0]["day"] == 1
+
+        # 5) 触点到期 → 注入念头 + 触发 proactive("calendar")
+        _db.set_kv("calendar_events", json.dumps([{
+            "what": "周五交论文", "when": (now + _td(hours=2)).strftime("%Y-%m-%d %H:%M"),
+            "kind": "plan", "prepare": "", "status": "pending", "annual": False,
+            "talked": 0, "next_touch": (now - _td(minutes=1)).isoformat(timespec="seconds"),
+            "created_at": now.isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        calls = []
+        engine = types.SimpleNamespace(proactive=lambda sc: (calls.append(sc) or True))
+        _db.set_state("AWAKE")
+        _ev.calendar_tick(engine)
+        assert "calendar" in calls, f"触点到期该触发 calendar 开口：{calls}"
+        lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "calendar"]
+        assert any("周五交论文" in t for t in lines), f"触点到期该往意识流注入念头：{lines}"
+
+        # 6) 聊过取消（talked）后不再触
+        _db.set_kv("calendar_events", json.dumps([{
+            "what": "已经聊过的事", "when": (now + _td(hours=2)).strftime("%Y-%m-%d %H:%M"),
+            "kind": "plan", "prepare": "", "status": "pending", "annual": False,
+            "talked": 1, "next_touch": (now - _td(minutes=1)).isoformat(timespec="seconds"),
+            "created_at": now.isoformat(timespec="seconds"),
+        }], ensure_ascii=False))
+        calls.clear()
+        _ev.calendar_tick(engine)
+        assert not calls, "聊过取消后不该再触"
+
+        # 7) 生日年重复：从 profile 的「生日」字段自动生成年事件
+        _db.set_kv("profile_locked", "1")
+        _db.set_kv("profile_text", "生日：03-15\n城市：上海")
+        assert _ev.ensure_birthday(now) is not None
+        bday = [e for e in _ev.calendar_events() if e["what"] == "TA的生日"]
+        assert bday and bday[0]["annual"] and bday[0]["month"] == 3 and bday[0]["day"] == 15, \
+            f"生日该生成年重复事件：{bday}"
+
+        print("ok 日历（临期触点/聊过取消/准备状态/年重复/触点触发念头）")
+
+
 def test_interruption_cost():
     """S3 招牌：打断成本 = R(phase 阻力) × (1+F(精力疲劳)) → welcomed/tolerated/costly。"""
     import json
@@ -596,11 +670,11 @@ def test_material_share_injection():
         # 50% 概率翻素材（有素材必翻）；循环多次必然命中
         seen = False
         for _ in range(40):
-            msgs = _ctx.build_proactive_messages("AWAKE", "random")
+            msgs = _ctx.build_proactive_messages("AWAKE", "impulse")
             if msgs and "也无风雨也无晴" in msgs[-1]["content"]:
                 seen = True
                 break
-        assert seen, "random 场景没翻到素材当话题"
+        assert seen, "impulse 场景没翻到素材当话题"
 
         # 翻过的素材标记 used，不会再被取到
         fresh = [x for x in _life._shareables() if not x.get("used")]
@@ -609,9 +683,9 @@ def test_material_share_injection():
         # §6 无弹药不发：五源皆空 → build_proactive_messages 返回 None
         # （core 据此不调 LLM、不发——旧实现会让 LLM 自由发挥编环境）
         _db.set_kv("work_shareables", json.dumps([]))
-        assert _ctx.build_proactive_messages("AWAKE", "random") is None, \
+        assert _ctx.build_proactive_messages("AWAKE", "impulse") is None, \
             "没有话题弹药就不该生成主动消息"
-        print("ok 素材主动分享（random 翻读后感想当话题 + 翻过即消费 + 无弹药不发）")
+        print("ok 素材主动分享（impulse 翻读后感想当话题 + 翻过即消费 + 无弹药不发）")
 
 
 def test_todos():
