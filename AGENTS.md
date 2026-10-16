@@ -41,31 +41,14 @@
 
 ---
 
-## 〇、服务器同步工作流（自用阶段服务端跑服务器）
+## 〇、服务器同步（改完代码必做）
 
-用户已把服务端部署到自己的服务器（腾讯云 ubuntu@150.158.147.51，密钥 `~/.ssh/tunnel_key`，代码目录 `/opt/friend-ai`，systemd 服务 `friend-ai`，网页 <https://derp.charlie2kabu.xyz:8443/>）。**改完代码必须同步到服务器**，本机只留开发副本。
+服务器：腾讯云 `ubuntu@150.158.147.51`（密钥 `~/.ssh/tunnel_key`），代码目录 `/opt/friend-ai`，systemd 服务 `friend-ai`，网页 https://derp.charlie2kabu.xyz:8443/。**本机只留开发副本**。
 
-- **同步命令**：`bash sync-to-server.sh`。流程 = ①检查未提交改动 → ②双推 GitHub+Gitee → ③服务器从 Gitee 拉 → ④装依赖+重启 → ⑤自检（HEAD + `GET /login`）。
-- ⚠️ **Windows 本机**：`bash` 走 WSL——默认发行版曾是 docker-desktop（无 `/bin/bash`，报 `execvpe(/bin/bash) failed`），**已修（2026-10-16）：`wsl --set-default Ubuntu`**，`bash sync-to-server.sh` 恢复可用。`sync-to-server.cmd` 保留：显式走 Git Bash，不依赖 WSL 默认发行版配置。
-- ⚠️ **必须先加载令牌**：脚本要 `GH_TOKEN` / `GITEE_TOKEN`（在 `~/.bash_profile`）。非交互 shell 不自动 source，直接跑会「跳过双推」、服务器拉不到代码。所以完整命令是：
-  ```bash
-  source ~/.bash_profile && bash sync-to-server.sh
-  ```
-- **数据库以服务器为准**：服务器 `friend.db` 是线上聊天记录的唯一真相。本地库只作开发调试，别拿本地库覆盖服务器。
-- **embedding 模型同步**：语义召回模型（bge-small-zh-v1.5 ONNX，约 100MB）**不进 git**。⚠️ 服务器（腾讯云）连 hf-mirror 不通（curl 超时），所以走「**本机下载 → scp 上传**」——`sync-to-server.sh` 第 4 步会自动 scp（服务器没有 model.onnx 时才传）。本机首次下载（换电脑/新 clone 时跑一次）：
-  ```bash
-  mkdir -p models/bge-small-zh-v1.5 && cd models/bge-small-zh-v1.5
-  curl -sL -o model.onnx https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model.onnx
-  curl -sL -o config.json https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/config.json
-  curl -sL -o tokenizer.json https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/tokenizer.json
-  curl -sL -o vocab.txt https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/vocab.txt
-  ```
-- **服务器操作备忘**：
-  - SSH：`ssh -i ~/.ssh/tunnel_key ubuntu@150.158.147.51`
-  - 查库（服务器无 sqlite3 CLI，用 `.venv/bin/python -c "import sqlite3; ..."`）
-  - 查服务：`systemctl status friend-ai`；重启：`sudo systemctl restart friend-ai`
-  - 改 `.env` 后 `systemctl restart` 生效（`config.py` 自带 `load_dotenv`，启动时读）
-  - 备份 db：`cp friend.db friend.db.bak.<日期-时分>`（平铺在项目根，无 backups/ 目录）
+- **同步**：`source ~/.bash_profile && bash sync-to-server.sh`——先 source 加载 `GH_TOKEN`/`GITEE_TOKEN`（否则跳过双推、服务器拉不到）。流程 = 双推 GitHub+Gitee → 服务器从 Gitee 拉 → 装依赖+重启 → 自检（HEAD=本机 commit + `GET /login`→200）。Windows 用 Git Bash（`sync-to-server.cmd`），别走 WSL 的 docker-desktop 发行版。
+- **数据库以服务器为准**：服务器 `friend.db` 是线上聊天唯一真相，本地库只作调试、别覆盖服务器。
+- **embedding 模型不进 git**：`sync-to-server.sh` 自动从本机 scp 上传（服务器缺 model.onnx 才传）。换电脑先在本机下好 `models/bge-small-zh-v1.5/` 四文件（hf-mirror 的 `Xenova/bge-small-zh-v1.5`）。
+- **服务器操作**：SSH `ssh -i ~/.ssh/tunnel_key ubuntu@150.158.147.51`；查库 `.venv/bin/python -c "import sqlite3;..."`；服务 `systemctl status|restart friend-ai`；改 `.env` 后 restart 生效；备份 `cp friend.db friend.db.bak.<日期-时分>`。
 
 ---
 
