@@ -45,7 +45,7 @@
 用户已把服务端部署到自己的服务器（腾讯云 ubuntu@150.158.147.51，密钥 `~/.ssh/tunnel_key`，代码目录 `/opt/friend-ai`，systemd 服务 `friend-ai`，网页 <https://derp.charlie2kabu.xyz:8443/>）。**改完代码必须同步到服务器**，本机只留开发副本。
 
 - **同步命令**：`bash sync-to-server.sh`。流程 = ①检查未提交改动 → ②双推 GitHub+Gitee → ③服务器从 Gitee 拉 → ④装依赖+重启 → ⑤自检（HEAD + `GET /login`）。
-- ⚠️ **Windows 本机**：PATH 上的 `bash` 是坏掉的 WSL（`execvpe(/bin/bash) failed`），**别直接 `bash sync-to-server.sh`**——用仓库根的 `sync-to-server.cmd`（内部显式调 Git Bash + 自动 source 令牌），或在 Git Bash 里跑下面完整命令。
+- ⚠️ **Windows 本机**：`bash` 走 WSL——默认发行版曾是 docker-desktop（无 `/bin/bash`，报 `execvpe(/bin/bash) failed`），**已修（2026-10-16）：`wsl --set-default Ubuntu`**，`bash sync-to-server.sh` 恢复可用。`sync-to-server.cmd` 保留：显式走 Git Bash，不依赖 WSL 默认发行版配置。
 - ⚠️ **必须先加载令牌**：脚本要 `GH_TOKEN` / `GITEE_TOKEN`（在 `~/.bash_profile`）。非交互 shell 不自动 source，直接跑会「跳过双推」、服务器拉不到代码。所以完整命令是：
   ```bash
   source ~/.bash_profile && bash sync-to-server.sh
