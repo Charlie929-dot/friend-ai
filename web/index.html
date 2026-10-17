@@ -108,6 +108,11 @@
   .ol-item .ol-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%;
     background: var(--accent); opacity: .6; }
   .ol-item.user .ol-dot { background: var(--me); }
+  /* 移动端目录窗口的表头（桌面 hover 浮层用不到，默认隐藏） */
+  .ol-head { display: none; }
+  .ol-close { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 20px; line-height: 1; color: var(--muted); background: transparent; border: 0; flex: 0 0 auto; }
+  .ol-close:hover { background: var(--surface-2); color: var(--ink); }
   .ol-item .ol-txt { overflow: hidden; text-overflow: ellipsis; }
   .ol-empty { font-size: 11px; color: var(--muted); padding: 6px 2px; line-height: 1.6; }
 
@@ -368,8 +373,11 @@
   .ma-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
   .ma-btn.danger:hover { color: #e07a7a; border-color: #e07a7a; background: #f8e4e4; }
   @media (hover: none) {
-    .msg-actions { opacity: .55; pointer-events: auto; }
+    /* 触屏：消息操作默认隐藏，轻触消息才显示，避免挤在一起 */
+    .msg-actions { opacity: 0; pointer-events: none; }
     .ma-btn { width: 32px; height: 32px; }
+    .msg.show-acts { z-index: 30; }
+    .msg.show-acts .msg-actions { opacity: 1; pointer-events: auto; }
     .ctx-item { padding: 10px 12px; }
     .ctx-menu { min-width: 132px; }
   }
@@ -590,22 +598,48 @@
     .bk-row input { flex: 1 1 auto; width: auto; }
   }
 
-  /* 跳转高亮（outline 用）保持原样 */
+  /* ===== 移动端（≤640）：顶栏收拢 / 目录单独窗口 / 记忆全屏 / 输入区瘦身 ===== */
   @media (max-width: 640px) {
+    .topbar { gap: 6px; padding-left: 10px; padding-right: 10px; }
+    .icon-btn, .avatar-btn, .avatar { width: 34px; height: 34px; }
+    .avatar-btn { font-size: 12px; }
+    .friend-head { gap: 8px; }
+    .fh-name { font-size: 14px; }
+
     .outline { display: none; }
     #btnOutline { display: grid; }
     .outline.show { display: block; position: fixed; inset: 0; z-index: 72; background: rgba(20,24,18,.32); }
     .outline.show .outline-rail { display: none; }
-    .outline.show .outline-panel { position: fixed; left: 8px; right: 8px;
-      top: calc(env(safe-area-inset-top) + 70px); bottom: 8px; width: auto; max-width: none;
-      opacity: 1; pointer-events: auto; background: var(--surface); border: 1px solid var(--line);
-      border-radius: 14px; box-shadow: var(--shadow); padding: 12px; overflow-y: auto; }
+    .outline.show .ol-head { display: flex; }
+    .outline.show .outline-panel { position: fixed; left: 10px; right: 10px;
+      top: calc(env(safe-area-inset-top) + 60px); bottom: calc(10px + env(safe-area-inset-bottom));
+      width: auto; max-width: none; opacity: 1; pointer-events: auto;
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 16px; box-shadow: var(--shadow); padding: 0; overflow: hidden; }
+    .outline.show .ol-head { align-items: center; justify-content: space-between;
+      position: absolute; top: 0; left: 0; right: 0; height: 49px; padding: 0 14px;
+      border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 600; }
+    .outline.show .ol-list { position: absolute; left: 0; right: 0; top: 49px; bottom: 0;
+      overflow-y: auto; padding: 10px 10px 14px 12px; }
+
+    .bk-dialog { left: 0; top: 0; right: 0; bottom: 0; width: auto; height: auto;
+      transform: none; border-radius: 0; border: 0; max-width: none; }
+    .bk-body { padding: 10px 12px 16px; }
+    .mm-sticky { top: 0; margin: -10px -12px 0; padding: 10px 12px 0; }
+    .mm-tab { padding: 4px 9px; font-size: 11.5px; }
+    .mm-bar input { padding: 6px 9px; }
+
+    .composer-wrap { padding: 6px 10px calc(6px + env(safe-area-inset-bottom) + var(--kb, 0px)); }
+    .composer { padding: 6px 6px 6px 12px; }
+    .composer textarea { font-size: 16px; }
+    .composer-foot { padding: 4px 2px 0; }
   }
 
   @media (max-width: 520px) {
     .chat { padding: 14px 12px 6px; }
-    .composer-wrap { padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
     .bubble-row { max-width: 86%; }
+    .fh-status { display: none; }
+    .composer-foot .hint { display: none; }
   }
 
   /* ===== 调优参数面板（v0.86：L1 首屏 + L2 高级折叠，复用 .env 写回热生效） ===== */
@@ -668,7 +702,7 @@
         </div>
       </div>
       <button class="icon-btn" id="btnInsight" aria-label="洞察面板"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 16.6 5.7 21l2.3-7.2-6-4.4h7.6z"/></svg></button>
-      <button class="icon-btn" id="btnOutline" aria-label="目录" style="display:none"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
+      <button class="icon-btn" id="btnOutline" aria-label="目录"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
       <div class="menu-wrap">
         <button class="avatar-btn" id="avatarBtn" aria-label="账户">友</button>
         <div class="account-menu" id="accountMenu" style="display:none">
@@ -693,7 +727,10 @@
     <div class="main-row">
       <nav class="outline" id="outline" aria-label="聊天目录">
         <div class="outline-rail" id="outlineRail"></div>
-        <div class="outline-panel" id="outlinePanel"></div>
+        <div class="outline-panel" id="outlinePanel">
+          <div class="ol-head"><span>目录</span><button class="ol-close" id="olClose" type="button" aria-label="关闭">×</button></div>
+          <div class="ol-list" id="outlineList"></div>
+        </div>
       </nav>
       <main class="chat" id="chat"><div class="chat-inner" id="chatInner"></div></main>
     </div>
@@ -730,7 +767,7 @@
         </div>
         <div class="composer-foot">
           <label class="urgent-toggle"><input type="checkbox" id="urgent">我需要陪伴（TA 先放下手头的事）</label>
-          <span>Enter 发送 · Shift+Enter 换行</span>
+          <span class="hint">Enter 发送 · Shift+Enter 换行</span>
         </div>
       </div>
     </footer>
@@ -1472,7 +1509,7 @@ async function initialLoad(){
 /* ===== 左侧目录（markdown 式 outline，hover 展开 / 点击跳转） ===== */
 function rebuildOutline(){
   railCache = null;   // 细线/条目重建，位置缓存失效
-  const panel = $('outlinePanel'), rail = $('outlineRail');
+  const panel = $('outlineList'), rail = $('outlineRail');   // 移动端：条目写进 .ol-list（表头在其外，不被重建清掉）
   panel.innerHTML=''; rail.innerHTML='';
   const msgs = [...document.querySelectorAll('#chatInner .msg[data-mid]')];
   if(!msgs.length){ panel.innerHTML='<div class="ol-empty">还没有聊天记录，聊几句就有了。</div>'; return; }
@@ -1586,6 +1623,33 @@ document.addEventListener('click',e=>{
 $('btnOutline').onclick = () => $('outline').classList.toggle('show');
 $('outline').addEventListener('click', e => { if(!e.target.closest('.outline-panel')) $('outline').classList.remove('show'); });
 $('outlinePanel').addEventListener('click', e => { if(e.target.closest('.ol-item')) $('outline').classList.remove('show'); });
+$('olClose').onclick = () => $('outline').classList.remove('show');
+
+/* 移动端：轻触消息才显示它的操作按钮（引用/复制/撤回），平时隐藏以免挤在一起 */
+document.addEventListener('click', e=>{
+  if(!window.matchMedia('(hover: none)').matches) return;   // 只在触屏生效
+  if(e.target.closest('.msg-actions')) return;              // 点操作按钮本身不切换
+  const msg = e.target.closest('.msg');
+  if(msg && msg.dataset.mid && !selectMode){
+    document.querySelectorAll('.msg.show-acts').forEach(o=>{ if(o!==msg) o.classList.remove('show-acts'); });
+    msg.classList.toggle('show-acts');
+    return;
+  }
+  document.querySelectorAll('.msg.show-acts').forEach(o=>o.classList.remove('show-acts'));
+});
+
+/* 移动端键盘：可视视口比布局视口矮 = 键盘弹起，用 --kb 把输入区顶到键盘上方。
+   iOS 弹键盘时不缩布局视口，输入区会留在屏幕底部被键盘盖住；Android 会缩，kb≈0 不重复顶。 */
+(function(){
+  const vv = window.visualViewport; if(!vv) return;
+  const adj = ()=>{
+    const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    document.documentElement.style.setProperty('--kb', kb > 100 ? kb + 'px' : '0px');
+  };
+  vv.addEventListener('resize', adj); vv.addEventListener('scroll', adj); adj();
+})();
+/* 聚焦输入框时滚到底：键盘顶起后最后一条消息仍在可见区 */
+$('txt').addEventListener('focus', ()=> setTimeout(()=>scrollToBottom(false), 280));
 
 /* ===== 加载更早的历史 ===== */
 function updateLoadMore(){
@@ -1714,7 +1778,7 @@ async function renameFriend(idx,name){
   if(!v||!v.trim()||v.trim()===name) return;
   await runCmd('/alias '+idx+' '+v.trim(),'改名'); await loadFriends(); poll();
 }
-function resetChat(){ chat().innerHTML=''; lastId=0; lastMsgDay=''; shownIds.clear(); msgMeta.clear(); clearQuote(); if(selectMode) exitSelect(); initialDone=false; totalMessages=0; outlineDirty=false; $('outlinePanel').innerHTML=''; $('outlineRail').innerHTML=''; scrollToBottom(false); }
+function resetChat(){ chat().innerHTML=''; lastId=0; lastMsgDay=''; shownIds.clear(); msgMeta.clear(); clearQuote(); if(selectMode) exitSelect(); initialDone=false; totalMessages=0; outlineDirty=false; $('outlineList').innerHTML=''; $('outlineRail').innerHTML=''; scrollToBottom(false); }
 
 document.querySelectorAll('.btn[data-cmd]').forEach(b=>{ b.onclick=()=>runCmd(b.dataset.cmd,b.textContent); });
 $('btnGuard').onclick=()=>{ const on=$('btnGuard').classList.contains('on'); runCmd(on?'/guard off':'/guard on','防打扰'); };
