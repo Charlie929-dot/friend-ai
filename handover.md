@@ -1,7 +1,7 @@
 <!-- dsh-taskclock-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-17 21:26:56 · 修订 5 · 3 个会话小节 · 项目规则见 AGENTS.md
+> 更新于 2026-10-17 22:08:08 · 修订 6 · 3 个会话小节 · 项目规则见 AGENTS.md
 
 <!-- dsh-taskclock-handover:sessions:start -->
 <!-- b6862a63 = session-b6862a63-697f-49b2-a077-119b04d5c6ca -->
@@ -10,38 +10,46 @@
 
 <!-- dsh-taskclock-handover:snapshot:start -->
 <!-- dsh-taskclock-handover:session:725f6f7f -->
-### 会话 `725f6f7f` · 2026-10-17 21:26:56
+### 会话 `725f6f7f` · 2026-10-17 22:08:08
 
-> 第 1 轮 · 修订 5（基于 4） · 触发：模型调用 handover_write · 累计 ~100k tokens（+100k） · 概要：核对仓库/服务器/测试现状：确认测试偶发仍在（30+ 次全量中 test_trueread 约 6 次、test_life_engine 2 次、interrupt/db_path_lock 各 1 次），并定位根因为后台章节结算线程跨 DB 切换写库；验证在测试进程里关掉 WORK_SHAREABLE_ENABLE… · 事件 #0–426
+> 第 2 轮 · 修订 6（基于 5） · 触发：模型调用 handover_write · 累计 ~202k tokens（+102k） · 概要：v0.109 已落地并上线：目录圆点按说话人分侧（TA 左 / 我右，手机+桌面同一套）+ 测试偶发根因修复（章节结算后台线程跨库写：测试进程关 WORK_SHAREABLE + `_settle_one` DB_PATH/PATH_LOCK 守卫），连跑 30 次全量 30/30；已提交 7d06210、双推 Gi… · 事件 #427–878
 
 ## 这一轮行为概览
-- [ ] 修改了文档
-- [x] 修改了代码（4 个文件 / 4 次改动，+91/−0 行）
-- [ ] 修改了配置
-- [x] 执行了命令（38 条）
+- [x] 修改了文档（6 个文件 / 12 次改动，+19/−10 行）
+- [x] 修改了代码（4 个文件 / 5 次改动，+50/−24 行）
+- [x] 修改了配置（1 个文件 / 1 次改动，+3/−0 行）
+- [x] 执行了命令（33 条）
 
 ## 这一轮行为详情
-- 修改了 `C:/Users/HP/AppData/Local/Temp/probe_life_flow.py`（1 次改动，+47/−0 行） 〔725f6f7f#110〕
-- 修改了 `C:/Users/HP/AppData/Local/Temp/probe_settle.py`（1 次改动，+28/−0 行） 〔725f6f7f#373〕
-- 修改了 `test_life.py`（1 次改动，+10/−0 行） 〔725f6f7f#176〕
-- 修改了 `test_reading.py`（1 次改动，+6/−0 行） 〔725f6f7f#259〕
-- 执行了 38 条命令，以下为样例：`git fetch origin main 2>&1; git status -sb; git log --oneline -5`、`git log --oneline origin/main -3; echo "--- diverged:"; git log --oneline origi…`、`.\.venv\Scripts\python.exe run_tests.py *> "$env:TEMP\friend-test-now.log"; "EX…`、`Select-String -Path "$env:TEMP\friend-test-now.log" -Pattern "test_life_engine|…`、`Select-String -Path .gitignore -Pattern "workbuddy|_ab|_e4|test-tmp" ; echo "--…`、`Select-String -Path life.py -Pattern "WORK_FLOW_RATIO|_make_sessions|random|40|…`
-- 本轮需求：「看看现在还有之前的问题吗？」 〔725f6f7f#9〕
-- 工具使用：pwsh×38，read×12，job_output×5，edit×2，write×2
+- 修改了 `_test_common.py`（1 次改动，+8/−0 行） 〔725f6f7f#528〕
+- 修改了 `.gitignore`（1 次改动，+3/−0 行） 〔725f6f7f#636〕
+- 修改了 `AGENTS.md`（2 次改动，+2/−2 行） 〔725f6f7f#593–806〕
+- 修改了 `docs/版本更新记录.md`（2 次改动，+3/−1 行） 〔725f6f7f#575–798〕
+- 修改了 `docs/体验优化清单.md`（2 次改动，+8/−1 行） 〔725f6f7f#730–800〕
+- 修改了 `docs/文件改动同步清单.md`（2 次改动，+2/−2 行） 〔725f6f7f#612–614〕
+- 修改了 `docs/需求概要-朋友型AI.md`（3 次改动，+3/−3 行） 〔725f6f7f#577–581〕
+- 修改了 `docs/需求详情/G-网页端聊天体验.md`（1 次改动，+1/−1 行） 〔725f6f7f#764〕
+- 修改了 `life.py`（1 次改动，+34/−22 行） 〔725f6f7f#530〕
+- 修改了 `test_engine.py`（1 次改动，+4/−0 行） 〔725f6f7f#540〕
+- 修改了 `web/index.html`（2 次改动，+4/−2 行） 〔725f6f7f#536–538〕
+- 执行了 33 条命令，以下为样例：`git fetch origin main 2>&1 | Out-Null; git status -sb; echo "--- outline refs:"…`、`Select-String -Path web/index.html -Pattern "ol-dot|ol-txt|ol-item|olList|ol-li…`、`Select-String -Path test_engine.py -Pattern "ol-|outline|目录" | Select-Object -F…`、`Select-String -Path *.py -Pattern "PATH_LOCK" | Select-Object -First 20; echo "…`、`Select-String -Path "docs/需求概要-朋友型AI.md" -Pattern "v0\.10[0-9]" | Select-Object…`、`Select-String -Path "docs/文件改动同步清单.md" -Pattern "_test_common|web/index.html|li…`
+- 本轮需求：「1+2+3，手机端修复已经验证结果不错，但还有一个需要优化的：额外优化一下目录，目录前面的圆点可以改成在两边，左边表示ta，右边表示我，手机电脑都要优化」 〔725f6f7f#439〕
+- 工具使用：pwsh×33，edit×21，read×12，job_output×5，job_kill×1
 - <!-- 待补充：这一行请在下一轮补充「实现/修复/优化了什么」，纯机械信息无法自动推断 -->
 
 ## 当前进度
 - 已完成：（本会话没有任务清单）
 - 正在进行：（无）
 - 剩余：（无）
-- 下一步：等用户拍板：①把 WORK_SHAREABLE_ENABLED=off 写进 `_test_common.py` 并连跑 30 次验收；②可选加 `_settle_one` 生产守卫；③push 本机领先的 3 个提交 + sync-to-server；④手机二次验收 v0.108。
+- 下一步：用户目视验收目录圆点（手机目录窗口 + 电脑 hover 目录：TA 左、我 右、颜色保留）；可选项：旧计划任务 `friend-ai-web` 仍 Ready 且指向已归档路径，删除需**管理员 PowerShell** 执行 `Unregister-ScheduledTask -TaskName friend-a…
 
 ## 这一轮经验
-- 测试偶发不是随机抖动：`life.status()` 触发的 `_settle_one` 后台线程先在临时库 A `_load()`，主线程 `_patch_config` 切到临时库 B 后才执行 `trueread.settle_chapter()`/`_save()`，把 A 的真实书计划/笔记写进 B——test_trueread 出现 4 条笔记（真实书《35岁前要上的33堂理财课》第… 〔725f6f7f#427〕
-- 复现手法：临时给 test_reading 加打印能抓到失败瞬间线程列表含 `_settle_one`；探针打印 spawn 时 db=tmpA、entry 时 db=tmpB 即证明跨库。 〔725f6f7f#427〕
-- 已验证的最小修复：测试进程全局 `WORK_SHAREABLE_ENABLED=off`（写进 `_test_common.py` 的环境变量区，和 INNER_MONOLOGUE 并列）→ 连跑 10 次全量 10/10；需要结算的用例本来就用 `_patch_config(WORK_SHAREABLE_ENABLED=True)` 局部打开，全量 92 项未受影响。 〔725f6f7f#427〕
-- 单独跑域测试不会复现：`run_tests.py reading` 10/10、`life` 8/8 全过——必须在全量跨模块顺序下才出现，别用单域跑当反证。 〔725f6f7f#427〕
-- 生产侧同类风险：`_settle_one` 没拿 `db.PATH_LOCK`，多朋友切库时理论上也可能跨库写；可加「线程起始 DB 路径，路径变了就放弃写」的守卫。 〔725f6f7f#427〕
+- 工具 `edit` 失败（FS_NOT_OBSERVED）：Error: cannot modify "C:\Users\HP\AI_Companion\docs\文件改动同步清单.md": file has not been read — read the file, then retry 〔725f6f7f#595〕
+- 工具 `edit` 失败（FS_NOT_OBSERVED）：Error: cannot modify "C:\Users\HP\AI_Companion\docs\体验优化清单.md": file has not been read — read the file, then retry 〔725f6f7f#718〕
+- 目录圆点分侧的实现：`.ol-item` 是 flex 行，TA 圆点默认在行首；`.ol-item.user .ol-dot { order: 9 }` 把「我」的圆点挪到行尾，`.ol-item .ol-txt { flex: 1 1 auto; min-width: 0 }` 让文字撑满中间、圆点贴边——手机目录窗口与桌面 hover 目录共用同一套 CSS，不需要额外媒体查询。 〔725f6f7f#879〕
+- 测试偶发根因已坐实并修掉：`life._settle_one` 后台线程先读计划、再调 LLM、最后落 `day_state`/读书笔记；测试主线程中途 `_patch_config(_db_init=True)` 切临时库后，线程收尾把旧库数据写进新库。修法 = `_test_common.py` 全局 `WORK_SHAREABLE_ENABLED=off` + `_settle_one` … 〔725f6f7f#879〕
+- 在 DSH 里同步服务器要用 Git Bash 的绝对路径 `C:\Program Files\Git\bin\bash.exe`——直接 `bash` 会落到 WSL，`cd /c/...` 报 No such file；同步脚本本身成功时 PowerShell 仍可能因 ssh 的 known_hosts 警告报 exit 1，看输出里的「HEAD=/GET /login->200」自检即可。 〔725f6f7f#879〕
+- `git push` 后 `git status -sb` 可能还显示 ahead（远端跟踪 ref 未更新），`git fetch origin main` 一次就同步；判断是否推成功看 push 输出里的 `old..new main -> main`。 〔725f6f7f#879〕
 
 <!-- dsh-taskclock-handover:session:b6862a63 -->
 ### 会话 `b6862a63` · 2026-10-17 20:54:11
@@ -86,6 +94,44 @@
 ---
 
 ## 历史快照
+
+<details>
+<summary>725f6f7f · 2026-10-17 21:26:56</summary>
+
+### 会话 `725f6f7f` · 2026-10-17 21:26:56
+
+> 第 1 轮 · 修订 5（基于 4） · 触发：模型调用 handover_write · 累计 ~100k tokens（+100k） · 概要：核对仓库/服务器/测试现状：确认测试偶发仍在（30+ 次全量中 test_trueread 约 6 次、test_life_engine 2 次、interrupt/db_path_lock 各 1 次），并定位根因为后台章节结算线程跨 DB 切换写库；验证在测试进程里关掉 WORK_SHAREABLE_ENABLE… · 事件 #0–426
+
+## 这一轮行为概览
+- [ ] 修改了文档
+- [x] 修改了代码（4 个文件 / 4 次改动，+91/−0 行）
+- [ ] 修改了配置
+- [x] 执行了命令（38 条）
+
+## 这一轮行为详情
+- 修改了 `C:/Users/HP/AppData/Local/Temp/probe_life_flow.py`（1 次改动，+47/−0 行） 〔725f6f7f#110〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/probe_settle.py`（1 次改动，+28/−0 行） 〔725f6f7f#373〕
+- 修改了 `test_life.py`（1 次改动，+10/−0 行） 〔725f6f7f#176〕
+- 修改了 `test_reading.py`（1 次改动，+6/−0 行） 〔725f6f7f#259〕
+- 执行了 38 条命令，以下为样例：`git fetch origin main 2>&1; git status -sb; git log --oneline -5`、`git log --oneline origin/main -3; echo "--- diverged:"; git log --oneline origi…`、`.\.venv\Scripts\python.exe run_tests.py *> "$env:TEMP\friend-test-now.log"; "EX…`、`Select-String -Path "$env:TEMP\friend-test-now.log" -Pattern "test_life_engine|…`、`Select-String -Path .gitignore -Pattern "workbuddy|_ab|_e4|test-tmp" ; echo "--…`、`Select-String -Path life.py -Pattern "WORK_FLOW_RATIO|_make_sessions|random|40|…`
+- 本轮需求：「看看现在还有之前的问题吗？」 〔725f6f7f#9〕
+- 工具使用：pwsh×38，read×12，job_output×5，edit×2，write×2
+- <!-- 待补充：这一行请在下一轮补充「实现/修复/优化了什么」，纯机械信息无法自动推断 -->
+
+## 当前进度
+- 已完成：（本会话没有任务清单）
+- 正在进行：（无）
+- 剩余：（无）
+- 下一步：等用户拍板：①把 WORK_SHAREABLE_ENABLED=off 写进 `_test_common.py` 并连跑 30 次验收；②可选加 `_settle_one` 生产守卫；③push 本机领先的 3 个提交 + sync-to-server；④手机二次验收 v0.108。
+
+## 这一轮经验
+- 测试偶发不是随机抖动：`life.status()` 触发的 `_settle_one` 后台线程先在临时库 A `_load()`，主线程 `_patch_config` 切到临时库 B 后才执行 `trueread.settle_chapter()`/`_save()`，把 A 的真实书计划/笔记写进 B——test_trueread 出现 4 条笔记（真实书《35岁前要上的33堂理财课》第… 〔725f6f7f#427〕
+- 复现手法：临时给 test_reading 加打印能抓到失败瞬间线程列表含 `_settle_one`；探针打印 spawn 时 db=tmpA、entry 时 db=tmpB 即证明跨库。 〔725f6f7f#427〕
+- 已验证的最小修复：测试进程全局 `WORK_SHAREABLE_ENABLED=off`（写进 `_test_common.py` 的环境变量区，和 INNER_MONOLOGUE 并列）→ 连跑 10 次全量 10/10；需要结算的用例本来就用 `_patch_config(WORK_SHAREABLE_ENABLED=True)` 局部打开，全量 92 项未受影响。 〔725f6f7f#427〕
+- 单独跑域测试不会复现：`run_tests.py reading` 10/10、`life` 8/8 全过——必须在全量跨模块顺序下才出现，别用单域跑当反证。 〔725f6f7f#427〕
+- 生产侧同类风险：`_settle_one` 没拿 `db.PATH_LOCK`，多朋友切库时理论上也可能跨库写；可加「线程起始 DB 路径，路径变了就放弃写」的守卫。 〔725f6f7f#427〕
+
+</details>
 
 <details>
 <summary>seed · 2026-10-17 19:50:00</summary>
@@ -133,38 +179,6 @@
 - DSH 沙箱内跑任何用 `tempfile.mkdtemp()` / pytest `tmp_path` 的 Python 都会失败（`PermissionError`/`sqlite3 unable to open database file`），根因是 CPython 的 `os.mkdir(mode=0o700)` 在 Windows 建 owner-only 显式 DACL，而 DSH … 〔b6862a63#537〕
 - 验证/绕过：①最稳妥是在普通终端（Git Bash）跑 `python run_tests.py`；②本会话内可用 monkeypatch 把 `tempfile.mkdtemp` 换成 `os.makedirs(uuid)`（不传 mode）来跑全量，但只能用于临时验证；③长期可装社区插件 dsh-python-tempfile-shim（让沙箱内 Python 忽略 mkdir mode）。 〔b6862a63#537〕
 - 在 DSH 内由 `mkdtemp` 生成的目录连创建者令牌都删不掉（`os.rmdir`/`Remove-Item` 均 WinError 5），清理需去普通终端；不要把它误判成 git/项目权限问题。 〔b6862a63#537〕
-
-</details>
-
-<details>
-<summary>b6862a63 · 2026-10-17 20:33:01</summary>
-
-### 会话 `b6862a63` · 2026-10-17 20:33:01
-
-> 第 1 轮 · 修订 2（基于 1） · 触发：模型调用 handover_write · 累计 ~77.4k tokens（+77.4k） · 概要：核对项目状态：v0.108 代码已在 origin/main 与服务器（781c2ff）且服务正常；本机领先 3 个交接/自启修复提交未推送；避开 DSH 沙箱临时目录限制后全量 92/92（首跑 test_trueread 偶发失败，复跑通过）。 · 事件 #0–444
-
-## 这一轮行为概览
-- [ ] 修改了文档
-- [ ] 修改了代码
-- [ ] 修改了配置
-- [x] 执行了命令（44 条）
-
-## 这一轮行为详情
-- 执行了 44 条命令，以下为样例：`git fetch origin main 2>&1; git status -sb; git log --oneline -5`、`bash -lc "cd /c/Users/HP/AI_Companion && source ~/.bash_profile >/dev/null 2>&1…`、`$bash = "C:\Program Files\Git\bin\bash.exe"; if (Test-Path $bash) { & $bash -lc…`、`git config --get http.sslBackend; git config --get credential.helper; echo "GH_…`、`git -c http.sslBackend=openssl fetch origin main 2>&1; git status -sb`、`Get-ChildItem _ab_before_driver.py,_ab_harness.py,_ab_report.json,_ab_report.md…`
-- 本轮需求：「现在项目是啥状态」 〔b6862a63#10〕
-- 工具使用：pwsh×44，read×9，grep×1，job_output×1
-- <!-- 待补充：这一行请在下一轮补充「实现/修复/优化了什么」，纯机械信息无法自动推断 -->
-
-## 当前进度
-- 已完成：（本会话没有任务清单）
-- 正在进行：（无）
-- 剩余：（无）
-- 下一步：推送本机领先的 3 个提交（交接迁移/目录合并收尾/交接去重）并按需 sync-to-server；然后做手机二次验收（记忆管理全屏、消息操作轻触、目录按钮/全屏窗口、顶栏不挤、键盘顶起）。
-
-## 这一轮经验
-- 在 DSH 沙箱内直接跑 `python run_tests.py` 会全部报 `sqlite3.OperationalError: unable to open database file`：Python 3.14 的 `tempfile.mkdtemp()` 在 Windows 上建出的目录带受限 DACL，沙箱受限令牌写不进去；这不是代码回归。验证办法：先 import `_test_co… 〔b6862a63#445〕
-- `test_reading.test_trueread` 全量首跑偶发 `reading_note_count()==4`，单独跑或与 engine/memory/persona 组合跑都过，重跑全量也过——属测试隔离/后台线程串扰的偶发，不要直接当 v0.108 回归改代码。 〔b6862a63#445〕
-- 本机 `git fetch` 用默认 schannel 会报 `SEC_E_NO_CREDENTIALS`；加 `-c http.sslBackend=openssl` 可正常拉取（本会话实测）。 〔b6862a63#445〕
 
 </details>
 <!-- dsh-taskclock-handover:end -->
