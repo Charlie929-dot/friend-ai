@@ -304,6 +304,10 @@
   .btn.primary:hover { filter: brightness(1.06); }
   .btnrow { display: flex; gap: 8px; margin-top: 10px; }
   .btnrow .btn { flex: 1; }
+  .dbg-group { margin-bottom: 14px; }
+  .dbg-group:last-of-type { margin-bottom: 0; }
+  .dbg-gtitle { font-size: 11px; font-weight: 600; color: var(--muted);
+    margin: 2px 0 8px; padding-left: 8px; border-left: 3px solid var(--accent); line-height: 1.2; }
   .panel { background: var(--surface-2); border-radius: 12px; padding: 11px; margin-top: 12px; max-height: 260px; overflow: auto; }
   .panel pre { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--ink);
     white-space: pre-wrap; line-height: 1.6; }
@@ -509,24 +513,42 @@
   .bk-foot { flex: 0 0 auto; display: flex; gap: 8px; align-items: center;
     padding: 10px 16px; border-top: 1px solid var(--line); }
 
-  /* ===== 记忆管理（v0.105：网页端删记忆 / 确认 AI 想忘的 / 保留）===== */
+  /* ===== 记忆管理（v0.105 网页端删记忆；v0.106：顶栏固定 + 长文展开 + 多选批量删）===== */
+  .mm-sticky { position: sticky; top: -12px; z-index: 3; background: var(--surface);
+    margin: -12px -16px 0; padding: 12px 16px 0; }
   .mm-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
   .mm-tab { font-size: 12px; padding: 5px 11px; border-radius: 9px; cursor: pointer;
     color: var(--muted); border: 1px solid transparent; user-select: none; }
   .mm-tab.on { color: var(--ink); background: var(--surface-2); border-color: var(--line); }
   .mm-tab em { font-style: normal; font-weight: 600; margin-left: 4px; color: var(--accent); }
-  .mm-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+  .mm-bar { display: flex; gap: 8px; margin-bottom: 8px; }
   .mm-bar input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line);
     border-radius: 9px; background: var(--surface); color: var(--ink); font-size: 12.5px; outline: 0; }
   .mm-bar input:focus { border-color: var(--accent); }
   .mm-bar .btn { padding: 7px 12px; }
+  .mm-selbar { display: flex; gap: 8px; align-items: center; padding: 4px 0 10px;
+    border-bottom: 1px solid var(--line); margin-bottom: 2px; }
+  .mm-selall { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+    cursor: pointer; user-select: none; white-space: nowrap; }
+  .mm-selall input { accent-color: var(--accent); margin: 0; }
+  .mm-selcount { font-size: 12px; color: var(--muted); }
+  .mm-selbar .btn { padding: 5px 12px; font-size: 12px; }
   .mm-list { display: flex; flex-direction: column; }
   .mm-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0;
     border-top: 1px solid var(--line); }
   .mm-item:first-child { border-top: 0; }
+  .mm-chk { flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
   .mm-text { flex: 1; min-width: 0; }
-  .mm-text p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink);
+  .mm-text > p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink);
     word-break: break-word; white-space: pre-wrap; }
+  .mm-summary { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.5; color: var(--ink);
+    word-break: break-word; white-space: pre-wrap; }
+  .mm-full { margin: 6px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--ink);
+    white-space: pre-wrap; word-break: break-word; padding: 8px 10px; background: var(--surface-2);
+    border-radius: 10px; }
+  .mm-expand { margin-top: 5px; background: none; border: 0; color: var(--accent); font-size: 11.5px;
+    cursor: pointer; padding: 0; }
+  .mm-expand:hover { text-decoration: underline; }
   .mm-meta { margin-top: 4px; font-size: 11px; color: var(--muted); }
   .mm-meta .mm-tag { display: inline-block; padding: 1px 6px; border-radius: 6px;
     background: var(--surface-2); color: var(--muted); font-size: 10.5px; margin-right: 4px; }
@@ -534,9 +556,9 @@
     border-top: 0; margin-bottom: 8px; }
   .mm-pending .mm-flag { color: var(--accent); font-size: 11px; font-weight: 600; }
   .mm-acts { margin-top: 7px; display: flex; gap: 6px; }
-  .mm-del-btn { flex: 0 0 auto; padding: 4px 11px; border-radius: 8px; border: 1px solid var(--line);
-    background: var(--surface-2); color: #d98a8a; font-size: 11.5px; cursor: pointer; }
-  .mm-del-btn:hover { background: #fbeeee; border-color: #e07a7a; color: #e07a7a; }
+  .mm-keep { flex: 0 0 auto; padding: 4px 11px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface-2); color: var(--ink); font-size: 11.5px; cursor: pointer; }
+  .mm-keep:hover { background: var(--accent-soft); }
 
   /* ===== 模型设置（v0.80：账户菜单里自主配置，全局，写 .env 热生效）===== */
   .lm-modal { position: fixed; inset: 0; z-index: 90; display: none; }
@@ -798,30 +820,43 @@
         <details class="fold" id="foldDebug">
           <summary><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2-2 2.6-2.6z"/></svg>调试面板</summary>
           <div class="fold-body">
-            <div class="grid">
-              <button class="btn" data-cmd="/work">手头的事</button>
-              <button class="btn" data-cmd="/diary">今天的日记</button>
-              <button class="btn" data-cmd="/diaries">日记目录</button>
-              <button class="btn" data-cmd="/review">写篇日记</button>
-              <button class="btn" data-cmd="/memories">TA 记住的事</button>
-              <button class="btn primary" id="btnMemMgr">管理记忆</button>
-              <button class="btn" data-cmd="/notes">事实便签</button>
-              <button class="btn" data-cmd="/profile">TA 知道的你</button>
-              <button class="btn" data-cmd="/status">状态·计数</button>
-              <button class="btn" data-cmd="/persona">人格卡</button>
-              <button class="btn" data-cmd="/model">当前模型</button>
-              <button class="btn" data-cmd="/decay">跑遗忘</button>
-              <button class="btn" data-cmd="/memfill">历史回填</button>
-              <button class="btn" data-cmd="/selfmem">自我记忆</button>
-              <button class="btn" data-cmd="/selfreview">自我复盘</button>
-              <button class="btn" data-cmd="/familiar">转熟悉</button>
-              <button class="btn" data-cmd="/new">转初见</button>
-              <button class="btn" data-cmd="/refresh">热重载</button>
-              <button class="btn" data-cmd="/autostart">自启状态</button>
+            <div class="dbg-group">
+              <div class="dbg-gtitle">查看 / 输出</div>
+              <div class="grid">
+                <button class="btn" data-cmd="/work">手头的事</button>
+                <button class="btn" data-cmd="/diary">今天的日记</button>
+                <button class="btn" data-cmd="/diaries">日记目录</button>
+                <button class="btn" data-cmd="/review">写篇日记</button>
+                <button class="btn" data-cmd="/memories">TA 记住的事</button>
+                <button class="btn" data-cmd="/notes">事实便签</button>
+                <button class="btn" data-cmd="/profile">TA 知道的你</button>
+                <button class="btn" data-cmd="/status">状态·计数</button>
+                <button class="btn" data-cmd="/persona">人格卡</button>
+                <button class="btn" data-cmd="/model">当前模型</button>
+                <button class="btn" data-cmd="/selfmem">自我记忆</button>
+                <button class="btn" data-cmd="/selfreview">自我复盘</button>
+              </div>
             </div>
-            <div class="btnrow">
-              <button class="btn" id="btnGuard">防打扰</button>
-              <button class="btn warn" id="btnRestart2">重启服务</button>
+            <div class="dbg-group">
+              <div class="dbg-gtitle">记忆 / 关系</div>
+              <div class="grid">
+                <button class="btn primary" id="btnMemMgr">管理记忆</button>
+                <button class="btn" data-cmd="/decay">跑遗忘</button>
+                <button class="btn" data-cmd="/memfill">历史回填</button>
+                <button class="btn" data-cmd="/familiar">转熟悉</button>
+                <button class="btn" data-cmd="/new">转初见</button>
+              </div>
+            </div>
+            <div class="dbg-group">
+              <div class="dbg-gtitle">系统</div>
+              <div class="grid">
+                <button class="btn" data-cmd="/refresh">热重载</button>
+                <button class="btn" data-cmd="/autostart">自启状态</button>
+              </div>
+              <div class="btnrow">
+                <button class="btn" id="btnGuard">防打扰</button>
+                <button class="btn warn" id="btnRestart2">重启服务</button>
+              </div>
             </div>
             <div class="panel" id="panel">
               <div class="ph"><span id="pTitle">输出</span><span class="ph-actions"><span class="clr" id="pCopy">复制</span><span class="clr" id="pClear">清空</span></span></div>
@@ -868,20 +903,29 @@
           <span class="bk-sub">删记忆 / 确认 AI 想忘的 / 删长文 / 删便签</span>
           <button class="icon-btn" id="mmClose" aria-label="关闭"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
-        <div class="bk-body">
-          <div class="mm-tabs">
-            <span class="mm-tab on" data-tab="mems">自动记忆 <em id="mmCntMems">0</em></span>
-            <span class="mm-tab" data-tab="longs">长记忆 <em id="mmCntLongs">0</em></span>
-            <span class="mm-tab" data-tab="facts">便签 <em id="mmCntFacts">0</em></span>
-          </div>
-          <div class="mm-bar">
-            <input id="mmSearch" type="text" placeholder="搜索内容…">
-            <button class="btn" id="mmRefresh">刷新</button>
+        <div class="bk-body" id="mmBody">
+          <div class="mm-sticky">
+            <div class="mm-tabs">
+              <span class="mm-tab on" data-tab="mems">自动记忆 <em id="mmCntMems">0</em></span>
+              <span class="mm-tab" data-tab="longs">长记忆 <em id="mmCntLongs">0</em></span>
+              <span class="mm-tab" data-tab="facts">便签 <em id="mmCntFacts">0</em></span>
+            </div>
+            <div class="mm-bar">
+              <input id="mmSearch" type="text" placeholder="搜索内容…">
+              <button class="btn" id="mmRefresh">刷新</button>
+            </div>
+            <div class="mm-selbar">
+              <label class="mm-selall"><input type="checkbox" id="mmSelAll"> 全选本页</label>
+              <span class="mm-selcount" id="mmSelCount">已选 0 项</span>
+              <span style="flex:1"></span>
+              <button class="btn warn" id="mmDelSel" disabled>删除选中</button>
+              <button class="btn" id="mmSelClear" disabled>取消</button>
+            </div>
           </div>
           <div id="mmList" class="mm-list"><div class="empty">加载中…</div></div>
         </div>
         <div class="bk-foot">
-          <span class="bk-sub">删除不可恢复。AI 想忘的会标「待确认」，可确认删除或保留。</span>
+          <span class="bk-sub">勾选后可批量删除（不可恢复）。AI 想忘的会标「待确认」，可点「保留」。</span>
           <span style="flex:1"></span>
           <button class="btn" id="mmClose2">关闭</button>
         </div>
@@ -1582,10 +1626,18 @@ function panelDone(title,text){ $('pTitle').textContent=title; $('pOut').classNa
 async function runCmd(cmd,title){
   panelBusy(title);
   try{
-    const r=await (await fetch('/api/send',{
+    const resp=await fetch('/api/send',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({text:cmd})
-    })).json();
+    });
+    let r;
+    try{ r=await resp.json(); }
+    catch(_){
+      // 服务端没返回 JSON（多半是后端抛了未捕获异常、回了一页 HTML 500）
+      const t=(await resp.text().catch(()=>'')).slice(0,200);
+      panelDone(title,'⚠ 服务端没返回 JSON（可能崩了）：'+(t||('HTTP '+resp.status)));
+      poll(); return;
+    }
     panelDone(title,r.reply||r.error);
   }catch(e){ panelDone(title,'⚠ '+e.message); }
   poll();
@@ -1660,8 +1712,8 @@ async function restartService(){
   catch(e){ panelDone('重启','⚠ '+e.message); }
 }
 
-/* ===== 记忆管理（v0.105：网页端删记忆 / 确认 AI 想忘的 / 保留 / 删长文 / 删便签）===== */
-let mmTab='mems', mmData={mems:[],longs:[],facts:[]};
+/* ===== 记忆管理（v0.105 网页端删记忆；v0.106：顶栏固定 + 长文展开 + 多选批量删）===== */
+let mmTab='mems', mmData={mems:[],longs:[],facts:[]}, mmSel=new Set();
 function openMemMgr(){ $('foldDebug').open=true; loadMemMgr(); $('mmModal').classList.add('open'); }
 function closeMemMgr(){ $('mmModal').classList.remove('open'); }
 async function loadMemMgr(){
@@ -1669,12 +1721,14 @@ async function loadMemMgr(){
   try{
     const d=await (await fetch('/api/memories/all')).json();
     mmData=d;
+    mmSel.clear();
     $('mmCntMems').textContent=(d.mems||[]).length;
     $('mmCntLongs').textContent=(d.longs||[]).length;
     $('mmCntFacts').textContent=(d.facts||[]).length;
     renderMemMgr();
   }catch(e){ $('mmList').innerHTML='<div class="empty">⚠ '+e.message+'</div>'; }
 }
+function mmKindOf(){ return mmTab==='mems'?'mem':(mmTab==='longs'?'long':'fact'); }
 function renderMemMgr(){
   const q=($('mmSearch').value||'').trim().toLowerCase();
   const box=$('mmList'); box.innerHTML='';
@@ -1684,12 +1738,14 @@ function renderMemMgr(){
       cat:m.category,theme:m.theme,tags:m.tags,time_label:m.time_label,place:m.place,
       person:m.person,created_at:m.created_at}));
   } else if(mmTab==='longs'){
-    items=(mmData.longs||[]).map(m=>({id:m.id,kind:'long',content:m.summary,cat:m.category,created_at:m.created_at}));
+    items=(mmData.longs||[]).map(m=>({id:m.id,kind:'long',content:m.summary,full:m.content,
+      cat:m.category,created_at:m.created_at}));
   } else {
     items=(mmData.facts||[]).map(f=>({id:f.id,kind:'fact',content:f.content}));
   }
-  const filtered=items.filter(it=>!q || (it.content||'').toLowerCase().includes(q));
-  if(!filtered.length){ box.innerHTML='<div class="empty">'+(q?'没有匹配的内容':'这里还什么都没有')+'</div>'; return; }
+  const filtered=items.filter(it=>!q || (it.content||'').toLowerCase().includes(q)
+    || (it.full&&it.full.toLowerCase().includes(q)));
+  if(!filtered.length){ box.innerHTML='<div class="empty">'+(q?'没有匹配的内容':'这里还什么都没有')+'</div>'; updateSelBar(); return; }
   filtered.forEach(it=>{
     const row=document.createElement('div');
     row.className='mm-item'+(it.status==='pending_delete'?' mm-pending':'');
@@ -1699,53 +1755,115 @@ function renderMemMgr(){
       if(d) meta+='<span class="mm-tag">'+esc(d)+'</span>';
     }
     if(it.created_at) meta+='<span>记于'+esc(it.created_at.slice(5,16).replace('T',' '))+'</span>';
-    const text='<div class="mm-text"><p>'+esc(it.content)+'</p>'+(meta?'<div class="mm-meta">'+meta+'</div>':'')+'</div>';
+    let body;
+    if(it.kind==='long'){
+      // 长文：摘要做标题，全文收在「展开全文」里，避免长内容把列表撑爆
+      body='<div class="mm-text"><p class="mm-summary">'+esc(it.content)+'</p>'
+        +'<button class="mm-expand" type="button">展开全文 ▾</button>'
+        +'<div class="mm-full" hidden>'+esc(it.full||'')+'</div>'
+        +(meta?'<div class="mm-meta">'+meta+'</div>':'')+'</div>';
+    } else {
+      body='<div class="mm-text"><p>'+esc(it.content)+'</p>'+(meta?'<div class="mm-meta">'+meta+'</div>':'')+'</div>';
+    }
     let act='';
     if(it.kind==='mem' && it.status==='pending_delete'){
       act='<div class="mm-acts"><span class="mm-flag">AI 想忘掉这条</span>'
-        +'<button class="btn warn" data-del="'+it.id+'" data-kind="mem">确认删除</button>'
-        +'<button class="btn" data-keep="'+it.id+'">保留</button></div>';
-    } else {
-      const label=it.kind==='long'?'删长文':(it.kind==='fact'?'删便签':'删除');
-      act='<button class="mm-del-btn" data-del="'+it.id+'" data-kind="'+it.kind+'">'+label+'</button>';
+        +'<button class="mm-keep" data-keep="'+it.id+'">保留</button></div>';
     }
-    row.innerHTML=text+act;
+    row.innerHTML='<input type="checkbox" class="mm-chk" data-id="'+it.id+'"'+(mmSel.has(it.id)?' checked':'')+'>'+body+act;
     box.appendChild(row);
   });
-  box.querySelectorAll('[data-del]').forEach(b=>{
-    b.onclick=()=>delMem(parseInt(b.dataset.del,10), b.dataset.kind||'mem', b.textContent);
+  box.querySelectorAll('.mm-chk').forEach(c=>{
+    c.onclick=(e)=>{ e.stopPropagation();
+      const id=parseInt(c.dataset.id,10);
+      if(c.checked) mmSel.add(id); else mmSel.delete(id);
+      updateSelBar(); };
+  });
+  box.querySelectorAll('.mm-expand').forEach(b=>{
+    b.onclick=(e)=>{ e.stopPropagation();
+      const f=b.parentElement.querySelector('.mm-full');
+      if(f.hasAttribute('hidden')){ f.removeAttribute('hidden'); b.textContent='收起 ▴'; }
+      else { f.setAttribute('hidden',''); b.textContent='展开全文 ▾'; } };
   });
   box.querySelectorAll('[data-keep]').forEach(b=>{
     b.onclick=()=>keepMem(parseInt(b.dataset.keep,10));
   });
+  updateSelBar();
 }
-async function delMem(id,kind,label){
-  if(!confirm('确定'+label+'？删除不可恢复。')) return;
+function updateSelBar(){
+  const n=mmSel.size;
+  $('mmSelCount').textContent='已选 '+n+' 项';
+  $('mmDelSel').disabled=n===0;
+  $('mmSelClear').disabled=n===0;
+  const chk=$('mmSelAll');
+  const visible=document.querySelectorAll('#mmList .mm-chk').length;
+  const checked=document.querySelectorAll('#mmList .mm-chk:checked').length;
+  chk.checked=visible>0 && checked===visible;
+  chk.indeterminate=checked>0 && checked<visible;
+}
+function removeFromData(kind, ids){
+  const set=new Set(ids);
+  if(kind==='mem') mmData.mems=mmData.mems.filter(m=>!set.has(m.id));
+  else if(kind==='long') mmData.longs=mmData.longs.filter(m=>!set.has(m.id));
+  else mmData.facts=mmData.facts.filter(f=>!set.has(f.id));
+  $('mmCntMems').textContent=mmData.mems.length;
+  $('mmCntLongs').textContent=mmData.longs.length;
+  $('mmCntFacts').textContent=mmData.facts.length;
+}
+async function delSelected(){
+  const sel=[...mmSel];
+  if(!sel.length) return;
+  const kind=mmKindOf();
+  const label=kind==='long'?'长文':(kind==='fact'?'便签':'记忆');
+  if(!confirm('确定删除选中的 '+sel.length+' 条'+label+'？删除不可恢复。')) return;
+  const body=$('mmBody'); const st=body.scrollTop;   // 记住滚动位置，删完不跳回顶部
   let url='/api/memories/delete';
   if(kind==='long') url='/api/memories/long/delete';
   else if(kind==='fact') url='/api/memories/fact/delete';
   try{
-    const r=await (await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id})})).json();
-    if(!r.ok){ alert(r.error||'删除失败'); }
-    await loadMemMgr();
+    if(kind==='fact'){
+      // 便签是顺序编号，删一个会移位 —— 从大到小逐个删，避免错位
+      sel.sort((a,b)=>b-a);
+      for(const id of sel){
+        const r=await (await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({id})})).json();
+        if(!r.ok){ alert(r.error||'删除失败'); }
+      }
+    } else {
+      await Promise.all(sel.map(id=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id})})));
+    }
+    removeFromData(kind, sel);   // 本地移除，不重新拉取 —— 保留滚动位置
+    mmSel.clear();
+    renderMemMgr();
+    body.scrollTop=Math.min(st, body.scrollHeight);
   }catch(e){ alert('⚠ '+e.message); }
 }
 async function keepMem(id){
   try{
     const r=await (await fetch('/api/memories/keep',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id})})).json();
-    if(!r.ok){ alert(r.error||'操作失败'); }
-    await loadMemMgr();
+    if(!r.ok){ alert(r.error||'操作失败'); return; }
+    const m=mmData.mems.find(x=>x.id===id); if(m) m.status='ok';   // 本地更新，不整页重载
+    mmSel.delete(id);
+    renderMemMgr();
   }catch(e){ alert('⚠ '+e.message); }
 }
 $('btnMemMgr').onclick=openMemMgr;
 $('mmClose').onclick=closeMemMgr; $('mmClose2').onclick=closeMemMgr; $('mmBack').onclick=closeMemMgr;
 $('mmRefresh').onclick=loadMemMgr;
 $('mmSearch').oninput=renderMemMgr;
+$('mmDelSel').onclick=delSelected;
+$('mmSelClear').onclick=()=>{ mmSel.clear(); renderMemMgr(); };
+$('mmSelAll').onclick=()=>{
+  const chk=$('mmSelAll');
+  document.querySelectorAll('#mmList .mm-chk').forEach(c=>{ c.checked=chk.checked;
+    const id=parseInt(c.dataset.id,10); if(chk.checked) mmSel.add(id); else mmSel.delete(id); });
+  updateSelBar();
+};
 document.querySelectorAll('.mm-tab').forEach(t=>{ t.onclick=()=>{
   document.querySelectorAll('.mm-tab').forEach(x=>x.classList.remove('on'));
-  t.classList.add('on'); mmTab=t.dataset.tab; renderMemMgr();
+  t.classList.add('on'); mmTab=t.dataset.tab; mmSel.clear(); renderMemMgr();
 }; });
 
 

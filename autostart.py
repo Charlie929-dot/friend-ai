@@ -37,6 +37,12 @@ CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
+# 开机自启（计划任务 / 启动文件夹）是 Windows 专属。服务端常驻在 Linux 上靠
+# 守护进程（daemon.py）+ 系统服务，这套 Windows 玩法用不上——而且 _ps() 里拼
+# PowerShell 路径会用到 os.environ["SystemRoot"]，Linux 上取不到会直接抛 TypeError，
+# 让 /api/send 的 /autostart 命令崩成 500、前端 JSON.parse 报错。先判平台，早退。
+IS_WIN = os.name == "nt"
+
 
 # --- 解释器：优先虚拟环境里的；守护用 pythonw（无窗口），服务用 python（要输出） ---
 def _python() -> str:
@@ -138,6 +144,10 @@ def _folder_remove() -> bool:
 # --- 对外动作 ---
 def install() -> str:
     """注册开机自启（登录时拉起网页端）。"""
+    if not IS_WIN:
+        return ("⚠ 开机自启是 Windows 专属功能（计划任务 / 启动文件夹）。\n"
+                "当前服务端跑在 Linux 上，常驻交给守护进程（daemon.py）和系统服务，\n"
+                "不需要这一步。本地 Windows 上才有用：python main.py autostart on")
     how = None
     why = ""
     r = _task_install()
@@ -162,6 +172,9 @@ def install() -> str:
 
 def uninstall() -> str:
     """取消开机自启（不杀当前进程）。"""
+    if not IS_WIN:
+        return ("⚠ 当前是 Linux，没有 Windows 的开机自启项可取消——\n"
+                "常驻靠守护进程（daemon.py），要停就 autostart stop。")
     a = _task_remove()
     b = _folder_remove()
     if not (a or b):
@@ -170,10 +183,25 @@ def uninstall() -> str:
 
 
 def is_installed() -> bool:
+    if not IS_WIN:
+        return False
     return _task_exists() or _folder_exists()
 
 
 def status() -> str:
+    if not IS_WIN:
+        # Linux 上没有 Windows 那套自启机制，但进程/守护状态照样查给用户看
+        running = _running_pid()
+        daemon = _daemon_pid()
+        url = f"http://{config.WEB_HOST}:{config.WEB_PORT}"
+        lines = ["开机自启：—（仅 Windows 支持，Linux 靠守护进程常驻）",
+                 f"网页端进程：{'✅ 在跑（PID ' + str(running) + f'）  →  {url}' if running else '❌ 没在跑'}",
+                 f"守护进程：{'✅ 在跑' if daemon else '❌ 没在跑'}"]
+        if STOP_FLAG.exists():
+            lines.append("⏸ 有 stop 标志：守护不会重拉（autostart start 会清掉它）")
+        if LOG_FILE.exists():
+            lines.append(f"日志：{LOG_FILE}（{LOG_FILE.stat().st_size} 字节）")
+        return "\n".join(lines)
     on = is_installed()
     running = _running_pid()
     how = ("计划任务" if _task_exists()
@@ -238,8 +266,12 @@ def _daemon_pid():
 
 
 def _kill(pid) -> None:
-    subprocess.run(["taskkill", "/pid", str(pid), "/t", "/f"],
-                   capture_output=True, text=True, errors="replace")
+    if IS_WIN:
+        subprocess.run(["taskkill", "/pid", str(pid), "/t", "/f"],
+                       capture_output=True, text=True, errors="replace")
+    else:
+        subprocess.run(["kill", "-9", str(pid)],
+                       capture_output=True, text=True, errors="replace")
 
 
 def start() -> str:
