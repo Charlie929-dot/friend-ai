@@ -1,7 +1,7 @@
 <!-- dsh-taskclock-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-17 19:50:00 · 修订 1 · 1 个会话小节 · 项目上下文跨轮保留
+> 更新于 2026-10-17 20:15:00 · 修订 1 · 2 个会话小节 · 项目上下文跨轮保留
 
 <!-- dsh-taskclock-handover:project:start -->
 ## 项目上下文
@@ -11,6 +11,7 @@
 - 对话延续批 1–3 已落地（v0.103/v0.104，`docs/方案-对话延续-v0.100.md`）；批 4 情绪陪伴暂缓，升级为「用户状态感知 LLM」候选，本期不做。
 - 「项目进度维护」路线仍待拍板（装工具 vs 改交接纪律）；当前先用本插件承接 DSH 会话的交接，不新增依赖。
 - 移动端适配以手机实测反馈为准：v0.106–v0.108 都是纯前端小步打磨，不新增接口/参数/用例（`EXPECTED_TOTAL` 保持 92）。
+- 项目根目录固定在 `C:\Users\HP\AI_Companion`（2026-10-17 合并 workbuddy/opencode/codeBuddy 三份副本；旧副本归档到 `C:\Users\HP\AI_Companion_archive`）。
 
 ### 约束
 - 会话第一动作：`git fetch origin main && git status -sb`，behind 先 `git pull --ff-only`；任何基于仓库状态的判断都以最新远端为准。
@@ -18,6 +19,8 @@
 - 测试用自研 runner `python run_tests.py`（不是 pytest），必须用 `.venv/Scripts/python` 或先激活 venv。
 - 数据库以服务器为准，本地库只作调试，不覆盖服务器。
 - 交接按工作单元刷新：开工先写「目标+下一步」，每个子里程碑刷新「已验证进度」，只保留一个 next_action；历史进 `docs/版本更新记录.md` 和 `.workbuddy/memory/`，这里不重复记。
+- 本机自启走 `Startup\friend-ai-web.vbs`（已修正引号）；旧计划任务 `friend-ai-web` 仍指旧路径，需管理员删除或重注册，别与 VBS 同时启用（会双开）。
+- 根目录设为 Low integrity（匹配 DSH 工作区形态）；venv 可随目录整体移动，迁移后全量 92/92。
 
 ### 依据
 - `AGENTS.md`（v0.108 工作流与项目硬性约定）
@@ -26,6 +29,18 @@
 <!-- dsh-taskclock-handover:project:end -->
 
 <!-- dsh-taskclock-handover:snapshot:start -->
+<!-- dsh-taskclock-handover:session:infra -->
+### 会话 `infra` · 2026-10-17 20:15:00
+
+> 第 0 轮 · 修订 1（基于 0） · 触发：目录合并收尾
+
+## 当前进度
+- 目标：项目根固定到 `C:\Users\HP\AI_Companion`，从新根继续维护。
+- 已完成：三份副本合并（旧副本归档 `C:\Users\HP\AI_Companion_archive`）；venv 随目录移动可用（`sys.prefix`/`BASE_DIR` 均为新根）；web 从新根恢复（8787，`GET /` 200、`/api/state` 200）；全量 92/92；修复 `autostart._startup_vbs` 多一个引号的 bug（Startup VBS 已验证能拉起 daemon）。
+- 正在进行：（无）
+- 剩余：①push→`sync-to-server.sh`→手机二次验收 ②旧计划任务 `friend-ai-web` 需管理员删/重注册（当前自启走 Startup VBS，二选一）③`C:\Users\HP\AI_Companion_archive` 确认无用后可删。
+- 下一步：`source ~/.bash_profile && bash sync-to-server.sh`，然后手机二次验收。
+
 <!-- dsh-taskclock-handover:session:seed -->
 ### 会话 `seed` · 2026-10-17 19:50:00
 

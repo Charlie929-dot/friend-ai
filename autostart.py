@@ -113,7 +113,7 @@ def _startup_vbs() -> str:
     return ("' 朋友型 AI · 网页端开机启动器（由 autostart.py 生成，别手改）\n"
             'Set sh = CreateObject("WScript.Shell")\n'
             f'sh.CurrentDirectory = "{config.BASE_DIR}"\n'
-            f'sh.Run {q}{q}{q}{pyw}{q}{q}{q} daemon.py", 0, False\n')
+            f'sh.Run {q}{q}{q}{pyw}{q}{q} daemon.py", 0, False\n')
 
 
 def _folder_install() -> bool:
