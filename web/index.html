@@ -37,7 +37,7 @@
     background: var(--bg); color: var(--ink); transition: background .35s, color .35s; }
 
   /* --- 顶部状态条 --- */
-  .topbar { display: flex; align-items: center; gap: 10px; height: 62px; padding: 0 16px;
+  .topbar { display: flex; align-items: center; gap: 10px; min-height: 62px; padding: env(safe-area-inset-top) 14px 0;
     flex: 0 0 auto; }
   .icon-btn { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px;
     color: var(--muted); transition: background .18s, color .18s; flex: 0 0 auto; }
@@ -53,10 +53,11 @@
     overflow: hidden; text-overflow: ellipsis; }
   .avatar-btn { width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #fff;
     font-size: 13px; flex: 0 0 auto; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent); }
+  #btnOutline { display: none; }
 
   /* 账户菜单 */
   .menu-wrap { position: relative; flex: 0 0 auto; }
-  .account-menu { position: absolute; right: 0; top: 46px; z-index: 60; width: 218px; padding: 8px;
+  .account-menu { position: absolute; right: 0; top: 46px; z-index: 60; width: 218px; max-width: calc(100vw - 16px); padding: 8px;
     background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
   .account-menu .menu-sec { padding: 6px 8px 8px; color: var(--muted); font-size: 10px; letter-spacing: .05em; }
   .skin-row { display: flex; gap: 6px; padding: 0 8px 6px; }
@@ -366,7 +367,12 @@
     box-shadow: 0 2px 6px rgba(0,0,0,.08); transition: color .15s, border-color .15s, background .15s; }
   .ma-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
   .ma-btn.danger:hover { color: #e07a7a; border-color: #e07a7a; background: #f8e4e4; }
-  @media (hover: none) { .msg-actions { opacity: .55; pointer-events: auto; } }
+  @media (hover: none) {
+    .msg-actions { opacity: .55; pointer-events: auto; }
+    .ma-btn { width: 32px; height: 32px; }
+    .ctx-item { padding: 10px 12px; }
+    .ctx-menu { min-width: 132px; }
+  }
 
   /* --- 右键菜单 --- */
   .ctx-menu { position: fixed; z-index: 80; min-width: 116px; padding: 6px; background: var(--surface);
@@ -460,7 +466,7 @@
   .bk-back { position: absolute; inset: 0; background: rgba(30,36,28,.4);
     backdrop-filter: blur(2px); }
   .bk-dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
-    width: min(880px, 94vw); height: min(78vh, 720px); display: flex; flex-direction: column;
+    width: min(880px, 94vw); height: min(78dvh, 720px); display: flex; flex-direction: column;
     background: var(--surface); color: var(--ink); border: 1px solid var(--line);
     border-radius: 18px; box-shadow: var(--shadow); overflow: hidden;
     animation: bkPop .22s cubic-bezier(.18,.9,.28,1.2); }
@@ -585,7 +591,16 @@
   }
 
   /* 跳转高亮（outline 用）保持原样 */
-  @media (max-width: 640px) { .outline { display: none; } }
+  @media (max-width: 640px) {
+    .outline { display: none; }
+    #btnOutline { display: grid; }
+    .outline.show { display: block; position: fixed; inset: 0; z-index: 72; background: rgba(20,24,18,.32); }
+    .outline.show .outline-rail { display: none; }
+    .outline.show .outline-panel { position: fixed; left: 8px; right: 8px;
+      top: calc(env(safe-area-inset-top) + 70px); bottom: 8px; width: auto; max-width: none;
+      opacity: 1; pointer-events: auto; background: var(--surface); border: 1px solid var(--line);
+      border-radius: 14px; box-shadow: var(--shadow); padding: 12px; overflow-y: auto; }
+  }
 
   @media (max-width: 520px) {
     .chat { padding: 14px 12px 6px; }
@@ -597,7 +612,7 @@
   .tune-modal { position: fixed; inset: 0; z-index: 90; display: none; }
   .tune-modal.open { display: block; }
   .tune-dialog { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
-    width: min(680px, 96vw); height: min(84vh, 760px); background: var(--surface); color: var(--ink);
+    width: min(680px, 96vw); height: min(84dvh, 760px); background: var(--surface); color: var(--ink);
     border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow);
     overflow: hidden; animation: bkPop .22s cubic-bezier(.18,.9,.28,1.2); display: flex; flex-direction: column; }
   .tune-ctl { flex: 0 0 auto; padding: 12px 18px 0; display: flex; align-items: center; gap: 10px; }
@@ -653,6 +668,7 @@
         </div>
       </div>
       <button class="icon-btn" id="btnInsight" aria-label="洞察面板"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l2.4 7.4H22l-6 4.4 2.3 7.2L12 16.6 5.7 21l2.3-7.2-6-4.4h7.6z"/></svg></button>
+      <button class="icon-btn" id="btnOutline" aria-label="目录" style="display:none"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></button>
       <div class="menu-wrap">
         <button class="avatar-btn" id="avatarBtn" aria-label="账户">友</button>
         <div class="account-menu" id="accountMenu" style="display:none">
@@ -1565,6 +1581,11 @@ document.addEventListener('click',e=>{
   if(e.target.closest('.outline')) return;
   clearMsgHl();
 });
+
+/* 移动端目录：顶栏按钮 toggle 浮层，点条目或浮层外关闭 */
+$('btnOutline').onclick = () => $('outline').classList.toggle('show');
+$('outline').addEventListener('click', e => { if(!e.target.closest('.outline-panel')) $('outline').classList.remove('show'); });
+$('outlinePanel').addEventListener('click', e => { if(e.target.closest('.ol-item')) $('outline').classList.remove('show'); });
 
 /* ===== 加载更早的历史 ===== */
 function updateLoadMore(){
