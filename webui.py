@@ -315,6 +315,16 @@ def _make_handler(channel: WebChannel, on_message):
                            "created_at": m.get("created_at", "")}
                           for m in rows[:4]]
                 self._json({"total": len(rows), "recent": recent})
+            elif u.path == "/api/memories/all":
+                # 记忆管理（v0.105）：A 库自动记忆 + B 库长文 + 事实便签，全量带 id，
+                # 给调试面板「管理记忆」做删除 / 确认 AI 提议删除 / 保留用。
+                # 排除自我记忆（self_*，那是"我说过的话"，归意识流面板）。
+                mems = [dict(m) for m in db.all_memories(limit=200)
+                        if not str(m.get("tags", "")).startswith("self_")]
+                longs = [dict(m) for m in db.all_long_memories(limit=200)]
+                facts = [{"id": i + 1, "content": f}
+                         for i, f in enumerate(db.get_facts())]
+                self._json({"mems": mems, "longs": longs, "facts": facts})
             elif u.path == "/api/books":
                 # 书架（S4 用户书库）：分类清单 + 全部书 + 阅读进度 + TA 当前口味。
                 # 分类在后端映射表里（books/categories.json），不靠建子目录。
@@ -419,6 +429,18 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             if u.path == "/api/revoke":
                 self._do_revoke()
+                return
+            if u.path == "/api/memories/delete":
+                self._do_memory_delete()
+                return
+            if u.path == "/api/memories/long/delete":
+                self._do_long_memory_delete()
+                return
+            if u.path == "/api/memories/fact/delete":
+                self._do_fact_delete()
+                return
+            if u.path == "/api/memories/keep":
+                self._do_memory_keep()
                 return
             if u.path == "/api/llm/config":
                 self._do_llm_config()
@@ -796,6 +818,63 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             import stream
             stream.append("revoke", f"对方撤回了刚才那句「{removed['content']}」，我当没看见")
+            self._json({"ok": True, "id": mid})
+
+        def _do_memory_delete(self):
+            """删除一条自动记忆（v0.105）：网页端「管理记忆」的删除按钮，
+            等价于 CLI 的 /delmem <编号>；AI 提议删除的待确认项点「确认」也走这里。"""
+            data = self._read_json()
+            try:
+                mid = int(data.get("id") or 0)
+            except (ValueError, TypeError):
+                self._json({"ok": False, "error": "记忆 id 不对"})
+                return
+            removed = db.delete_memory(mid)
+            if not removed:
+                self._json({"ok": False, "error": "这条记忆不存在（可能已经被删了）"})
+                return
+            self._json({"ok": True, "id": mid})
+
+        def _do_long_memory_delete(self):
+            """删除一条 B 库长文（v0.105）：网页端「管理记忆 · 长记忆」删除按钮。
+            会顺手断开 A 库记忆对它的引用（delete_long_memory 内部已处理）。"""
+            data = self._read_json()
+            try:
+                lid = int(data.get("id") or 0)
+            except (ValueError, TypeError):
+                self._json({"ok": False, "error": "长记忆 id 不对"})
+                return
+            removed = db.delete_long_memory(lid)
+            if not removed:
+                self._json({"ok": False, "error": "这条长记忆不存在（可能已经被删了）"})
+                return
+            self._json({"ok": True, "id": lid})
+
+        def _do_fact_delete(self):
+            """删除一条事实便签（v0.105）：网页端「管理记忆 · 便签」删除按钮，
+            等价于 CLI 的 /forget <编号>。"""
+            data = self._read_json()
+            try:
+                fid = int(data.get("id") or 0)
+            except (ValueError, TypeError):
+                self._json({"ok": False, "error": "便签编号不对"})
+                return
+            removed = db.delete_fact(fid)
+            if not removed:
+                self._json({"ok": False, "error": "没有这个编号的便签"})
+                return
+            self._json({"ok": True, "id": fid})
+
+        def _do_memory_keep(self):
+            """保留一条 AI 提议删除的记忆（v0.105）：取消 pending_delete 标记，
+            等价于 CLI 的 /keepmem <编号>。"""
+            data = self._read_json()
+            try:
+                mid = int(data.get("id") or 0)
+            except (ValueError, TypeError):
+                self._json({"ok": False, "error": "记忆 id 不对"})
+                return
+            db.set_memory_status(mid, "ok")
             self._json({"ok": True, "id": mid})
 
         def _restart(self):

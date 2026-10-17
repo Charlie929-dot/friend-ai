@@ -509,6 +509,35 @@
   .bk-foot { flex: 0 0 auto; display: flex; gap: 8px; align-items: center;
     padding: 10px 16px; border-top: 1px solid var(--line); }
 
+  /* ===== 记忆管理（v0.105：网页端删记忆 / 确认 AI 想忘的 / 保留）===== */
+  .mm-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+  .mm-tab { font-size: 12px; padding: 5px 11px; border-radius: 9px; cursor: pointer;
+    color: var(--muted); border: 1px solid transparent; user-select: none; }
+  .mm-tab.on { color: var(--ink); background: var(--surface-2); border-color: var(--line); }
+  .mm-tab em { font-style: normal; font-weight: 600; margin-left: 4px; color: var(--accent); }
+  .mm-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+  .mm-bar input { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--line);
+    border-radius: 9px; background: var(--surface); color: var(--ink); font-size: 12.5px; outline: 0; }
+  .mm-bar input:focus { border-color: var(--accent); }
+  .mm-bar .btn { padding: 7px 12px; }
+  .mm-list { display: flex; flex-direction: column; }
+  .mm-item { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0;
+    border-top: 1px solid var(--line); }
+  .mm-item:first-child { border-top: 0; }
+  .mm-text { flex: 1; min-width: 0; }
+  .mm-text p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink);
+    word-break: break-word; white-space: pre-wrap; }
+  .mm-meta { margin-top: 4px; font-size: 11px; color: var(--muted); }
+  .mm-meta .mm-tag { display: inline-block; padding: 1px 6px; border-radius: 6px;
+    background: var(--surface-2); color: var(--muted); font-size: 10.5px; margin-right: 4px; }
+  .mm-pending { background: var(--accent-soft); border-radius: 10px; padding: 8px 10px;
+    border-top: 0; margin-bottom: 8px; }
+  .mm-pending .mm-flag { color: var(--accent); font-size: 11px; font-weight: 600; }
+  .mm-acts { margin-top: 7px; display: flex; gap: 6px; }
+  .mm-del-btn { flex: 0 0 auto; padding: 4px 11px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface-2); color: #d98a8a; font-size: 11.5px; cursor: pointer; }
+  .mm-del-btn:hover { background: #fbeeee; border-color: #e07a7a; color: #e07a7a; }
+
   /* ===== 模型设置（v0.80：账户菜单里自主配置，全局，写 .env 热生效）===== */
   .lm-modal { position: fixed; inset: 0; z-index: 90; display: none; }
   .lm-modal.open { display: block; }
@@ -773,9 +802,22 @@
               <button class="btn" data-cmd="/work">手头的事</button>
               <button class="btn" data-cmd="/diary">今天的日记</button>
               <button class="btn" data-cmd="/diaries">日记目录</button>
+              <button class="btn" data-cmd="/review">写篇日记</button>
               <button class="btn" data-cmd="/memories">TA 记住的事</button>
+              <button class="btn primary" id="btnMemMgr">管理记忆</button>
               <button class="btn" data-cmd="/notes">事实便签</button>
               <button class="btn" data-cmd="/profile">TA 知道的你</button>
+              <button class="btn" data-cmd="/status">状态·计数</button>
+              <button class="btn" data-cmd="/persona">人格卡</button>
+              <button class="btn" data-cmd="/model">当前模型</button>
+              <button class="btn" data-cmd="/decay">跑遗忘</button>
+              <button class="btn" data-cmd="/memfill">历史回填</button>
+              <button class="btn" data-cmd="/selfmem">自我记忆</button>
+              <button class="btn" data-cmd="/selfreview">自我复盘</button>
+              <button class="btn" data-cmd="/familiar">转熟悉</button>
+              <button class="btn" data-cmd="/new">转初见</button>
+              <button class="btn" data-cmd="/refresh">热重载</button>
+              <button class="btn" data-cmd="/autostart">自启状态</button>
             </div>
             <div class="btnrow">
               <button class="btn" id="btnGuard">防打扰</button>
@@ -813,6 +855,35 @@
           <button class="btn" id="bkReindex">重新自动分类</button>
           <span style="flex:1"></span>
           <span class="bk-sub" id="bkPref"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 记忆管理（v0.105：网页端删记忆 / 确认 AI 想忘的 / 保留 / 删长文 / 删便签） -->
+    <div class="bk-modal" id="mmModal">
+      <div class="bk-back" id="mmBack"></div>
+      <div class="bk-dialog">
+        <div class="bk-head">
+          <h3>记忆管理</h3>
+          <span class="bk-sub">删记忆 / 确认 AI 想忘的 / 删长文 / 删便签</span>
+          <button class="icon-btn" id="mmClose" aria-label="关闭"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="bk-body">
+          <div class="mm-tabs">
+            <span class="mm-tab on" data-tab="mems">自动记忆 <em id="mmCntMems">0</em></span>
+            <span class="mm-tab" data-tab="longs">长记忆 <em id="mmCntLongs">0</em></span>
+            <span class="mm-tab" data-tab="facts">便签 <em id="mmCntFacts">0</em></span>
+          </div>
+          <div class="mm-bar">
+            <input id="mmSearch" type="text" placeholder="搜索内容…">
+            <button class="btn" id="mmRefresh">刷新</button>
+          </div>
+          <div id="mmList" class="mm-list"><div class="empty">加载中…</div></div>
+        </div>
+        <div class="bk-foot">
+          <span class="bk-sub">删除不可恢复。AI 想忘的会标「待确认」，可确认删除或保留。</span>
+          <span style="flex:1"></span>
+          <button class="btn" id="mmClose2">关闭</button>
         </div>
       </div>
     </div>
@@ -1589,6 +1660,95 @@ async function restartService(){
   catch(e){ panelDone('重启','⚠ '+e.message); }
 }
 
+/* ===== 记忆管理（v0.105：网页端删记忆 / 确认 AI 想忘的 / 保留 / 删长文 / 删便签）===== */
+let mmTab='mems', mmData={mems:[],longs:[],facts:[]};
+function openMemMgr(){ $('foldDebug').open=true; loadMemMgr(); $('mmModal').classList.add('open'); }
+function closeMemMgr(){ $('mmModal').classList.remove('open'); }
+async function loadMemMgr(){
+  $('mmList').innerHTML='<div class="empty">加载中…</div>';
+  try{
+    const d=await (await fetch('/api/memories/all')).json();
+    mmData=d;
+    $('mmCntMems').textContent=(d.mems||[]).length;
+    $('mmCntLongs').textContent=(d.longs||[]).length;
+    $('mmCntFacts').textContent=(d.facts||[]).length;
+    renderMemMgr();
+  }catch(e){ $('mmList').innerHTML='<div class="empty">⚠ '+e.message+'</div>'; }
+}
+function renderMemMgr(){
+  const q=($('mmSearch').value||'').trim().toLowerCase();
+  const box=$('mmList'); box.innerHTML='';
+  let items=[];
+  if(mmTab==='mems'){
+    items=(mmData.mems||[]).map(m=>({id:m.id,kind:'mem',status:m.status,content:m.content,
+      cat:m.category,theme:m.theme,tags:m.tags,time_label:m.time_label,place:m.place,
+      person:m.person,created_at:m.created_at}));
+  } else if(mmTab==='longs'){
+    items=(mmData.longs||[]).map(m=>({id:m.id,kind:'long',content:m.summary,cat:m.category,created_at:m.created_at}));
+  } else {
+    items=(mmData.facts||[]).map(f=>({id:f.id,kind:'fact',content:f.content}));
+  }
+  const filtered=items.filter(it=>!q || (it.content||'').toLowerCase().includes(q));
+  if(!filtered.length){ box.innerHTML='<div class="empty">'+(q?'没有匹配的内容':'这里还什么都没有')+'</div>'; return; }
+  filtered.forEach(it=>{
+    const row=document.createElement('div');
+    row.className='mm-item'+(it.status==='pending_delete'?' mm-pending':'');
+    let meta='';
+    if(it.cat) meta+='<span class="mm-tag">'+esc(it.cat)+(it.theme?'·'+esc(it.theme):'')+'</span>';
+    for(const d of [it.time_label,it.place,it.person,it.tags]){
+      if(d) meta+='<span class="mm-tag">'+esc(d)+'</span>';
+    }
+    if(it.created_at) meta+='<span>记于'+esc(it.created_at.slice(5,16).replace('T',' '))+'</span>';
+    const text='<div class="mm-text"><p>'+esc(it.content)+'</p>'+(meta?'<div class="mm-meta">'+meta+'</div>':'')+'</div>';
+    let act='';
+    if(it.kind==='mem' && it.status==='pending_delete'){
+      act='<div class="mm-acts"><span class="mm-flag">AI 想忘掉这条</span>'
+        +'<button class="btn warn" data-del="'+it.id+'" data-kind="mem">确认删除</button>'
+        +'<button class="btn" data-keep="'+it.id+'">保留</button></div>';
+    } else {
+      const label=it.kind==='long'?'删长文':(it.kind==='fact'?'删便签':'删除');
+      act='<button class="mm-del-btn" data-del="'+it.id+'" data-kind="'+it.kind+'">'+label+'</button>';
+    }
+    row.innerHTML=text+act;
+    box.appendChild(row);
+  });
+  box.querySelectorAll('[data-del]').forEach(b=>{
+    b.onclick=()=>delMem(parseInt(b.dataset.del,10), b.dataset.kind||'mem', b.textContent);
+  });
+  box.querySelectorAll('[data-keep]').forEach(b=>{
+    b.onclick=()=>keepMem(parseInt(b.dataset.keep,10));
+  });
+}
+async function delMem(id,kind,label){
+  if(!confirm('确定'+label+'？删除不可恢复。')) return;
+  let url='/api/memories/delete';
+  if(kind==='long') url='/api/memories/long/delete';
+  else if(kind==='fact') url='/api/memories/fact/delete';
+  try{
+    const r=await (await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id})})).json();
+    if(!r.ok){ alert(r.error||'删除失败'); }
+    await loadMemMgr();
+  }catch(e){ alert('⚠ '+e.message); }
+}
+async function keepMem(id){
+  try{
+    const r=await (await fetch('/api/memories/keep',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id})})).json();
+    if(!r.ok){ alert(r.error||'操作失败'); }
+    await loadMemMgr();
+  }catch(e){ alert('⚠ '+e.message); }
+}
+$('btnMemMgr').onclick=openMemMgr;
+$('mmClose').onclick=closeMemMgr; $('mmClose2').onclick=closeMemMgr; $('mmBack').onclick=closeMemMgr;
+$('mmRefresh').onclick=loadMemMgr;
+$('mmSearch').oninput=renderMemMgr;
+document.querySelectorAll('.mm-tab').forEach(t=>{ t.onclick=()=>{
+  document.querySelectorAll('.mm-tab').forEach(x=>x.classList.remove('on'));
+  t.classList.add('on'); mmTab=t.dataset.tab; renderMemMgr();
+}; });
+
+
 /* ===== 账户菜单 ===== */
 const accMenu=$('accountMenu');
 $('avatarBtn').onclick=(e)=>{ e.stopPropagation(); accMenu.style.display=accMenu.style.display==='none'?'block':'none'; };
@@ -1769,7 +1929,7 @@ async function loadMemories(){
   }catch(e){ $('memList').innerHTML='<p class="mem-empty">⚠ 拉取失败：'+esc(e.message)+'</p>'; }
 }
 $('mMemRefresh').onclick=()=>loadMemories();
-$('mMemAll').onclick=()=>{ $('foldDebug').open=true; runCmd('/memories','TA 记住的事'); };
+$('mMemAll').onclick=()=>{ openMemMgr(); };
 
 /* ===== 书架（分类由后端映射表管，这里只选/改，不用建文件夹）===== */
 let bkData = {categories:[], books:[], progress:{}, pref:{category:'',tags:[]}};
