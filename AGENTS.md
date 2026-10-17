@@ -55,7 +55,8 @@
 
 服务器：腾讯云 `ubuntu@150.158.147.51`（密钥 `~/.ssh/tunnel_key`），代码目录 `/opt/friend-ai`，systemd 服务 `friend-ai`，网页 https://derp.charlie2kabu.xyz:8443/。**本机只留开发副本**。
 
-- **本地环境（跑测试 / 起 web 前必须先做）**：本机 venv 在 `friend-ai/.venv`（Python 3.14.7，依赖已装）。Git Bash 里先 `source .venv/Scripts/activate` 再跑 `python run_tests.py` / `python main.py web`；或直接用 `.venv/Scripts/python`。**切勿用裸 `python`**——非激活 shell 里它指向别的解释器、缺项目依赖会 `ModuleNotFoundError`。首次克隆 / 换机器：`pip install -r requirements.txt`（服务器侧由 sync 脚本自动装，本地需手动）。
+- **本地环境（跑测试 / 起 web 前必须先做）**：本机 venv 在项目根 `.venv`（Python 3.14.7，依赖已装）。Git Bash 里先 `source .venv/Scripts/activate` 再跑 `python run_tests.py` / `python main.py web`；或直接用 `.venv/Scripts/python`。**切勿用裸 `python`**——非激活 shell 里它指向别的解释器、缺项目依赖会 `ModuleNotFoundError`。首次克隆 / 换机器：`pip install -r requirements.txt`（服务器侧由 sync 脚本自动装，本地需手动）。
+- **本机项目根（2026-10-17 合并后）**：项目在 `C:\Users\HP\AI_Companion`（原 workbuddy/opencode/codeBuddy 三份副本已归档到 `C:\Users\HP\AI_Companion_archive`）；本机自启走 `Startup\friend-ai-web.vbs`，旧计划任务 `friend-ai-web` 指旧路径、需管理员删/重注册；根目录为 Low integrity（DSH 工作区形态）。
 
 - **同步**：`source ~/.bash_profile && bash sync-to-server.sh`——先 source 加载 `GH_TOKEN`/`GITEE_TOKEN`（否则跳过双推、服务器拉不到）。流程 = 双推 GitHub+Gitee → 服务器从 Gitee 拉 → 装依赖+重启 → 自检（HEAD=本机 commit + `GET /login`→200）。Windows 用 Git Bash（`sync-to-server.cmd`），别走 WSL 的 docker-desktop 发行版。
 - **数据库以服务器为准**：服务器 `friend.db` 是线上聊天唯一真相，本地库只作调试、别覆盖服务器。

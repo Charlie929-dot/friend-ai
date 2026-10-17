@@ -1,32 +1,7 @@
 <!-- dsh-taskclock-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-17 20:15:00 · 修订 1 · 2 个会话小节 · 项目上下文跨轮保留
-
-<!-- dsh-taskclock-handover:project:start -->
-## 项目上下文
-
-### 决策
-- 交接已改为插件维护的根目录 `handover.md`（2026-10-17，原临时交接文件已删）：以后 DSH 会话在每个工作单元结束时调用 `handover_write`，不再手工维护第二份交接。
-- 对话延续批 1–3 已落地（v0.103/v0.104，`docs/方案-对话延续-v0.100.md`）；批 4 情绪陪伴暂缓，升级为「用户状态感知 LLM」候选，本期不做。
-- 「项目进度维护」路线仍待拍板（装工具 vs 改交接纪律）；当前先用本插件承接 DSH 会话的交接，不新增依赖。
-- 移动端适配以手机实测反馈为准：v0.106–v0.108 都是纯前端小步打磨，不新增接口/参数/用例（`EXPECTED_TOTAL` 保持 92）。
-- 项目根目录固定在 `C:\Users\HP\AI_Companion`（2026-10-17 合并 workbuddy/opencode/codeBuddy 三份副本；旧副本归档到 `C:\Users\HP\AI_Companion_archive`）。
-
-### 约束
-- 会话第一动作：`git fetch origin main && git status -sb`，behind 先 `git pull --ff-only`；任何基于仓库状态的判断都以最新远端为准。
-- 改完代码必做五步：代码（含调试面板）→ `python run_tests.py` 全量转绿（`EXPECTED_TOTAL` 同步）→ 文档同步（需求概要/实测反馈/AGENTS/交接）→ commit（不 push）→ `source ~/.bash_profile && bash sync-to-server.sh`。
-- 测试用自研 runner `python run_tests.py`（不是 pytest），必须用 `.venv/Scripts/python` 或先激活 venv。
-- 数据库以服务器为准，本地库只作调试，不覆盖服务器。
-- 交接按工作单元刷新：开工先写「目标+下一步」，每个子里程碑刷新「已验证进度」，只保留一个 next_action；历史进 `docs/版本更新记录.md` 和 `.workbuddy/memory/`，这里不重复记。
-- 本机自启走 `Startup\friend-ai-web.vbs`（已修正引号）；旧计划任务 `friend-ai-web` 仍指旧路径，需管理员删除或重注册，别与 VBS 同时启用（会双开）。
-- 根目录设为 Low integrity（匹配 DSH 工作区形态）；venv 可随目录整体移动，迁移后全量 92/92。
-
-### 依据
-- `AGENTS.md`（v0.108 工作流与项目硬性约定）
-- `docs/需求概要-朋友型AI.md`（需求真相）、`docs/版本更新记录.md`（历史）
-- `docs/方案-对话延续-v0.100.md`（批 1–3 落地、批 4 暂缓）
-<!-- dsh-taskclock-handover:project:end -->
+> 更新于 2026-10-17 20:15:00 · 修订 1 · 2 个会话小节 · 项目规则见 AGENTS.md
 
 <!-- dsh-taskclock-handover:snapshot:start -->
 <!-- dsh-taskclock-handover:session:infra -->
