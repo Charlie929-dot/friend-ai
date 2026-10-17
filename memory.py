@@ -68,6 +68,13 @@ when 必须是完整的绝对时刻（没精确到时刻的用当天 09:00 占�
 （对方的计划）或「task」（你自己的任务）。只有确定日期的事才加 calendar，没有
 明确时间的一次性闲聊别加。
 
+【聊到了你在惦记的事】如果这轮对话里，你们聊到了一件你已经惦记着、有确定日期的事——
+比如你记着对方"明天要ppt汇报"，这轮对方又说"ppt还没开始做"——别把它当新事再建一次，
+给这条记忆额外加一项 "talked"：
+  "talked": {"what": "对方明天ppt汇报", "note": "还没开始做"}
+what 就写这件事（不用写时间），note 一句话写对方/你现在的进展或情况（没进展就空字符串）。
+只有对话里真的在聊这件事才加 talked；顺口提一句日期不算。
+
 【类别说明】这些类别可以描述任何一个人——你自己、对方、或提到的别人。
 画像=某个人是谁（称呼/城市/身份）；偏好=喜欢/讨厌；计划=打算做的事；
 事件=已经发生的事；人际=某个人与别人的关系；情绪=状态与感受。
@@ -277,6 +284,16 @@ def _apply(item: dict, assistant_tail: bool = False, evidence: str = "") -> bool
         when_norm = events.add_calendar(cal["what"], cal["when"], cal.get("kind", "plan"))
         if when_norm:
             print(f"[memory] 记住日历：{cal['what']} @{when_norm}")
+
+    # 聊到过惦记的事（v0.104）：不取消、不新建，只把这次聊到的情况沉淀进那件
+    # 事的动态记录 + 起几天冷却（刚聊过别追着问），下次提起时才有上下文。
+    talked = item.get("talked")
+    if isinstance(talked, dict) and talked.get("what"):
+        import events as _events
+        if _events.note_talked(talked["what"], talked.get("note", "")):
+            print(f"[memory] 聊到过：{talked['what']}"
+                  + (f"（{(talked.get('note') or '').strip()[:20]}）"
+                     if (talked.get("note") or "").strip() else ""))
 
     # A/B 两级库：带 long+full 的是"一句两句说不完"的长内容——摘要进 A 库
     # （memories，召回只看它），全文进 B 库（long_memories），A 库带 long_id 伪链接

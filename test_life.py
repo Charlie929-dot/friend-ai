@@ -459,7 +459,12 @@ def test_care_events():
 
 
 def test_calendar_events():
-    """日历（v0.103 批 3）：临期多触点 + 聊过取消 + 准备状态 + 年重复 + 触点触发念头。"""
+    """日历（v0.103 批 3 + v0.104 修正）：触点概率随临近递增 + 聊过沉淀（不取消）
+    + 冷却 + 准备状态 + 年重复 + 触点注入念头 + 聊到的内容进下次开口的弹药。
+
+    触点时刻本身是随机的（提醒日当天挑个时间），所以断言的项一律**手动指定**
+    next_touch——否则随机时刻擦到过去就会偶发失败。
+    """
     import json
     import tempfile
     from datetime import datetime as _dt, timedelta as _td
@@ -468,9 +473,23 @@ def test_calendar_events():
     import events as _ev
     import stream as _stream
 
+    def _stored(what: str) -> dict:
+        return next(e for e in _ev.calendar_events() if e["what"] == what)
+
+    def _only(what: str, when: _dt, **extra) -> None:
+        """日历项**只留这一条**直接写 kv（跳过 add_calendar 的触点随机化）。"""
+        ev = {"what": what, "when": when.strftime("%Y-%m-%d %H:%M"), "kind": "plan",
+              "prepare": "", "status": "pending", "annual": False, "talked": 0,
+              "talked_at": "", "mute_until": "", "notes": [],
+              "created_at": _dt.now().isoformat(timespec="seconds")}
+        ev.update(extra)
+        _db.set_kv("calendar_events", json.dumps([ev], ensure_ascii=False))
+
     tmp = Path(tempfile.mkdtemp())
     with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
-                       CALENDAR_ENABLED=True, CONSCIOUS_STREAM_ENABLED=True):
+                       CALENDAR_ENABLED=True, CONSCIOUS_STREAM_ENABLED=True,
+                       CALENDAR_TOUCH_PROB_FAR=1.0, CALENDAR_TOUCH_PROB_NEAR=1.0,
+                       CALENDAR_TALKED_MUTE_DAYS=2, CALENDAR_NOTE_MAX=3):
         now = _dt.now()
         # 1) 非年重复：未来才存、同 what 幂等、算好 next_touch
         when = _ev.add_calendar("小徐明天晚上要ppt汇报",
@@ -478,30 +497,46 @@ def test_calendar_events():
         assert when, "未来日历项该存"
         assert _ev.add_calendar("小徐明天晚上要ppt汇报",
                                 (now + _td(days=3)).strftime("%Y-%m-%d %H:%M")) is None, "同 what 应幂等"
-        ev = _ev.pending_calendar()[0]
-        assert ev["next_touch"], "该算出 next_touch"
+        assert _ev.pending_calendar()[0]["next_touch"], "该算出 next_touch"
 
         # 2) 准备状态随对话更新
         assert _ev.set_prepare("小徐明天晚上要ppt汇报", "在做了") is True
-        assert _ev.pending_calendar()[0]["prepare"] == "在做了"
+        assert _stored("小徐明天晚上要ppt汇报")["prepare"] == "在做了"
 
-        # 3) 聊过取消：清 next_touch（近期不再重复提醒）
-        assert _ev.mark_talked("小徐明天晚上要ppt汇报") is True
-        ev2 = _ev.pending_calendar()[0]
-        assert ev2["talked"] == 1 and not ev2["next_touch"], "聊过该取消近期提醒"
+        # 3) 聊过 = 沉淀，不是取消：记动态记录 + 起冷却，next_touch 原样保留
+        before_touch = _stored("小徐明天晚上要ppt汇报")["next_touch"]
+        assert _ev.note_talked("小徐明天晚上要ppt汇报", "还没开始做") is True
+        ev2 = _stored("小徐明天晚上要ppt汇报")
+        assert ev2["talked"] == 1, "该记下聊过"
+        assert ev2["notes"] and ev2["notes"][-1]["text"] == "还没开始做", "该沉淀动态记录"
+        assert ev2["prepare"] == "还没开始做", "准备状态该跟着这次聊到的更新"
+        assert ev2["next_touch"] == before_touch, "聊过不该取消后续触点（只是这几天不追着问）"
+        assert ev2["mute_until"], "该起冷却"
 
         # 4) 年重复：MM-DD 生成今年/明年事件
         _ev.add_calendar("国庆节", "10-01", kind="holiday", annual=True)
         ann = [e for e in _ev.calendar_events() if e["what"] == "国庆节"]
         assert ann and ann[0]["annual"] is True and ann[0]["month"] == 10 and ann[0]["day"] == 1
 
-        # 5) 触点到期 → 注入念头 + 触发 proactive("calendar")
-        _db.set_kv("calendar_events", json.dumps([{
-            "what": "周五交论文", "when": (now + _td(hours=2)).strftime("%Y-%m-%d %H:%M"),
-            "kind": "plan", "prepare": "", "status": "pending", "annual": False,
-            "talked": 0, "next_touch": (now - _td(minutes=1)).isoformat(timespec="seconds"),
-            "created_at": now.isoformat(timespec="seconds"),
-        }], ensure_ascii=False))
+        # 5) 聊到的内容进下次开口的弹药（不是从零问一遍）
+        import context as _ctx
+        _db.set_kv("calendar_pending", json.dumps(
+            _stored("小徐明天晚上要ppt汇报"), ensure_ascii=False))
+        msgs = [{"role": "system", "content": "人设"}, {"role": "user", "content": "开口"}]
+        assert _ctx._inject_calendar_material(msgs) is True
+        assert "还没开始做" in msgs[-1]["content"], "提起时该带着上次聊到的上下文"
+
+        # 6) 记忆抽取里「聊到惦记的事」→ 沉淀进那件事（信息从对话流向日历）
+        import memory as _mem
+        _mem._apply({"content": "小徐说ppt还没开始做，打算今晚赶", "category": "计划",
+                     "talked": {"what": "小徐明天晚上要ppt汇报", "note": "打算今晚赶"}})
+        ev = _stored("小徐明天晚上要ppt汇报")
+        assert ev["notes"][-1]["text"] == "打算今晚赶", "聊到的进展该沉淀进动态记录"
+        assert len(ev["notes"]) <= 3, f"动态记录该有上限：{len(ev['notes'])}"
+
+        # 7) 触点到期 → 注入念头 + 主动开口（概率全开时必开口）
+        _only("周五交论文", now + _td(days=2),
+              next_touch=(now - _td(minutes=1)).isoformat(timespec="seconds"))
         calls = []
         engine = types.SimpleNamespace(proactive=lambda sc: (calls.append(sc) or True))
         _db.set_state("AWAKE")
@@ -509,19 +544,36 @@ def test_calendar_events():
         assert "calendar" in calls, f"触点到期该触发 calendar 开口：{calls}"
         lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "calendar"]
         assert any("周五交论文" in t for t in lines), f"触点到期该往意识流注入念头：{lines}"
+        # 触完要推进（不是原地打转），事件没到就还 pending
+        assert _stored("周五交论文")["status"] == "pending", "事件没过去不该收"
 
-        # 6) 聊过取消（talked）后不再触
-        _db.set_kv("calendar_events", json.dumps([{
-            "what": "已经聊过的事", "when": (now + _td(hours=2)).strftime("%Y-%m-%d %H:%M"),
-            "kind": "plan", "prepare": "", "status": "pending", "annual": False,
-            "talked": 1, "next_touch": (now - _td(minutes=1)).isoformat(timespec="seconds"),
-            "created_at": now.isoformat(timespec="seconds"),
-        }], ensure_ascii=False))
+        # 8) 冷却中：念头照留，但不追着开口（刚聊过还问 = 没在听）
+        _only("刚聊过的事", now + _td(days=1),
+              talked=1, talked_at=now.isoformat(timespec="seconds"),
+              next_touch=(now - _td(minutes=1)).isoformat(timespec="seconds"),
+              mute_until=(now + _td(days=2)).isoformat(timespec="seconds"),
+              notes=[{"at": now.isoformat(timespec="seconds"), "text": "还没开始"}])
         calls.clear()
         _ev.calendar_tick(engine)
-        assert not calls, "聊过取消后不该再触"
+        assert not calls, "冷却中不该靠触点开口"
+        lines = [r["text"] for r in _stream.recent(20) if r["kind"] == "calendar"]
+        assert any("刚聊过的事" in t for t in lines), "冷却期念头照常留（TA想起就能自己提）"
+        # 冷却过了 → 又能开口（说明是冷却，不是取消）
+        _only("刚聊过的事", now + _td(days=1),
+              talked=1, talked_at=now.isoformat(timespec="seconds"),
+              next_touch=(now - _td(minutes=1)).isoformat(timespec="seconds"),
+              mute_until="", notes=[{"at": now.isoformat(timespec="seconds"), "text": "还没开始"}])
+        calls.clear()
+        _ev.calendar_tick(engine)
+        assert "calendar" in calls, "冷却过了就该还能开口（不是取消）"
 
-        # 7) 生日年重复：从 profile 的「生日」字段自动生成年事件
+        # 9) 事件时刻过了才收（不是触完四个触点就收）
+        _only("已经过去的事", now - _td(hours=2),
+              next_touch=(now - _td(minutes=1)).isoformat(timespec="seconds"))
+        _ev.calendar_tick(engine)
+        assert _stored("已经过去的事")["status"] == "done", "时间截止才收"
+
+        # 10) 生日年重复：从 profile 的「生日」字段自动生成年事件
         _db.set_kv("profile_locked", "1")
         _db.set_kv("profile_text", "生日：03-15\n城市：上海")
         assert _ev.ensure_birthday(now) is not None
@@ -529,7 +581,18 @@ def test_calendar_events():
         assert bday and bday[0]["annual"] and bday[0]["month"] == 3 and bday[0]["day"] == 15, \
             f"生日该生成年重复事件：{bday}"
 
-        print("ok 日历（临期触点/聊过取消/准备状态/年重复/触点触发念头）")
+    # 11) 提起概率：越临近事件越高（纯函数，不掷骰子）
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       CALENDAR_TOUCH_PROB_FAR=0.0, CALENDAR_TOUCH_PROB_NEAR=1.0):
+        now = _dt.now()
+        ev = {"what": "一件事", "when": (now + _td(days=10)).strftime("%Y-%m-%d %H:%M")}
+        d = _dt.strptime(ev["when"], "%Y-%m-%d %H:%M")
+        p_far = _ev._touch_prob(ev, d - _td(days=7), now)     # 前一周
+        p_mid = _ev._touch_prob(ev, d - _td(days=3), now)     # 前三天
+        p_near = _ev._touch_prob(ev, d, now)                  # 事件当天
+        assert p_far == 0.0 and p_near == 1.0, f"概率锚点不对：{p_far}/{p_near}"
+        assert p_far < p_mid < p_near, f"概率该随临近递增：{p_far}/{p_mid}/{p_near}"
+        print("ok 日历（触点概率递增/聊过沉淀不取消/冷却/准备状态/年重复/念头）")
 
 
 def test_interruption_cost():

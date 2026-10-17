@@ -71,11 +71,14 @@ def _quote_hint(quote: dict | None) -> dict | None:
         f"「{quote['content'].strip()}」。回应时结合这句被引的话来理解对方在接什么。")}
 
 
-def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
+def build_chat_messages(state: str, batch: list[str],
                         inbox: bool = False, quote: dict | None = None) -> list[dict]:
     """私聊回复的完整 messages：静态 system → **意识流** → 动态 system → 其余注入 →
     整段会话上下文（user）。inbox=True 时带"刚上线看到留言"语境。
     quote 非空时额外注入一条【引用回复】说明对方在回哪句。
+
+    没有「游戏模式」参数（v0.104）：游戏是意识流里的一条规则念头，
+    不单独占一块 system 注入——那样每轮都被按着头打游戏，聊不了别的。
 
     ⚠️ 顺序是钱（v0.80）：静态 system + 意识流历史构成**缓存稳定前缀**，会变的
     （当前时间/状态/手头的事）一律排在意识流之后。否则全量读的 token 每轮都按
@@ -119,8 +122,6 @@ def build_chat_messages(state: str, batch: list[str], game_rules: str = "",
         self_hint = selfmem.prompt_hint(" ".join(batch))
         if self_hint:
             messages.append({"role": "system", "content": self_hint})
-    if game_rules:
-        messages.append({"role": "system", "content": game_rules})
     # 今天做过/读到的事（B 库，跨天自动不再注入）：TA 才知道自己这一天是怎么过的
     notes = memory.today_notes() if config.TODAY_NOTES_ENABLED else []
     if notes:
@@ -313,11 +314,18 @@ def _inject_calendar_material(prompt: list[dict]) -> bool:
     bits = [f"「{what}」"]
     if ev.get("when"):
         bits.append(f"时间 {ev['when'][5:16]}")
-    if ev.get("prepare"):
+    # 聊到过的进展（v0.104）：提起时接着上次聊的往下说，别从零问一遍
+    notes = [n for n in (ev.get("notes") or [])
+             if isinstance(n, dict) and (n.get("text") or "").strip()]
+    if notes:
+        bits.append(f"上次TA聊到：{notes[-1]['text'].strip()}")
+    elif ev.get("prepare"):
         bits.append(f"准备状态：{ev['prepare']}")
+    tail = ("上次聊过这个，这次换个角度接着聊，别把同一句再问一遍。"
+            if notes else "")
     prompt[-1]["content"] += (
         f"\n（你心里惦记着TA的一件事：{'，'.join(bits)}。"
         f"用你自己的话自然地关心一下——问问进展、表示你还在记着，"
-        f"别像闹钟一样生硬地提醒。）")
+        f"别像闹钟一样生硬地提醒。）{tail}")
     return True
 

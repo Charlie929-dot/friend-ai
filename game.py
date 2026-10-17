@@ -1,14 +1,15 @@
-"""娱乐模式：和朋友玩游戏（MVP：成语接龙 / 海龟汤）。
+"""娱乐：和朋友玩游戏（MVP：成语接龙 / 海龟汤）。
 
 设计：
-- 轻量状态机——只记"在玩哪个游戏、什么时候开始"，存 kv（随朋友库隔离）；
-  游戏过程本身不硬编码，规则全部写进 prompt，由 LLM 按规则陪玩。
+- **游戏不是模式**（v0.104 改）：开局只往意识流里注一条——"我们开始玩X了，我想想
+  规则是…"，之后 TA 该怎么聊就怎么聊，聊着聊着顺手玩两把，想聊别的就跟着聊。
+  不再有【娱乐模式】整块塞进 system prompt（那样每轮都被按着头打游戏）。
+- 轻量状态机只记"在玩哪个、什么时候开始"，存 kv（随朋友库隔离）；
+  不硬编码游戏过程，规则由 TA 自己在意识流里记着（就是它脑子里那句"我想想规则是…"）。
 - 触发：用户消息里提到具体游戏名（"玩成语接龙""来局海龟汤"）→ 开局；
   说"不玩了/结束游戏"→ 结束。泛泛说"玩游戏"不触发（AI 会自然接话商量玩啥）。
-- 游戏进行中：不拦主动消息（v0.103 批 1 起，游戏里想到个分享 = 闲聊，很常见）；
-  作息状态切换（入睡/醒来）不受影响——该睡还是睡。
 - 空闲过期：45 分钟没任何消息（含 TA 自己主动问过一句也算活着）自动清局，
-  防陈年规则注入每条回复（卫生问题，不是状态机）。
+  防陈年规则一直挂在意识流里（卫生问题，不是状态机）。
 """
 import json
 from datetime import datetime, timedelta
@@ -21,26 +22,21 @@ GAMES = {
     "idiom": {
         "label": "成语接龙",
         "triggers": ["成语接龙"],
-        "rules": (
-            "你们正在玩【成语接龙】。规则：一人说一个成语，下一个成语要用上一个成语的"
-            "最后一个字开头（同音字也行），轮流来；接不上、说重复或者说错就算输，"
-            "输了要接受小惩罚（比如夸对方一句）。你要真的在玩：每轮都先评价TA接得对不对，"
-            "然后接上TA的成语、给出你的下一个成语，别光顾着聊天把游戏丢了。"
-            "回复保持平时的简短口语化风格。"
+        # recall = TA 脑子里回忆规则的口吻（进意识流），不是给模型的指令
+        "recall": (
+            "我们在玩成语接龙，我想想规则是：一人说一个成语，下一个要用上一个的"
+            "最后一个字开头（同音也算），接不上、说重复或者说错就算输，输了接受小惩罚。"
+            "这是我们一起玩的一件事——TA 想聊别的我就跟着聊，别把天聊成游戏问答。"
         ),
     },
     "soup": {
         "label": "海龟汤",
         "triggers": ["海龟汤"],
-        "rules": (
-            "你们正在玩【海龟汤】，你当出题人。规则：你先选定一个完整的海龟汤故事"
-            "（汤面+汤底都要心里有数，选定就别改，前后不能矛盾），然后只告诉TA汤面。"
-            "TA可以提问，你只回答「是」「不是」「不重要」「部分是」，问题太偏可以给小提示。"
-            "TA猜出关键真相（汤底）就揭晓完整答案并夸TA。如果TA想换你猜，也可以换角色。"
-            "轮到TA考你（TA出题你猜）时，你要按猜方作业来：每轮只问一个「是/否」问题，"
-            "问完就停下来等TA回答，别连珠炮、别自问自答，也别急着亮答案——"
-            "一步一步猜，角色可互换、谁出题谁答「是/不是」。"
-            "回复保持平时的简短口语化风格。"
+        "recall": (
+            "我们在玩海龟汤，我想想规则是：我出题的话只给汤面，TA 问我只答"
+            "「是/不是/不重要/部分是」，TA 猜出汤底我就把整段故事揭晓；"
+            "轮到我猜时，我每轮只问一个「是/否」问题，问完就停下来等 TA 答。"
+            "这是我们一起玩的一件事——TA 想聊别的我就跟着聊，别把天聊成游戏问答。"
         ),
     },
 }
@@ -82,10 +78,24 @@ def current() -> dict | None:
     return g
 
 
+def _note(text: str, now: datetime | None = None) -> int:
+    """往意识流里记一条游戏相关的念头（关意识流时静默跳过）。"""
+    if not config.CONSCIOUS_STREAM_ENABLED:
+        return 0
+    try:
+        import stream
+        return stream.append("game", text, now)
+    except Exception:
+        return 0
+
+
 def start(key: str) -> None:
     db.set_kv("game_state", json.dumps(
         {"game": key, "started_at": datetime.now().isoformat(timespec="seconds")},
         ensure_ascii=False))
+    g = GAMES.get(key)
+    if g:
+        _note(f"我们开始玩【{g['label']}】了，我想想规则是：{g['recall']}")
 
 
 def stop() -> dict | None:
@@ -93,6 +103,8 @@ def stop() -> dict | None:
     g = current()
     if g:
         db.set_kv("game_state", "")
+        label = GAMES.get(g.get("game"), {}).get("label", "游戏")
+        _note(f"【{label}】玩到这儿，不玩了")
     return g
 
 
@@ -116,14 +128,3 @@ def on_user_text(text: str) -> None:
     key = detect_start(text)
     if key:
         start(key)  # 提到新游戏名直接开（已在玩等于换一个）
-
-
-def prompt_injection() -> str | None:
-    """游戏中给 system prompt 注入规则；没在玩返回 None。"""
-    g = current()
-    if not g:
-        return None
-    game = GAMES.get(g["game"])
-    if not game:
-        return None
-    return f"【娱乐模式】{game['rules']}"

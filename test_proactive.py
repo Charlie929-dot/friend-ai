@@ -172,7 +172,8 @@ def test_proactive_pacing_and_stream():
 
 def test_share_impulse():
     """分享冲动（v0.103 批 2「念头驱动」）：素材产出即冲动 → 注入意识流 + 置待开口标记；
-    每日预算内主动开口，预算尽只留念头（早/晚安或下次回复浮出）。"""
+    概率决定这次开不开口（v0.104 废掉机械日配额），两次开口之间有最小间隔；
+    没开口的念头不丢——它还在意识流里，早/晚安或下次回复会自然浮出。"""
     import tempfile
     import db as _db
     import stream as _stream
@@ -180,7 +181,8 @@ def test_share_impulse():
 
     tmp = Path(tempfile.mkdtemp())
     with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
-                       SHARE_IMPULSE_ENABLED=True, SHARE_IMPULSE_DAILY_LIMIT=1,
+                       SHARE_IMPULSE_ENABLED=True, SHARE_IMPULSE_OPEN_PROB=1.0,
+                       SHARE_IMPULSE_MIN_INTERVAL_MINUTES=0,
                        CONSCIOUS_STREAM_ENABLED=True):
 
         class Ch:
@@ -201,16 +203,28 @@ def test_share_impulse():
             assert any(r["kind"] == "impulse" and "挺有感触" in r["text"]
                        for r in _stream.recent(20)), "念头该进意识流"
 
-            # 预算内 → 主动开口（impulse 场景），标记清空
+            # 概率命中 → 主动开口（impulse 场景），标记清空
             eng.check_share_impulse()
-            assert calls == ["impulse"], f"预算内该开口：{calls}"
+            assert calls == ["impulse"], f"概率命中该开口：{calls}"
             assert _db.get_kv("share_impulse_pending") == "", "开口后该清待开口标记"
+            assert _db.get_kv("last_impulse_at"), "开口后该记时刻（供最小间隔用）"
 
-            # 预算尽（limit=1，已用一次）→ 只清标记、不再开口
-            _db.incr_counter("share_impulse_count")
+            # 最小间隔内 → 不开口（刚聊过一股劲儿，别连发）
+            config.SHARE_IMPULSE_MIN_INTERVAL_MINUTES = 60
             _stream.note_impulse("又想到一句")
             eng.check_share_impulse()
-            assert calls == ["impulse"], f"预算尽不该再开口：{calls}"
+            assert calls == ["impulse"], f"最小间隔内不该再开口：{calls}"
+            # 但念头没丢：还在意识流里，下次回复/早晚安会自然浮出
+            assert sum(1 for r in _stream.recent(20) if r["kind"] == "impulse") >= 2, \
+                "没开口的念头也该留在意识流里（不是丢掉）"
+            config.SHARE_IMPULSE_MIN_INTERVAL_MINUTES = 0
+
+            # 概率没命中 → 这次忍住了，不开口
+            config.SHARE_IMPULSE_OPEN_PROB = 0.0
+            _stream.note_impulse("这次忍住")
+            eng.check_share_impulse()
+            assert calls == ["impulse"], f"概率没命中不该开口：{calls}"
+            config.SHARE_IMPULSE_OPEN_PROB = 1.0
 
             # 开关关 → 不置标记
             config.SHARE_IMPULSE_ENABLED = False
@@ -219,7 +233,7 @@ def test_share_impulse():
         finally:
             config.SHARE_IMPULSE_ENABLED = True
             eng.stop()
-    print("ok 分享冲动（素材产出即冲动 + 念头注入意识流 + 每日预算防刷屏）")
+    print("ok 分享冲动（素材产出即冲动 + 念头注入意识流 + 概率开口 + 最小间隔防连发）")
 
 
 def test_interest_cultivation():

@@ -135,35 +135,43 @@ def test_game_mode():
 
     import db as _db
     import game
+    import stream as _stream
+
+    def _latest_stream_texts(n: int = 10) -> list[str]:
+        return [r.get("text") or "" for r in _stream.recent(limit=n)]
 
     tmp = Path(tempfile.mkdtemp())
     with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
-                       WORK_ENABLED=False):
+                       WORK_ENABLED=False, CONSCIOUS_STREAM_ENABLED=True):
         # 泛泛说"玩游戏"不开局，提到具体游戏名才开
         game.on_user_text("我们玩个游戏吧")
         assert game.current() is None, "泛泛的游戏意愿不应触发状态机"
         game.on_user_text("来玩成语接龙吧")
         assert game.current()["game"] == "idiom", "成语接龙未开局"
-        # 规则注入
-        inj = game.prompt_injection()
-        assert "成语接龙" in inj and "规则" in inj
+        # 规则不再单独占一块 system 注入，而是进意识流（TA 自己回忆规则）
+        assert any("成语接龙" in t and "我想想规则是" in t
+                   for t in _latest_stream_texts()), "开局该往意识流注一条规则回忆"
         # /status 显示游戏状态
         out = commands.handle("/status")
         assert "游戏中：成语接龙" in out, f"/status 缺游戏状态：{out}"
         # 游戏中提到另一个游戏名 = 换游戏
         game.on_user_text("要不玩海龟汤")
         assert game.current()["game"] == "soup", "换游戏失败"
-        assert "海龟汤" in game.prompt_injection()
-        # 猜方作业：soup 规则里要教 TA「对方考你时每轮只问一个是/否问题」
-        soup_rules = game.GAMES["soup"]["rules"]
-        assert "是/否" in soup_rules or "是不是" in soup_rules, "soup 缺猜方作业规则"
+        assert any("海龟汤" in t and "我想想规则是" in t
+                   for t in _latest_stream_texts()), "换游戏也要在意识流里换过规则"
+        # 猜方作业：soup 的回忆里要想到「轮到我猜时每轮只问一个是/否问题」
+        soup_recall = game.GAMES["soup"]["recall"]
+        assert "是/否" in soup_recall, "soup 缺猜方作业"
+        # 游戏不是模式：回忆里要留出「想聊别的就跟着聊」的余地
+        for recall in (game.GAMES["soup"]["recall"], game.GAMES["idiom"]["recall"]):
+            assert "跟着聊" in recall, "规则里没给闲聊留余地，会变成游戏模式"
         # 结束游戏
         game.on_user_text("不玩了")
         assert game.current() is None, "游戏未结束"
-        assert game.prompt_injection() is None
+        assert any("不玩了" in t for t in _latest_stream_texts()), "结束该在意识流里留一条"
         # 不在游戏时说"不玩了"不应报错
         game.on_user_text("不玩了")
-        print("ok 娱乐模式（开局/换游戏/猜方作业/结束/状态显示）")
+        print("ok 娱乐（开局/换游戏/意识流规则回忆/猜方作业/结束/状态显示）")
 
 
 def test_game_idle_expire():

@@ -36,6 +36,17 @@ def _is_llm_error(text: str) -> bool:
     return bool(prefix) and t.startswith(prefix)
 
 
+def _since_last_impulse_minutes() -> float:
+    """距上次冲动开口过了多少分钟（从没开口过返回无穷大，等于不设间隔）。"""
+    raw = db.get_kv("last_impulse_at")
+    if not raw:
+        return float("inf")
+    try:
+        return (datetime.now() - datetime.fromisoformat(raw)).total_seconds() / 60
+    except (ValueError, TypeError):
+        return float("inf")
+
+
 def _note_browsed_discussed(batch: list[str]) -> None:
     """闸门 2（批 5）：这轮被追问细节、且当天确实注入了【我今天刷到的】→ 把注入的那几条
     补成 B 库"今日素材"（纯规则、零额外 LLM）。
@@ -181,7 +192,7 @@ class Engine:
                 db.set_state("AWAKE")  # 急事把 TA 唤醒
         else:
             guard.check_busy_signal(text)
-        game.on_user_text(text)  # 娱乐模式：提到游戏名开局，"不玩了"结束
+        game.on_user_text(text)  # 娱乐（游戏）：提到游戏名开局，"不玩了"结束
         db.reset_counter("unanswered_proactive")  # 用户回复了，清零连续未回复
         self._reset_bubble_timer()  # 聊上了，冒泡倒计时重新计
 
@@ -258,9 +269,10 @@ class Engine:
             self._send(corpus.pick(corpus.SLEEPY_REPLIES, "sleepy"), kind="chat")
             return
 
-        # 信息调度层统一组装上下文：人设+便签+profile → 游戏规则 → 相关记忆 → 最近上下文
+        # 信息调度层统一组装上下文：人设+便签+profile → 相关记忆 → 最近上下文
         # quote 是引用回复：让 TA 知道这句话在回哪句（拼成一条 system 注入，见 context）
-        messages = context.build_chat_messages(state, batch, game.prompt_injection(),
+        # 游戏规则不在这里注入（v0.104）：它活在意识流那条「我想想规则是…」里
+        messages = context.build_chat_messages(state, batch,
                                                inbox=from_inbox, quote=quote)
         # 双层生成（人格优化）：先把不可见的内心独白跑出来——立场在这一层定住，
         # 第 2 层只负责"怎么说"，改不了"说什么"。独白拿不到就原样单层生成。
@@ -538,18 +550,24 @@ class Engine:
 
     # --- 分享冲动（v0.103 批 2「念头驱动」）：素材产出/刷到好东西时置的待开口标记 ---
     def check_share_impulse(self) -> None:
-        """调度器每分钟调用：有分享念头待开口、且当日预算内 → 主动开口。
+        """调度器每分钟调用：有分享念头 → 掷骰子决定这次开不开口。
 
-        预算尽只留念头（念头已在意识流里，早/晚安或下次回复会自然浮出）。
+        v0.104：废掉「每日 N 次」的机械配额，改概率 + 最小间隔——读到触动的那一刻
+        想聊，但这次忍住了也很正常。忍住的念头不丢：它还在意识流里（note_impulse
+        写进去的那条），下次回复、早/晚安开口都会自然浮出。
         """
         if not config.SHARE_IMPULSE_ENABLED:
             return
         if db.get_kv("share_impulse_pending") != "1":
             return
         db.set_kv("share_impulse_pending", "")
-        if db.get_counter("share_impulse_count") >= config.SHARE_IMPULSE_DAILY_LIMIT:
-            return
-        self.proactive("impulse")
+        if random.random() >= config.SHARE_IMPULSE_OPEN_PROB:
+            return      # 这次忍住了，念头留在意识流里，不丢
+        if _since_last_impulse_minutes() < config.SHARE_IMPULSE_MIN_INTERVAL_MINUTES:
+            return      # 刚聊过一股劲儿，别连发
+        if self.proactive("impulse"):
+            db.set_kv("last_impulse_at",
+                      datetime.now().isoformat(timespec="seconds"))
 
     def check_bubble(self) -> None:
         """调度器每分钟调用：初见阶段 + 到了冒泡时间 → 冒泡。"""

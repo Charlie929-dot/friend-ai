@@ -93,15 +93,25 @@ BUBBLE_IDLE_MIN_MINUTES = int(os.environ.get("BUBBLE_IDLE_MIN_MINUTES", "30"))  
 BUBBLE_IDLE_MAX_MINUTES = int(os.environ.get("BUBBLE_IDLE_MAX_MINUTES", "60"))
 BUBBLE_DAILY_LIMIT = int(os.environ.get("BUBBLE_DAILY_LIMIT", "12"))            # 冒泡独立额度，不占主动消息上限
 
-# --- 分享冲动（v0.103 批 2「念头驱动」）：素材产出即冲动 + 每日分享预算 ---
+# --- 分享冲动（v0.103 批 2「念头驱动」；v0.104：废掉"日预算"机械配额，改概率 + 最小间隔）---
+# 为什么不是"每天 N 次"：人不按额度想聊天。读到触动的是冲动，冲动可能忍住了——
+# 忍住的那次念头不丢（还在意识流里，下次回复/早晚会自然浮出），只是这次没开口。
 SHARE_IMPULSE_ENABLED = os.environ.get("SHARE_IMPULSE_ENABLED", "on").lower() == "on"  # 总开关
-SHARE_IMPULSE_DAILY_LIMIT = int(os.environ.get("SHARE_IMPULSE_DAILY_LIMIT", "3"))  # 每日主动开口的分享预算（防刷屏）
+SHARE_IMPULSE_OPEN_PROB = float(os.environ.get("SHARE_IMPULSE_OPEN_PROB", "0.5"))  # 有冲动时真开口的概率
+SHARE_IMPULSE_MIN_INTERVAL_MINUTES = int(os.environ.get("SHARE_IMPULSE_MIN_INTERVAL_MINUTES", "60"))  # 两次冲动开口最小间隔（防连发）
 
-# --- 日历（v0.103 批 3）：临期日历项 → 念头 → 主动开口 ---
+# --- 日历（v0.103 批 3；v0.104 修正：概率递增 + 聊过沉淀，不是"挑一个触点+聊过取消"）---
 CALENDAR_ENABLED = os.environ.get("CALENDAR_ENABLED", "on").lower() == "on"  # 总开关
+# 每个触点那天的提起概率：最远（前一周）→ 事件当天，中间按剩余时间线性插值
+CALENDAR_TOUCH_PROB_FAR = float(os.environ.get("CALENDAR_TOUCH_PROB_FAR", "0.15"))
+CALENDAR_TOUCH_PROB_NEAR = float(os.environ.get("CALENDAR_TOUCH_PROB_NEAR", "0.8"))
+# 聊过之后的冷却天数：这几天不依赖触点开口（念头/记忆召回照常）
+CALENDAR_TALKED_MUTE_DAYS = int(os.environ.get("CALENDAR_TALKED_MUTE_DAYS", "2"))
+# 一件日历项最多留几条"聊到过"的动态记录（下次提起时的上下文）
+CALENDAR_NOTE_MAX = int(os.environ.get("CALENDAR_NOTE_MAX", "3"))
 
-# --- 娱乐模式（游戏） ---
-GAME_IDLE_EXPIRE_MINUTES = int(os.environ.get("GAME_IDLE_EXPIRE_MINUTES", "45"))  # 游戏空闲多久自动过期（防陈年规则注入每条回复）
+# --- 娱乐（游戏）：规则活在意识流里（v0.104 起不再是【娱乐模式】注入） ---
+GAME_IDLE_EXPIRE_MINUTES = int(os.environ.get("GAME_IDLE_EXPIRE_MINUTES", "45"))  # 游戏空闲多久自动过期（防陈年规则一直挂在意识流里）
 
 # --- 固定语料策略 ---
 BUBBLE_FIXED_PROB = float(os.environ.get("BUBBLE_FIXED_PROB", "0.35"))  # 冒泡直接抽固定语料的概率（省 token）
