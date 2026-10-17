@@ -498,33 +498,45 @@ def _settle_due(day: dict, now: datetime) -> None:
         except Exception:
             pass
     _settling = True
-    threading.Thread(target=_settle_one, args=(now,), daemon=True).start()
+    db_path = str(config.DB_PATH)     # 记下发起时的库：线程跑到一半被切库（切朋友/测试）就不写
+    threading.Thread(target=_settle_one, args=(now, db_path), daemon=True).start()
 
 
-def _settle_one(now: datetime) -> None:
-    """后台线程：结算一章（要调 LLM，不阻塞 HUD）。"""
+def _settle_one(now: datetime, db_path: str = "") -> None:
+    """后台线程：结算一章（要调 LLM，不阻塞 HUD）。
+
+    ⚠️ **跨库守卫（v0.109）**：线程从发起到落盘可能隔一次 LLM 调用，期间用户可能
+    切朋友（或测试切临时库）。`_load()` 读的是旧库、`_save()`/笔记写到新库 = 串库。
+    `db.PATH_LOCK` 与切库互斥（回复/记忆提取同款约定），进锁后再核一次库路径，
+    对不上就直接放弃——这一章的笔记下次结算会补。
+    """
     global _settling
     try:
-        import trueread
-        day = _load()
-        plan = day.get("plan") or {}
-        if not plan.get("book_id"):
+        if not db_path or str(config.DB_PATH) != db_path:
             return
-        abs_idx = int(plan.get("start_ch") or 0) + int(day.get("settled_idx") or 0)
-        trueread.align(plan["book_id"], abs_idx)
-        result = trueread.settle_chapter(now)
-        if not result:
-            return
-        day["settled_idx"] = int(day.get("settled_idx") or 0) + 1
-        _save(day)
-        try:
-            stream.append("chapter",
-                          f"读完《{result.get('book_title', '')}》的「{result.get('chapter', '')}」",
-                          now)
-        except Exception:
-            pass
-        if result.get("moved"):
-            _note_shareable_text(result.get("shareable_text", ""), now)
+        with db.PATH_LOCK:      # 与切换朋友互斥：读计划/结算/落笔记全程同一个库
+            if str(config.DB_PATH) != db_path:
+                return
+            import trueread
+            day = _load()
+            plan = day.get("plan") or {}
+            if not plan.get("book_id"):
+                return
+            abs_idx = int(plan.get("start_ch") or 0) + int(day.get("settled_idx") or 0)
+            trueread.align(plan["book_id"], abs_idx)
+            result = trueread.settle_chapter(now)
+            if not result:
+                return
+            day["settled_idx"] = int(day.get("settled_idx") or 0) + 1
+            _save(day)
+            try:
+                stream.append("chapter",
+                              f"读完《{result.get('book_title', '')}》的「{result.get('chapter', '')}」",
+                              now)
+            except Exception:
+                pass
+            if result.get("moved"):
+                _note_shareable_text(result.get("shareable_text", ""), now)
     except Exception as e:
         print(f"[生活] 章节结算失败：{e}")
     finally:

@@ -35,6 +35,14 @@ import persona
 # ⚠️ 必须写环境变量而不是改 config 属性：/refresh 会 importlib.reload(config)，
 # 只改模块属性会被刷新回去，写 os.environ 才能扛住重载。
 os.environ["INNER_MONOLOGUE_ENABLED"] = "off"
+# ③ 全局关掉「章节结算」后台线程（v0.109）。`_settle_due` 会起 `_settle_one` 线程，
+# 它**先读计划、再调 LLM、最后写 day_state/读书笔记**；测试主线程若在中间
+# `_patch_config(_db_init=True)` 切到下一个用例的临时库，线程收尾时就把旧库的
+# 计划/笔记写进新库——复现为 test_trueread「不该有重复笔记：4」（多出真实书第 4 课）、
+# test_life_engine 固定日期 day_state 被写脏后重排（2026-10-17 抓到现场：
+# 失败瞬间线程表里有 `_settle_one`，且笔记 book_id 是真实书库里的书）。
+# 需要结算的用例自己用 `_patch_config(WORK_SHAREABLE_ENABLED=True)` 局部打开。
+os.environ["WORK_SHAREABLE_ENABLED"] = "off"
 importlib.reload(config)
 
 # 测试临时目录统一收口到一个**固定目录**，跑完尽量清、下次跑先清（双保险）。

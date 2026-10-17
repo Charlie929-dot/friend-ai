@@ -46,3 +46,6 @@ AGENTS.md
 
 # JiuwenSwarm runtime file operation logs
 .agent_history/
+
+# 其他工具的工作区运行时（WorkBuddy 每日记忆等，非项目产物）
+.workbuddy/

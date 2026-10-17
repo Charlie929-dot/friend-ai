@@ -707,6 +707,10 @@ def test_webui():
                 # 聊天区"正在输入"气泡（v0.101）：复用一直没接线的 .typing-bubble
                 assert 'setTypingBubble' in html and 'typing-bubble' in html, \
                     "聊天区缺正在输入气泡接线"
+                # 目录条目圆点分侧（v0.109）：TA 左、我右（手机目录与桌面 hover 共用同一套样式）
+                assert '.ol-item.user .ol-dot' in html and 'order: 9' in html \
+                    and '.ol-item .ol-txt' in html and 'flex: 1 1 auto' in html, \
+                    "目录条目圆点该按说话人分侧（TA 左 / 我右）"
 
                 st = c.get(base + "/api/state").json()
                 assert st["name"] and st["clock"], f"状态快照缺基本信息：{st}"

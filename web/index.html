@@ -105,15 +105,17 @@
     border-radius: 7px; font-size: 11.5px; color: var(--muted); text-align: left;
     white-space: nowrap; overflow: hidden; cursor: pointer; }
   .ol-item:hover { background: var(--surface-2); color: var(--ink); }
+  /* v0.109：目录圆点按说话人分侧——TA 在左、我在右（颜色之外多一层一眼可分的信号；
+     手机目录窗口与桌面 hover 目录共用这套样式） */
   .ol-item .ol-dot { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%;
     background: var(--accent); opacity: .6; }
-  .ol-item.user .ol-dot { background: var(--me); }
+  .ol-item.user .ol-dot { background: var(--me); order: 9; }
   /* 移动端目录窗口的表头（桌面 hover 浮层用不到，默认隐藏） */
   .ol-head { display: none; }
   .ol-close { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
     font-size: 20px; line-height: 1; color: var(--muted); background: transparent; border: 0; flex: 0 0 auto; }
   .ol-close:hover { background: var(--surface-2); color: var(--ink); }
-  .ol-item .ol-txt { overflow: hidden; text-overflow: ellipsis; }
+  .ol-item .ol-txt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .ol-empty { font-size: 11px; color: var(--muted); padding: 6px 2px; line-height: 1.6; }
 
   /* 跳转高亮：入场闪一下 + 柔和显眼色整行常亮（点任意处才消，jumpToMsg 加 / clearMsgHl 清） */
