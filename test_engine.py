@@ -696,6 +696,11 @@ def test_webui():
                 assert 'id="emojiPanel"' in html and 'id="btnEmoji"' in html and 'id="epGrid"' in html \
                     and 'id="epAddEmoji"' in html and 'id="epAddBucket"' in html, \
                     "页面缺表情面板/表情按钮结构"
+                # 断线重连（v0.110）：自调度退避轮询 + 独立横幅（不随 ≤520px 隐藏状态行）+ 发送失败回填
+                assert 'id="netBanner"' in html and 'schedulePoll' in html and 'netFail' in html, \
+                    "页面缺断线重连结构（net-banner 横幅 / schedulePoll 自调度）"
+                assert '文字已放回输入框' in html, \
+                    "发送失败回填提示缺失（send/sendText 双路径都要有）"
                 # 调优参数面板（v0.86）：菜单项 + 模态框结构
                 assert 'id="mTuning"' in html and 'id="tuneModal"' in html \
                     and 'id="tuneBody"' in html and 'id="tuneAdv"' in html, \

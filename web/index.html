@@ -51,6 +51,14 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); flex: 0 0 auto; }
   .fh-status { margin-top: 1px; font-size: 11.5px; color: var(--muted); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis; }
+  /* 断线/恢复横幅（v0.110 断线重连）：独立元素，不随 ≤520px 隐藏状态行（.fh-status）的规则走——
+     手机上也要看得见"连接断了/连接回来了"，不能对着死页面干等。不占布局流，从顶部滑下。 */
+  .net-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 90;
+    padding: 8px 14px calc(8px + env(safe-area-inset-top)); text-align: center;
+    font-size: 12.5px; color: #fff; background: #c07b5a;
+    transform: translateY(-110%); transition: transform .25s ease; pointer-events: none; }
+  .net-banner.show { transform: translateY(0); }
+  .net-banner.ok { background: #83a585; }
   .avatar-btn { width: 38px; height: 38px; border-radius: 50%; background: var(--accent); color: #fff;
     font-size: 13px; flex: 0 0 auto; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent); }
   #btnOutline { display: none; }
@@ -724,6 +732,8 @@
         </div>
       </div>
     </header>
+    <!-- 断线/恢复横幅（v0.110）：fixed 定位盖在顶栏上方，独立于 .fh-status——≤520px 手机上状态行隐藏但横幅仍可见 -->
+    <div class="net-banner" id="netBanner">连接断了，正在重连…</div>
 
     <!-- 主区：左侧目录 + 聊天流 -->
     <div class="main-row">
@@ -1476,6 +1486,42 @@ function renderState(s){
   const g=$('btnGuard'); g.textContent=s.guard?'防打扰：开':'防打扰：关'; g.classList.toggle('on',!!s.guard);
 }
 
+/* ===== 断线重连（v0.110）=====
+ * 网络状态机 + 轮询退避（自调度）+ 恢复横幅 + 发送失败回填。
+ * 判定源只有 poll() 成败（navigator.onLine 只反映网卡、不反映服务器可达，不做判定源）。
+ */
+let netState = { down: false, fails: 0, pollTimer: null };
+let netBannerTimer = null;
+function showNetBanner(text, ok){
+  const b = $('netBanner');
+  b.textContent = text;
+  b.classList.toggle('ok', !!ok);
+  b.classList.add('show');
+  clearTimeout(netBannerTimer);
+  if(ok){ netBannerTimer = setTimeout(() => b.classList.remove('show'), 2000); }  // 恢复提示 2 秒淡出
+}
+function hideNetBanner(){ clearTimeout(netBannerTimer); $('netBanner').classList.remove('show'); }
+function netFail(){
+  netState.fails++;
+  const wasDown = netState.down;
+  netState.down = true;
+  if(!wasDown) showNetBanner('连接断了，正在重连…', false);
+  $('statusText').textContent = '连接断了，重连中…';
+  schedulePoll();   // 按退避间隔排下一次（指数退避：900ms × 2^n，15s 封顶）
+}
+function netOk(){
+  const wasDown = netState.down;
+  netState.down = false;
+  netState.fails = 0;
+  if(wasDown) showNetBanner('连接回来了', true);   // 恢复提示 2 秒淡出；断线期间的消息由 poll 的 after=lastId 增量补齐
+  schedulePoll();   // 成功 → 立即回 900ms 正常间隔
+}
+function schedulePoll(){
+  clearTimeout(netState.pollTimer);
+  const delay = netState.down ? Math.min(900 * Math.pow(2, netState.fails - 1), 15000) : 900;
+  netState.pollTimer = setTimeout(async () => { await poll(); }, delay);
+}
+
 async function poll(){
   try{
     const s=await (await fetch('/api/state')).json();
@@ -1487,7 +1533,8 @@ async function poll(){
     }
     if(outlineDirty){ rebuildOutline(); outlineDirty=false; }
     if($('foldStream').open) loadStream();
-  }catch(e){ $('statusText').textContent='连接断了，重连中…'; }
+    netOk();   // poll 自身带 after=lastId 增量拉取——恢复即自动补齐断线期间的消息，零后端改动
+  }catch(e){ netFail(); }
 }
 
 /* ===== 首次加载：定位到最后一次聊天 ===== */
@@ -1505,7 +1552,7 @@ async function initialLoad(){
     initialDone = true;
     rebuildOutline();
     updateLoadMore();
-  }catch(e){ $('statusText').textContent='连接断了，重连中…'; initialDone = true; }
+  }catch(e){ netFail(); initialDone = true; }   // 首次加载失败也进退避重试（v0.110：netFail 内已 schedulePoll）
 }
 
 /* ===== 左侧目录（markdown 式 outline，hover 展开 / 点击跳转） ===== */
@@ -1703,8 +1750,12 @@ async function send(){
     }
     if(r.reply) addSys(r.reply);
     scrollToBottom(false);   // 自己发的消息（含点表情）：无论之前翻到哪，都定位回最底部
-    poll();
-  }catch(e){ addSys('⚠ 发送失败：'+e.message); }
+    poll();   // 发送后主动拉一轮回复（v0.110：poll 可安全直调——幂等只做增量拉取，退避计时器由 poll 成败自调度接管，直调最多与计时器并行多拉一次、不会漏）
+  }catch(e){
+    addSys('⚠ 发送失败：'+e.message);
+    $('txt').value = t;   // 失败文本回填输入框（P0-1：send() 是主发送路径，发送前已清空输入框，不回填=断网时长消息直接丢失）
+    toast('发送失败，文字已放回输入框');
+  }
 }
 
 /* ===== 命令输出面板 ===== */
@@ -2456,8 +2507,12 @@ async function sendText(text){
     }
     if(r.reply) addSys(r.reply);
     scrollToBottom(false);   // 自己发的消息（含点表情）：无论之前翻到哪，都定位回最底部
-    poll();
-  }catch(e){ addSys('⚠ 发送失败：'+e.message); }
+    poll();   // v0.110：与 send() 同款约定，poll 可安全直调（幂等增量拉取，不与退避计时器冲突）
+  }catch(e){
+    addSys('⚠ 发送失败：'+e.message);
+    $('txt').value = text;   // 失败文本回填输入框（P0-1：覆盖表情面板支路，与 send() 同款——哪怕面板再点一次，文字也还在输入框里）
+    toast('发送失败，文字已放回输入框');
+  }
 }
 function showEmojiAdd(){
   emojiAddMode=true;
@@ -2563,7 +2618,7 @@ loadFriends();
 loadMemories();
 loadBooks();           // 书架入口折叠行要显示「N 本」计数，开页拉一次
 loadEmoji();          // 预载表情库（带图表情的「文字→图」映射要在渲染气泡前就位）
-setInterval(poll,900);
+schedulePoll();       // v0.110：盲轮询 setInterval(poll,900) 改自调度——失败指数退避（900ms×2^n，15s 封顶），成功立即回 900ms
 setInterval(loadMemories,30000);
 </script>
 </body>
