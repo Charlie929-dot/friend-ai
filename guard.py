@@ -31,12 +31,32 @@ def in_urgent_window(now: datetime | None = None) -> bool:
         return False
 
 
-def open_urgent_window(now: datetime | None = None) -> None:
-    """识别到急事 → 开一扇窗（URGENT_WINDOW_MINUTES 分钟内随叫随到）。"""
+def open_urgent_window(now: datetime | None = None, msg_id: int = 0) -> None:
+    """识别到急事 → 开一扇窗（URGENT_WINDOW_MINUTES 分钟内随叫随到）。
+
+    msg_id：记下是哪条消息开的窗（v0.111）——撤回那条就把窗一并撤销，
+    否则误勾一次「我需要陪伴」，撤回后 TA 还挂着 10 分钟急事状态（实测 #53）。
+    """
     now = now or datetime.now()
     db.set_kv("urgent_until", (now + timedelta(
         minutes=config.URGENT_WINDOW_MINUTES)).isoformat(timespec="seconds"))
     db.set_kv("quiet_until", "")      # 急事当前：静默期一并解除
+    if msg_id:
+        db.set_kv("urgent_msg_id", str(msg_id))
+
+
+def cancel_urgent_window(msg_id: int) -> bool:
+    """撤回某条消息时调用：是它开的紧急窗口就撤销，返回是否真的撤了。
+
+    "撤回 = 我当没看见"——急事是那条消息带来的，消息没了，急事也该没了。
+    不是它开的窗（比如真说了"有急事"的另一条）不动，避免误撤别人的窗口。
+    """
+    owner = db.get_kv("urgent_msg_id")
+    if not owner or owner != str(msg_id):
+        return False
+    db.set_kv("urgent_until", "")
+    db.set_kv("urgent_msg_id", "")
+    return True
 
 
 def check_busy_signal(text: str) -> bool:

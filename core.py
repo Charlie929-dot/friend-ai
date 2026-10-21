@@ -187,7 +187,7 @@ class Engine:
         mid = db.add_message("user", text, quote=quote)
         # 紧急通道优先于忙碌信号：真有急事时"在忙"的静默期不该继续生效
         if guard.is_urgent(text):
-            guard.open_urgent_window()
+            guard.open_urgent_window(msg_id=mid)   # 记下是谁开的：撤回它就能撤销
             if db.get_state() == "SLEEPING":
                 db.set_state("AWAKE")  # 急事把 TA 唤醒
         else:
@@ -276,8 +276,13 @@ class Engine:
                                                inbox=from_inbox, quote=quote)
         # 双层生成（人格优化）：先把不可见的内心独白跑出来——立场在这一层定住，
         # 第 2 层只负责"怎么说"，改不了"说什么"。独白拿不到就原样单层生成。
-        messages = self._with_inner_monologue(messages, batch)
-        reply = self._generate_reply_text(messages, batch)
+        reply = self._generate_reply_text(self._with_inner_monologue(messages, batch),
+                                          batch)
+        if not (reply or "").strip():
+            # v0.111（实测 #53）：双层第 2 层偶尔返回空串——原来直接静默丢弃，
+            # 用户那边就是"问了一句，它半天没回"。退回不带独白层的原始数据重跑一次。
+            print("[空回复] 双层生成返回空，退回单层重跑一次")
+            reply = self._generate_reply_text(messages, batch)
         if _is_llm_error(reply):
             # v0.88 C2（批 0）：LLM 失败文案**不当正经回复落库**——它一旦以 chat 落进
             # messages，后面每一轮 session_context 都会把这句"（脑子卡住了：…）"读回去，
@@ -302,7 +307,11 @@ class Engine:
 
         # 分段连发：按换行拆成几条消息，像真人连着发
         segments = [s.strip() for s in reply.split("\n") if s.strip()]
+        if not segments:
+            # 重跑一次还是空：本轮确实无话可说，但不许再静默——留一行证据
+            print("[空回复] 重跑仍为空，本轮不落库（用户侧会看到没回）")
         # "正在输入"：按整条回复的字数假装敲键盘，到点再发出正文
+        sent_any = False
         if config.TYPING_ENABLED and segments:
             total = sum(len(s) for s in segments)
             duration = min(max(total * config.TYPING_SECONDS_PER_CHAR,
@@ -322,21 +331,28 @@ class Engine:
             if self._interrupted():
                 break
             self._send(seg, kind="chat")
+            sent_any = True
 
-        # 兴趣修炼（S4）：聊天源——回复里也表达兴趣（"最近有点迷上X"），一并记线索。
-        for t in interests.detect_and_record(reply):
-            print(f"[兴趣] 转正：{t}")
+        if not sent_any:
+            # v0.111（实测 #53）：整条被插话打断、一个字都没发出去——原来照样往意识流
+            # 记一条"我说：…"，于是 TA 以为自己回过了：用户追问「你咋不回我」，
+            # 它理直气壮答「回了啊」。没说出口的话不算说过——意识流/待办/兴趣都不记。
+            print("[插话] 回复整段未发出（打字期间来了新消息），不记进意识流")
+        else:
+            # 兴趣修炼（S4）：聊天源——回复里也表达兴趣（"最近有点迷上X"），一并记线索。
+            for t in interests.detect_and_record(reply):
+                print(f"[兴趣] 转正：{t}")
 
-        # 自我意识流（S4）：记下"我说了什么"（摘要）——让流里有一条完整的自我叙事。
-        # 全文在 messages 表里，这里只存摘要供注入；"我在想/我说"是每轮对话的锚点。
-        said = " ".join(reply.split())
-        if said:
-            # 存全文（v0.80：注入也不再截断，截了就等于没说过这句话）
-            stream.append("reply", f"我说：{said}")
-            # 待办打勾：刚才那段话里说到了哪件攒着的事 → 标记做完（做完不再当话题）
-            if config.TODOS_ENABLED:
-                for t in todos.mark_done(said):
-                    print(f"[待办] 打勾：{t[:30]}")
+            # 自我意识流（S4）：记下"我说了什么"（摘要）——让流里有一条完整的自我叙事。
+            # 全文在 messages 表里，这里只存摘要供注入；"我在想/我说"是每轮对话的锚点。
+            said = " ".join(reply.split())
+            if said:
+                # 存全文（v0.80：注入也不再截断，截了就等于没说过这句话）
+                stream.append("reply", f"我说：{said}")
+                # 待办打勾：刚才那段话里说到了哪件攒着的事 → 标记做完（做完不再当话题）
+                if config.TODOS_ENABLED:
+                    for t in todos.mark_done(said):
+                        print(f"[待办] 打勾：{t[:30]}")
 
         memory.extract_async()  # 后台提取这段对话里值得记住的事
         self.check_auto_familiar()
@@ -612,6 +628,9 @@ class Engine:
             self.daily_review()
         db.set_state("SLEEPING")
         db.set_kv("sleepy_reason", "")
+        # v0.111：记下入睡时刻——offline.tick 的起床兜底靠它区分"刚躺下"和"睡过了"
+        # （没有它，睡着后下一分钟就会被判成"该起了"，实测 #53）
+        db.set_kv("sleep_started_at", datetime.now().isoformat(timespec="seconds"))
         stream.append("sleep", "我困了，去睡了")
 
     def wake_up(self) -> None:

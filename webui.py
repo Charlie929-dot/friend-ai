@@ -490,6 +490,10 @@ def _make_handler(channel: WebChannel, on_message):
                 return
             with db.SEND_LOCK:      # 只与切库互斥；不等回复生成（否则消息全卡到 TA 回完，实测 #30）
                 out = on_message(text, quote)
+            # v0.111：把"是哪条消息开的窗"补记上（窗口本身在发送前已开，好让这一轮
+            # 就带上【急事】语境）——撤回那条消息时可据此撤销（误勾一次不再残留 10 分钟）
+            if data.get("urgent") and isinstance(out, int) and out:
+                guard.open_urgent_window(msg_id=out)
             is_cmd = isinstance(out, str)   # 命令：输出走返回值；普通消息：out 是消息 id
             self._json({
                 "echo": not is_cmd,   # 普通消息回显用户输入；命令只把输出显示出来
@@ -816,6 +820,8 @@ def _make_handler(channel: WebChannel, on_message):
             if not removed:
                 self._json({"ok": False, "error": "这条消息不能撤回（可能不是你的，或已撤回）"})
                 return
+            # v0.111：这条消息开的紧急窗口，跟着一起撤（"我当没看见"就该连急事一起没）
+            guard.cancel_urgent_window(mid)
             import stream
             stream.append("revoke", f"对方撤回了刚才那句「{removed['content']}」，我当没看见")
             self._json({"ok": True, "id": mid})

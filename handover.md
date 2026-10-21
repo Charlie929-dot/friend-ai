@@ -1,17 +1,108 @@
 <!-- dsh-task-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-18 13:00:37 · 修订 12 · 3 个会话小节 · 项目规则见 AGENTS.md
+> 更新于 2026-10-21 22:39:26 · 3 个会话小节 · 项目规则见 AGENTS.md
 
 <!-- dsh-task-handover:sessions:start -->
 <!-- 20a1fb2c = session-20a1fb2c-3f26-416a-9e38-fe8e0d07369f -->
-<!-- a70b6f5d = session-a70b6f5d-41f1-4d2d-b339-f2a5c00ddd5c -->
 <!-- cde29720 = session-cde29720-5b0a-493f-80fb-bec7e416088b -->
-<!-- d16528f8 = session-d16528f8-541c-4d86-aaa1-c3c521efbfb4 -->
+<!-- 2daa93da = session-2daa93da-651f-4d57-ad49-bf709633b06b -->
+<!-- 8080a0ee = session-8080a0ee-76e6-4ea3-9c73-4d4bef3152f6 -->
+<!-- dc03c9b0 = session-dc03c9b0-b4ff-4f1a-8de2-0e77e8236369 -->
 <!-- dsh-task-handover:sessions:end -->
 
 <!-- dsh-task-handover:snapshot:start -->
-<!-- dsh-task-handover:session:cde29720 -->
+<!-- dsh-task-handover:session:dc03c9b0 -->
+### 会话 `dc03c9b0` · 2026-10-21 22:39:26
+
+> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~201k tokens（+5.4k） · 概要：已核对线上代码与真实数据（`git fetch` 后与远端同步，本地 v0.111 改动 94/94 绿）。结论：**不是你不会聊天**，是三个机制叠在一起把它往“挑刺”和“硬塞话题”上推。 ## 1. 进度总显示第一章——相对“今日计划”，不是全书 线上 `kv.day_state.plan` 实况： ``` bo… · 事件 #40–273 · 签名：项目改动
+
+## 这一轮行为概览
+- [ ] 修改了文档
+- [ ] 修改了代码
+- [ ] 修改了配置
+- [x] 执行了命令（18 条）
+
+## 这一轮行为详情
+- 执行了 18 条命令，以下为样例：`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json, glob, os print("cwd:", os.getcwd(), "dbs:", glob…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`
+- 本轮只有命令、没有文件工具的改动记录：shell 里的写入/重定向不计入（见 README「为什么 shell 改的文件不算文件改动」）
+- 读取了 `C:\Users\HP\AI_Companion\trueread.py`、`C:\Users\HP\AI_Companion\persona.py`、`C:\Users\HP\AI_Companion\context.py`、`C:\Users\HP\AI_Companion\todos.py`、`C:\Users\HP\AI_Companion\library.py`、`C:\Users\HP\AI_Companion\core.py`、`C:\Users\HP\AI_Companion\stream.py`、`C:\Users\HP\AI_Companion\test_life.py`、`C:\Users\HP\AI_Companion\test_engine.py`、`C:\Users\HP\AI_Companion\web\index.html` 〔dc03c9b0#46–257〕
+- 工具使用：pwsh×19，read×13，web_fetch×7，web_search×3，grep×2，ask_user_question×1，todo_tick×1，todo_write×1
+
+## 当前进度
+- 已完成：复现并定位 bug1：今日进度 HUD 永远显示「第 1/1 章」（相对当日计划而非全书）（未验证）；读线上聊天记录 + 意识流，定位 bug2：挑刺/刻薄、素材只有一句评价、突兀文艺句的来源（未验证）
+- 正在进行：（无）
+- 剩余：搜网络「聊天常识」并整理成可注入的对话准则；给出修复方案 + 工程量评估，等用户拍板后落地
+- 本轮（机器）：执行了 `$py = @' import sqlite3, json c = sqlit…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_ke…` 等 6 条命令
+- 下一步：继续「搜网络「聊天常识」并整理成可注入的对话准则」
+
+## 这一轮经验
+- 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.gottman.com" resolves to a non-public IP address 〔dc03c9b0#177〕
+- 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.ted.com" resolves to a non-public IP address 〔dc03c9b0#184〕
+- 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "emoscan.org" resolves to a non-public IP address 〔dc03c9b0#185〕
+- 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "en.wikipedia.org" resolves to a non-public IP address 〔dc03c9b0#191〕
+- 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.atsdr.cdc.gov" resolves to a non-public IP address 〔dc03c9b0#192〕
+- 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.thenews.com.pk" resolves to a non-public IP address 〔dc03c9b0#206〕
+
+<!-- dsh-task-handover:session:8080a0ee -->
+### 会话 `8080a0ee` · 2026-10-21 22:25:46
+
+> 第 3 轮 · 触发：每 10 秒刷新 · 累计 ~152k tokens（+42.3k） · 事件 #77–186 · 签名：项目改动
+
+## 这一轮行为概览
+- [ ] 修改了文档
+- [ ] 修改了代码
+- [ ] 修改了配置
+- [x] 执行了命令（8 条）
+
+## 这一轮行为详情
+- 执行了 8 条命令，以下为样例：`Select-String -Path config.py -Pattern "READING_DAILY_CHARS|TRUE_READ|READING" …`、`Get-ChildItem docs -Recurse -File | Where-Object { $_.LastWriteTime -gt (Get-Da…`、`Get-ChildItem . -Filter "*.md" -File | Select-Object Name, LastWriteTime; echo …`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=10 -o StrictHostKey…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db") c.row_factory = …`、`$py = @' import sqlite3 c = sqlite3.connect("friend.db") print([r[1] for r in c…`
+- 本轮只有命令、没有文件工具的改动记录：shell 里的写入/重定向不计入（见 README「为什么 shell 改的文件不算文件改动」）
+- 读取了 `C:\Users\HP\AI_Companion\web\index.html`、`C:\Users\HP\AI_Companion\webui.py`、`C:\Users\HP\AI_Companion\life.py`、`C:\Users\HP\AI_Companion\trueread.py`、`C:\Users\HP\AI_Companion\persona.py` 〔8080a0ee#86–153〕
+- 工具使用：read×10，pwsh×8，grep×5，handover_read×1
+
+## 当前进度
+- 已完成：（本会话没有任务清单）
+- 正在进行：（无）
+- 剩余：（无任务清单）
+- 本轮（机器）：执行了 `Select-String -Path config.py -Pattern …`、`Get-ChildItem docs -Recurse -File | Whe…` 等 6 条命令
+- 下一步：（待定）
+
+## 这一轮经验
+- （本轮未记录）
+
+<!-- dsh-task-handover:session:2daa93da -->
+### 会话 `2daa93da` · 2026-10-20 00:08:07
+
+> 第 3 轮 · 触发：每 10 秒刷新 · 累计 ~2.36M tokens（+325k） · 事件 #626–664 · 签名：项目改动
+
+## 这一轮行为概览
+- [ ] 修改了文档
+- [ ] 修改了代码
+- [ ] 修改了配置
+- [ ] 执行了命令
+
+## 这一轮行为详情
+- 读取了 `C:\Users\HP\AI_Companion\llm.py`、`C:\Users\HP\AI_Companion\tools.py`、`C:\Users\HP\AI_Companion\corpus.py` 〔2daa93da#631–660〕
+- 工具使用：read×5，grep×3
+
+## 当前进度
+- 已完成：（本会话没有任务清单）
+- 正在进行：（无）
+- 剩余：（无任务清单）
+- 下一步：（待定）
+
+## 这一轮经验
+- （本轮未记录）
+<!-- dsh-task-handover:snapshot:end -->
+
+---
+
+## 历史快照
+
+<details>
+<summary>cde29720 · 2026-10-18 13:00:37</summary>
+
 ### 会话 `cde29720` · 2026-10-18 13:00:37
 
 > 第 2 轮 · 分支 main · 修订 12（基于 12） · 触发：每 10 秒刷新 · 累计 ~1.86M tokens（+17.9k） · 概要：v0.110 候选 A（断线重连）全部落地：自调度指数退避 + net-banner 横幅（手机可见）+ 恢复自动补齐 + send/sendText 双路径失败回填（P0-1）；全量 92/92 绿；文档三处同步 + IMPL-20261018.md；未 commit（按纪律留拍板人）。 · 事件 #124–492
@@ -44,7 +135,11 @@
 - 工具 `edit` 失败：Error: old_string and new_string must differ 〔cde29720#338〕
 - 工具 `edit` 失败（FS_NOT_OBSERVED）：Error: cannot modify "C:\Users\HP\AI_Companion\docs\版本更新记录.md": file has not been read — read the file, then retry 〔cde29720#438〕
 
-<!-- dsh-task-handover:session:20a1fb2c -->
+</details>
+
+<details>
+<summary>20a1fb2c · 2026-10-18 12:55:58</summary>
+
 ### 会话 `20a1fb2c` · 2026-10-18 12:55:58
 
 > 第 4 轮 · 分支 main · 修订 11（基于 11） · 触发：每 10 秒刷新 · 累计 ~282k tokens（+1.3k） · 概要：已落盘 [docs/REVIEW-20261018-plan.md](docs/REVIEW-20261018-plan.md)，按硬性顺序：先写后补核。 **结论：有条件通过**。6 条证据核对全真（含方案自标 ❌ 的 `trueread.py:112` clamp 补验为存在）；P0×4：A5 漏主发送函数 `s… · 事件 #239–274
@@ -70,118 +165,41 @@
 ## 这一轮经验
 - （本轮未记录）
 
-<!-- dsh-task-handover:session:a70b6f5d -->
-### 会话 `a70b6f5d` · 2026-10-18 12:48:08
-
-> 第 2 轮 · 分支 main · 修订 11（基于 11） · 触发：每 10 秒刷新 · 累计 ~5.93M tokens（+125k） · 概要：收到，停止调研。方案文件上一轮已落盘——先核实文件在盘、并按指令把参考来源逐条补上「仅搜索结果，未打开原文」标注（一次 edit，不再重试任何 fetch）： · 事件 #379–393
-
-## 这一轮行为概览
-- [x] 修改了文档（1 个文件 / 1 次改动，+12/−12 行）
-- [ ] 修改了代码
-- [ ] 修改了配置
-- [x] 执行了命令（1 条）
-
-## 这一轮行为详情
-- 修改了 `docs/PLAN-20261018-next.md`（1 次改动，+12/−12 行） 〔a70b6f5d#383〕
-- 执行了 1 条命令：`Get-Item "docs\PLAN-20261018-next.md" | Select-Object Name, Length, LastWriteTi…`
-- 本轮需求：「拍板人指令（覆盖你当前的调研节奏，请立刻执行）： 1. **停止继续扩展调研**。web_fetch 在本会话被网络沙箱拦截（所有外网域名解析失败）这件事已经…」 〔a70b6f5d#380〕
-- 工具使用：edit×1，memory×1，pwsh×1
-
-## 当前进度
-- 已完成：会话第一动作：git fetch + status + log 核对远端（未验证）；读项目现状：README / handover.md / AGENTS 相关文档（未验证）；读 docs/ 最近改动：体验优化清单 / 版本更新记录 / 方案-对话延续（未验证）；摸半成品：grep TODO/FIXME、清单未完成项、暂缓项（未验证）；定位 3~5 个候选方向（各带证据/理由/影响面/风险）（未验证）；联网调研每个候选（≥1 条外部依据+URL）（未验证）；收敛写 docs/PLAN-20261018-next.md（机器：docs/PLAN-20261018-next.md）；自检断言证据 + 短消息汇报（未验证）
-- 正在进行：（无）
-- 剩余：（无）
-- 本轮（机器）：修改了 `docs/PLAN-20261018-next.md`；执行了 `Get-Item "docs\PLAN-20261018-next.md" |…`
-- 下一步：（待定）
-
-## 这一轮经验
-- （本轮未记录）
-<!-- dsh-task-handover:snapshot:end -->
-
----
-
-## 历史快照
-
-<details>
-<summary>20a1fb2c · 2026-10-18 12:53:26</summary>
-
-### 会话 `20a1fb2c` · 2026-10-18 12:53:26
-
-> 第 3 轮 · 分支 main · 修订 11（基于 11） · 触发：每 10 秒刷新 · 累计 ~257k tokens（+7.6k） · 概要：已落盘 [docs/REVIEW-20261018-plan.md](docs/REVIEW-20261018-plan.md)（上轮其实已写入，本轮按你的 4 个判断点重写强化；6 条指定证据逐一重核全真）。 **结论：有条件通过**。两个 P0：A5 漏了主发送函数 `send()`（`web/index.htm… · 事件 #194–234
-
-## 这一轮行为概览
-- [x] 修改了文档（1 个文件 / 1 次改动，+122/−0 行）
-- [ ] 修改了代码
-- [ ] 修改了配置
-- [ ] 执行了命令
-
-## 这一轮行为详情
-- 修改了 `docs/REVIEW-20261018-plan.md`（1 次改动，+122/−0 行） 〔20a1fb2c#225〕
-- 本轮需求：「你上一轮在「抽核证据」中途就结束了回合，**没有产出 `docs/REVIEW-20261018-plan.md`**。现在补齐： 1. 直接开始核对与写文档…」 〔20a1fb2c#195〕
-- 工具使用：read×7，glob×1，grep×1，memory×1，write×1
-
-## 当前进度
-- 已完成：会话第一动作：git fetch + status 核对远端（未验证）；读 AGENTS.md / README.md / handover.md（未验证）；通读 docs/ 既有文档（TROUBLESHOOTING/CONFIG-REVIEW 等）（未验证）；摸清项目骨架：模块职责 / 测试跑法 / 约定禁区（未验证）；写 docs/REVIEW-CRITERIA.md 审查基准（机器：docs/REVIEW-CRITERIA.md）；检查 docs/PLAN-*.md 是否存在，存在则审查写 REVIEW 文档（未验证）
-- 正在进行：（无）
-- 剩余：（无）
-- 本轮（机器）：修改了 `docs/REVIEW-20261018-plan.md`
-- 下一步：（待定）
-
-## 这一轮经验
-- （本轮未记录）
-
 </details>
 
 <details>
-<summary>d16528f8 · 2026-10-18 12:41:52</summary>
+<summary>2daa93da · 2026-10-19 23:10:43</summary>
 
-### 会话 `d16528f8` · 2026-10-18 12:41:52
+### 会话 `2daa93da` · 2026-10-19 23:10:43
 
-> 第 1 轮 · 分支 main · 修订 11（基于 10） · 触发：每 10 秒刷新 · 累计 ~35.3k tokens（+35.3k） · 概要：下面是我在本轮开头收到的「项目交接摘要」（handover.md 摘要）的如实复述。 ## 0. 文件头 ``` ## 项目交接（`handover.md`） > 更新于 2026-10-18 12:40:39 · 修订 10 · 3 个会话小节 · 最新的写在前面 ``` **有「修订 N」**：`修订 10`。*… · 事件 #0–23
+> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~1.15M tokens（+6.1k） · 概要：三个 bug 的根因线索已经收敛。现在去服务器取实锤证据（本地库已复现 bug 1：22:03 说晚安 → 22:04:03「醒了」）。先确认 SSH 可用： · 事件 #54–587 · 签名：项目改动
 
 ## 这一轮行为概览
 - [ ] 修改了文档
-- [ ] 修改了代码
+- [x] 修改了代码（10 个文件 / 11 次改动，+191/−0 行）
 - [ ] 修改了配置
-- [ ] 执行了命令
+- [x] 执行了命令（21 条）
 
 ## 这一轮行为详情
-- 本轮需求：「只做一件事，不要调用任何工具、不要读任何文件、不要写文件： 把你这一轮**开头**收到的「项目交接摘要」（handover.md 摘要）如实复述出来，尽量逐字…」 〔d16528f8#11〕
+- 修改了 `_urgent_check.py`（2 次改动，+31/−0 行） 〔2daa93da#483–500〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe.py`（1 次改动，+11/−0 行） 〔2daa93da#390〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe2.py`（1 次改动，+15/−0 行） 〔2daa93da#423〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe3.py`（1 次改动，+22/−0 行） 〔2daa93da#435〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe4.py`（1 次改动，+15/−0 行） 〔2daa93da#447〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe5.py`（1 次改动，+24/−0 行） 〔2daa93da#459〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe6.py`（1 次改动，+23/−0 行） 〔2daa93da#471〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe7.py`（1 次改动，+15/−0 行） 〔2daa93da#555〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe8.py`（1 次改动，+21/−0 行） 〔2daa93da#567〕
+- 修改了 `C:/Users/HP/AppData/Local/Temp/server_probe9.py`（1 次改动，+14/−0 行） 〔2daa93da#579〕
+- 执行了 21 条命令，以下为样例：`Get-ChildItem -Path "C:\Users\HP\AI_Companion" -Filter "*.db" | Select-Object N…`、`& "C:\Users\HP\AI_Companion\.venv\Scripts\python.exe" -c @" import sqlite3, jso…`、`& "C:\Users\HP\AI_Companion\.venv\Scripts\python.exe" -c @" import sqlite3 c = …`、`Test-Path "$env:USERPROFILE\.ssh\tunnel_key"; (Get-Command ssh -ErrorAction Sil…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=10 -o StrictHostKey…`、`scp -i "$env:USERPROFILE\.ssh\tunnel_key" -o StrictHostKeyChecking=no "C:\Users…`
+- 读取了 `C:\Users\HP\AI_Companion\life.py`、`C:\Users\HP\AI_Companion\web\index.html`、`C:\Users\HP\AI_Companion\core.py`、`C:\Users\HP\AI_Companion\offline.py`、`C:\Users\HP\AI_Companion\webui.py`、`C:\Users\HP\AI_Companion\corpus.py`、`C:\Users\HP\AI_Companion\scheduler.py`、`C:\Users\HP\AI_Companion\persona.py`、`C:\Users\HP\AI_Companion\db.py`、`C:\Users\HP\AI_Companion\events.py` 〔2daa93da#59–550〕
+- 工具使用：read×56，grep×25，pwsh×21，write×11
 
 ## 当前进度
-- 已完成：（自动）下面是我在本轮开头收到的「项目交接摘要」（handover.md 摘要）的如实复述。 ## 0. 文件头 ``` ## 项目交接（`handover.md`） > 更新于 2026-10-18 12:40:39 · 修订 10 · 3 个会话小节 · 最新的写在前面 ``` **有「修订 N」**：`修订 10`。*…
-- 正在进行：处理「只做一件事，不要调用任何工具、不要读任何文件、不要写文件： 把你这一轮**开头**收到的「项目交接摘要」（handover.md 摘要）如实复述出来，尽量逐字，包含： 1. 摘要里列了哪几个会话小节（短键 + 备注的一句话概要）； 2. …」
-- 剩余：（无任务清单）
-- 下一步：继续处理「只做一件事，不要调用任何工具、不要读任何文件、不要写文件： 把你这一轮**开头**收到的「项目交接摘要」（handover.md 摘要）如实复述出来，尽量逐字，包含： 1. 摘要里列了哪几个会话小节（短键 + 备注的一句话概要）； 2. …」
-
-## 这一轮经验
-- （本轮未记录）
-
-</details>
-
-<details>
-<summary>20a1fb2c · 2026-10-18 12:50:39</summary>
-
-### 会话 `20a1fb2c` · 2026-10-18 12:50:39
-
-> 第 2 轮 · 分支 main · 修订 11（基于 11） · 触发：每 10 秒刷新 · 累计 ~213k tokens（+7.2k） · 概要：证据充分了。现在写审查报告。 · 事件 #123–186
-
-## 这一轮行为概览
-- [x] 修改了文档（1 个文件 / 1 次改动，+115/−0 行）
-- [ ] 修改了代码
-- [ ] 修改了配置
-- [ ] 执行了命令
-
-## 这一轮行为详情
-- 修改了 `docs/REVIEW-20261018-plan.md`（1 次改动，+115/−0 行） 〔20a1fb2c#178〕
-- 本轮需求：「方案已就绪：`docs/PLAN-20261018-next.md`（worker1 产出，26697 字节）。 现在执行你的第四步：**逐条审查它，写 `d…」 〔20a1fb2c#128〕
-- 工具使用：read×7，grep×6，memory×1，todo_tick×1，write×1
-
-## 当前进度
-- 已完成：会话第一动作：git fetch + status 核对远端（未验证）；读 AGENTS.md / README.md / handover.md（未验证）；通读 docs/ 既有文档（TROUBLESHOOTING/CONFIG-REVIEW 等）（未验证）；摸清项目骨架：模块职责 / 测试跑法 / 约定禁区（未验证）；写 docs/REVIEW-CRITERIA.md 审查基准（机器：docs/REVIEW-CRITERIA.md）；检查 docs/PLAN-*.md 是否存在，存在则审查写 REVIEW 文档（未验证）
+- 已完成：（自动）三个 bug 的根因线索已经收敛。现在去服务器取实锤证据（本地库已复现 bug 1：22:03 说晚安 → 22:04:03「醒了」）。先确认 SSH 可用：
 - 正在进行：（无）
-- 剩余：（无）
-- 本轮（机器）：修改了 `docs/REVIEW-20261018-plan.md`
+- 剩余：（无任务清单）
+- 本轮（机器）：修改了 `_urgent_check.py`、`C:/Users/HP/AppData/Local/Temp/server_p…`、`C:/Users/HP/AppData/Local/Temp/server_p…` 等 10 个文件；执行了 `Get-ChildItem -Path "C:\Users\HP\AI_Com…`、`& "C:\Users\HP\AI_Companion\.venv\Scrip…` 等 6 条命令
 - 下一步：（待定）
 
 ## 这一轮经验

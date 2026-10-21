@@ -416,6 +416,100 @@ def test_interrupt_detection():
             _mem.extract_async = real_extract
 
 
+def test_reply_not_silently_lost():
+    """v0.111（实测 #53）：回复不许凭空消失。
+
+    线上现场：用户说「对不起，我困了，睡了」→ TA 生成了「睡吧，别道歉了。我这儿也合眼。」
+    → 打字那几秒里用户又发「晚安」→ 整条被插话丢弃；下一轮 LLM 又返回空串 →
+    用户苦等 96 秒追问「你咋不回我」。更糟的是那条没发出去的回复照样写进了意识流
+    「我说：…」，于是 TA 理直气壮答「回了啊」。
+    两条修法：①空回复退回单层重跑一次；②一个字都没发出去就不许记「我说：…」。
+    """
+    import tempfile
+    import time as _t
+    import db as _db
+    import memory as _mem
+    from core import Engine
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       TYPING_ENABLED=True, WORK_ENABLED=False, **_FAST_TIMING):
+        try:
+            class Ch:
+                def __init__(self):
+                    self.events = []
+                def send(self, text):
+                    self.events.append(("send", text))
+                def typing(self):
+                    self.events.append(("typing",))
+                @property
+                def sent(self):
+                    return [e[1] for e in self.events if e[0] == "send"]
+
+            real_chat = _mem.llm.chat
+            real_extract = _mem.extract_async
+            _mem.extract_async = lambda: None
+            eng = None
+
+            def wait_for(pred, timeout=4):
+                deadline = _t.time() + timeout
+                while _t.time() < deadline:
+                    if pred():
+                        return True
+                    _t.sleep(0.02)
+                return False
+
+            # 场景一：LLM 返回空串 → 退回单层重跑一次，不许静默丢弃
+            calls = {"n": 0}
+
+            def fake_chat_empty_then_ok(messages, **k):
+                calls["n"] += 1
+                return "" if calls["n"] == 1 else "想起来了，刚说到哪儿了"
+            _mem.llm.chat = fake_chat_empty_then_ok
+            ch = Ch()
+            eng = Engine(ch)
+            # 用词避开 MEMORY_SEARCH_QUERY（走了工具循环就不是 llm.chat 了）
+            eng.on_user_message("今天天气不错")
+            assert wait_for(lambda: ch.sent), "空回复后没重跑，用户侧就是「问了没回」"
+            assert calls["n"] == 2, f"空回复应只重跑一次（实际调了 {calls['n']} 次）"
+            assert ch.sent == ["想起来了，刚说到哪儿了"], f"重跑的回复不对：{ch.sent}"
+            eng.stop()
+            eng = None
+
+            # 场景二：整条被插话丢弃 → 不许在意识流里留「我说：…」（否则 TA 以为自己回过）
+            config.TYPING_SECONDS_PER_CHAR = 0.5   # 打字慢一点，留出插话窗口
+            config.TYPING_MIN_SECONDS = 0.3
+            config.TYPING_MAX_SECONDS = 1.0
+            calls2 = {"n": 0}
+
+            def fake_chat2(messages, **k):
+                calls2["n"] += 1
+                last = messages[-1]["content"]
+                if "等等我先插一句" in last:
+                    return "回应插话"
+                return "本来要回你的旧消息"
+            _mem.llm.chat = fake_chat2
+            ch2 = Ch()
+            eng = Engine(ch2)
+            eng.on_user_message("在吗")
+            assert wait_for(lambda: any(e[0] == "typing" for e in ch2.events)), "没进入打字"
+            eng.on_user_message("等等我先插一句")       # 打字期间插话 → 整段作废
+            assert wait_for(lambda: "回应插话" in ch2.sent), f"插话没被回应：{ch2.sent}"
+            _t.sleep(0.8)
+            assert "本来要回你的旧消息" not in ch2.sent, f"作废的旧回复不该发出：{ch2.sent}"
+            rows = [r for r in _db.recent_stream(60) if r["kind"] == "reply"]
+            assert not any("本来要回你的旧消息" in (r.get("text") or "") for r in rows), \
+                f"没发出去的话不该记进意识流（TA 会以为自己回过了）：{rows}"
+            assert any("回应插话" in (r.get("text") or "") for r in rows), \
+                "真正发出去的回复要照常进意识流"
+            print("ok 回复不凭空消失（空回复重跑一次 + 未发出的话不记「我说：」）")
+        finally:
+            if eng:
+                eng.stop()
+            _mem.llm.chat = real_chat
+            _mem.extract_async = real_extract
+
+
 def test_db_path_lock():
     """PATH_LOCK 互斥：在途提取持锁期间切库被阻塞；放行后记忆落旧库不串新库。"""
     import tempfile
@@ -638,7 +732,16 @@ def test_urgent_channel():
         _db.set_kv("urgent_until", (now - _td(minutes=1)).isoformat(timespec="seconds"))
         assert not _injected(_ctx.build_chat_messages("AWAKE", ["在吗"])), \
             "紧急窗口过期了还在注入"
-        print("ok 紧急通道（急事命中 / 日常不误伤 / 静默期让路 / 窗口会过期）")
+
+        # v0.111（实测 #53）：窗口记下是哪条消息开的 → 撤回那条就撤销；
+        # 撤回别的消息不动它（手机上「我需要陪伴」那行小字容易误触）
+        _guard.open_urgent_window(now, msg_id=101)
+        assert _guard.in_urgent_window(now), "带消息 id 开窗口没生效"
+        assert not _guard.cancel_urgent_window(999), "撤回无关消息把别人的窗口撤了"
+        assert _guard.in_urgent_window(now), "无关撤回不该动窗口"
+        assert _guard.cancel_urgent_window(101), "撤回开窗口的那条消息没撤销窗口"
+        assert not _guard.in_urgent_window(now), "撤回后紧急窗口还残留"
+        print("ok 紧急通道（急事命中 / 日常不误伤 / 静默期让路 / 窗口会过期 / 撤回可撤销）")
 
 
 def test_webui():
@@ -701,6 +804,16 @@ def test_webui():
                     "页面缺断线重连结构（net-banner 横幅 / schedulePoll 自调度）"
                 assert '文字已放回输入框' in html, \
                     "发送失败回填提示缺失（send/sendText 双路径都要有）"
+                # 手机端输入框（v0.111 实测 #53）：textarea 必须能收缩（min-width:0，
+                # 否则 flex 项压不下去、整行被顶开）+ 长串无空格文本必须换行
+                # （overflow-wrap，否则文字向右穿出输入框）
+                _ta = html[html.index(".composer textarea {"):]
+                _ta = _ta[:_ta.index("}")]
+                assert "min-width: 0" in _ta, "输入框缺 min-width:0（手机上会被挤到左边）"
+                assert "overflow-wrap" in _ta, "输入框缺 overflow-wrap（长串文字会向右穿出）"
+                # 紧急陪伴（v0.111）：勾了要明说一声，误触能立刻发现
+                assert "wasUrgent" in html and "已开启紧急陪伴" in html, \
+                    "勾了「我需要陪伴」没有任何提示（手机误触无从发现）"
                 # 调优参数面板（v0.86）：菜单项 + 模态框结构
                 assert 'id="mTuning"' in html and 'id="tuneModal"' in html \
                     and 'id="tuneBody"' in html and 'id="tuneAdv"' in html, \

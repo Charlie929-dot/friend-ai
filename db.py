@@ -782,6 +782,19 @@ def recent_stream(limit: int, day: str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def last_stream_ts(kind: str) -> str:
+    """某类意识流事件最后一次发生的 ts（"" = 从没发生过）。
+
+    作息兜底用（v0.111）：部署时 TA 可能正睡着、kv 里还没有入睡时刻，退回意识流
+    最后一条 sleep 的时间，兜底逻辑才不会把"刚躺下"当成"睡过了该起了"。
+    """
+    with _conn() as c:
+        row = c.execute(
+            "SELECT ts FROM consciousness_stream WHERE kind=? "
+            "ORDER BY id DESC LIMIT 1", (kind,)).fetchone()
+    return (row["ts"] if row else "")
+
+
 def stream_for_day(day: str) -> list[dict]:
     """某生活日的全部意识流（按时间正序），睡前浓缩成 self_* 用。"""
     with _conn() as c:

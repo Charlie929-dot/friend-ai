@@ -181,8 +181,14 @@
     background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
     box-shadow: 0 2px 10px rgba(0,0,0,.04); }
   .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-  .composer textarea { flex: 1; min-height: 24px; max-height: 120px; padding: 6px 0; color: var(--ink);
-    background: transparent; border: 0; outline: 0; resize: none; font-size: 14px; }
+  /* v0.111：两处都是手机上实测踩出来的（实测 #53）——
+     ① min-width:0 —— flex 项默认 min-width:auto 压不下去，长文本时整行被顶开、
+        输入框被挤到左边；② overflow-wrap:break-word —— 一长串没空格的字符
+        （乱码/长链接）在 textarea 里不换行，直接向右穿出输入框。 */
+  .composer textarea { flex: 1 1 auto; min-width: 0; min-height: 24px; max-height: 120px;
+    padding: 6px 0; color: var(--ink); background: transparent; border: 0; outline: 0;
+    resize: none; font-size: 14px; white-space: pre-wrap; overflow-wrap: break-word;
+    word-break: break-word; }
   .composer textarea::placeholder { color: var(--muted); }
   .emoji-btn { width: 38px; height: 38px; display: grid; place-items: center; color: var(--muted);
     border-radius: 12px; flex: 0 0 auto; transition: background .18s, color .18s; font-size: 19px; }
@@ -1735,15 +1741,19 @@ async function send(){
   if(!t) return;
   $('txt').value=''; $('txt').style.height='auto';
   const q=quote;
+  const wasUrgent=$('urgent').checked;
   clearQuote();
   try{
-    const body={text:t, urgent:$('urgent').checked};
+    const body={text:t, urgent:wasUrgent};
     if(q) body.quote={id:q.id, role:q.role, content:q.content};
     const r=await (await fetch('/api/send',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body)
     })).json();
     $('urgent').checked=false;
+    // v0.111：勾了「我需要陪伴」就明说一声——手机上这行小字容易误触，
+    // 原来勾了毫无提示，用户只看到状态栏莫名变成「紧急窗口中」（实测 #53）
+    if(wasUrgent) toast('已开启紧急陪伴 10 分钟（撤回这条可撤销）');
     if(r.echo!==false){
       addMsg({role:'user',content:t,ts:r.ts,quote_content:q?q.content:''},r.id||0);
       if(r.id) lastId=Math.max(lastId,r.id);
@@ -2496,11 +2506,13 @@ function renderEmojiGrid(){
 }
 async function sendText(text){
   const q=quote; clearQuote();
+  const wasUrgent=$('urgent').checked;
   try{
-    const body={text:text, urgent:$('urgent').checked};
+    const body={text:text, urgent:wasUrgent};
     if(q) body.quote={id:q.id, role:q.role, content:q.content};
     const r=await (await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
     $('urgent').checked=false;
+    if(wasUrgent) toast('已开启紧急陪伴 10 分钟（撤回这条可撤销）');   // v0.111：与 send() 同款提示
     if(r.echo!==false){
       addMsg({role:'user',content:text,ts:r.ts,quote_content:q?q.content:''},r.id||0);
       if(r.id) lastId=Math.max(lastId,r.id);

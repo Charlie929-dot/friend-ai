@@ -231,6 +231,21 @@ def _in_morning(now: datetime) -> bool:
 
 # ---------- 节律 tick（调度器每分钟调） ----------
 
+def _sleep_started_at() -> datetime | None:
+    """最近一次真正入睡的时刻（v0.111）。
+
+    kv 优先（`core._do_sleep` 落）；没有（部署时正睡着）→ 退回意识流最后一条
+    sleep；都没有返回 None（老库/手改状态：退回原来的兜底行为）。
+    """
+    raw = db.get_kv("sleep_started_at") or db.last_stream_ts("sleep")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 def tick(engine, now: datetime | None = None) -> None:
     """每分钟：作息过渡 + 上线 flush 离线留言。
     SLEEPY 有两个来路（kv.sleepy_reason）：早上赖床（lie_in）到起床点要**醒**；
@@ -253,8 +268,14 @@ def tick(engine, now: datetime | None = None) -> None:
             engine._do_sleep()
     elif state == "SLEEPING":
         # 兜底（错过 wake_up cron / 电脑睡过头）：今天的起床点过了就醒。
-        # 不能用 next_wake_at——早晨生活日翻篇后"下次"就是明天，会睡一整天
-        if _in_morning(now) and now >= today_wake_at(now):
+        # 不能用 next_wake_at——早晨生活日翻篇后"下次"就是明天，会睡一整天。
+        # v0.111：起床点还必须**晚于入睡时刻**。刚说完晚安躺下时，"今天该几点起"
+        # 那个点（早上那一个）早就过了，上面两个条件天然成立 → 下一分钟就被叫醒，
+        # 于是"晚安"发出 40 秒后紧接着一条"早！"，线上连着六晚如此（实测 #53）。
+        # 睡之前那个起床点不算数，要等睡之后的那个。
+        start = _sleep_started_at()
+        if (_in_morning(now) and now >= today_wake_at(now)
+                and (start is None or today_wake_at(now) > start)):
             engine._do_wake()
     elif state == "AWAKE" and not is_offline(now) and pending_inbox_count():
         engine.flush_inbox()

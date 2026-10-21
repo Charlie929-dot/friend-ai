@@ -380,6 +380,66 @@ def test_wake_semantics_and_tick():
         print("ok 起床双语义（today/next 分开 + 按日缓存不抖 + 污染自愈 + tick 赖床/熬夜/深夜保护）")
 
 
+def test_just_slept_not_woken():
+    """v0.111（实测 #53）：刚说完晚安躺下，不能被"睡过头兜底"立刻叫醒。
+
+    线上连着六晚：23:24 入睡 → 23:25 起床 → 一分钟后一条「早！窗子那边光…」，
+    于是整夜 AWAKE（凌晨两点还在陪聊）。根因：SLEEPING 兜底只看「生活日还是当天
+    + 今天该几点起已过」，而刚躺下时这两条天然成立。修法：起床点必须**晚于入睡
+    时刻**——睡之前那个起床点不算数。
+    """
+    import json
+    import tempfile
+    from datetime import datetime as _dt
+
+    import db as _db
+    import offline as _off
+    import stream as _stream
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db"):
+        _db.set_kv("persona_json", json.dumps({
+            "archetype": "oldcadre", "label": "老干部", "name": "稳稳", "quirk": "",
+            "text": "你作息规律。", "wake_hour": 8, "sleep_hour": 23,
+            "bubble_mult": 0.8, "drawn_at": "2026-10-09T00:00:00"}))
+
+        class FakeEng:
+            def __init__(self):
+                self.calls = []
+            def _do_wake(self):
+                self.calls.append("wake")
+            def _do_sleep(self):
+                self.calls.append("sleep")
+            def flush_inbox(self):
+                self.calls.append("flush")
+
+        eng = FakeEng()
+        # 10-19 夜：22:41 该睡、实际 23:24 躺下；今天（10-19）的起床点 08:42 早过了
+        _db.set_kv("rest_schedule", json.dumps(
+            {"day": "2026-10-19", "sleep_at": "2026-10-19T22:41:00",
+             "wake_days": {"2026-10-19": "2026-10-19T08:42:00",
+                           "2026-10-20": "2026-10-20T08:36:00"}}))
+        _db.set_kv("sleep_started_at", "2026-10-19T23:24:05")
+        _db.set_state("SLEEPING")
+        _off.tick(eng, _dt(2026, 10, 19, 23, 25))
+        assert not eng.calls, f"刚躺下一分钟就被叫醒（老 bug 复发）：{eng.calls}"
+        _off.tick(eng, _dt(2026, 10, 19, 23, 59))
+        assert not eng.calls, f"入睡当天深夜也不该被叫醒：{eng.calls}"
+
+        # 睡过头兜底不能废：第二天的起床点过了照常醒（错过 cron / 电脑睡到中午）
+        _off.tick(eng, _dt(2026, 10, 20, 9, 0))
+        assert eng.calls == ["wake"], f"第二天睡过头没兜底醒来：{eng.calls}"
+
+        # kv 没有（部署时正睡着）→ 退回意识流最后一条 sleep，同样不该被叫醒
+        eng.calls.clear()
+        _db.set_kv("sleep_started_at", "")
+        _stream.append("sleep", "我困了，去睡了", _dt(2026, 10, 19, 23, 24, 5))
+        _db.set_state("SLEEPING")
+        _off.tick(eng, _dt(2026, 10, 19, 23, 30))
+        assert not eng.calls, f"退回意识流的入睡时刻没生效：{eng.calls}"
+        print("ok 刚入睡不被叫醒（起床点须晚于入睡时刻 + 无 kv 退意识流 + 睡过头兜底仍在）")
+
+
 def test_care_events():
     """S4 事件记忆与关怀触发：承诺/约定提取 → 到点提醒（醒着发/睡着醒来补/过期错过）。"""
     import json
