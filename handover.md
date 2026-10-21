@@ -1,7 +1,7 @@
 <!-- dsh-task-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-21 23:23:15 · 3 个会话小节 · 项目规则见 AGENTS.md
+> 更新于 2026-10-21 23:38:22 · 3 个会话小节 · 项目规则见 AGENTS.md
 
 <!-- dsh-task-handover:sessions:start -->
 <!-- 20a1fb2c = session-20a1fb2c-3f26-416a-9e38-fe8e0d07369f -->
@@ -13,15 +13,15 @@
 
 <!-- dsh-task-handover:snapshot:start -->
 <!-- dsh-task-handover:session:dc03c9b0 -->
-### 会话 `dc03c9b0` · 2026-10-21 23:23:15
+### 会话 `dc03c9b0` · 2026-10-21 23:38:22
 
-> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~649k tokens（+2.1k） · 概要：已核对线上代码与真实数据（`git fetch` 后与远端同步，本地 v0.111 改动 94/94 绿）。结论：**不是你不会聊天**，是三个机制叠在一起把它往“挑刺”和“硬塞话题”上推。 ## 1. 进度总显示第一章——相对“今日计划”，不是全书 线上 `kv.day_state.plan` 实况： ``` bo… · 事件 #40–707 · 签名：项目改动
+> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~659k tokens（+1.5k） · 概要：v0.112 落地并已部署：HUD 改用全书章节坐标（8/54）、新增十条聊天常识并校准反谄媚/独白/说话层、待办队列去污染（判否不入队+24h 过期+近似去重+每轮最多 3 条+接不上别提）、分享先给具体内容、早安禁编天气；v0.111 也已单独提交并一起上线，全量 95/95。 · 事件 #40–762 · 签名：项目改动
 
 ## 这一轮行为概览
 - [x] 修改了文档（6 个文件 / 15 次改动，+117/−11 行）
 - [x] 修改了代码（15 个文件 / 34 次改动，+312/−54 行）
 - [ ] 修改了配置
-- [x] 执行了命令（39 条）
+- [x] 执行了命令（46 条）
 
 ## 这一轮行为详情
 - 修改了 `AGENTS.md`（1 次改动，+1/−1 行） 〔dc03c9b0#650〕
@@ -37,16 +37,16 @@
 - 修改了 `persona.py`（7 次改动，+54/−7 行） 〔dc03c9b0#331–515〕
 - 修改了 `run_tests.py`（1 次改动，+4/−3 行） 〔dc03c9b0#486〕
 - …另有 9 个文件未列出
-- 执行了 39 条命令，以下为样例：`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json, glob, os print("cwd:", os.getcwd(), "dbs:", glob…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`
+- 执行了 46 条命令，以下为样例：`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json, glob, os print("cwd:", os.getcwd(), "dbs:", glob…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`
 - 读取了 `C:\Users\HP\AI_Companion\trueread.py`、`C:\Users\HP\AI_Companion\persona.py`、`C:\Users\HP\AI_Companion\context.py`、`C:\Users\HP\AI_Companion\todos.py`、`C:\Users\HP\AI_Companion\library.py`、`C:\Users\HP\AI_Companion\core.py`、`C:\Users\HP\AI_Companion\stream.py`、`C:\Users\HP\AI_Companion\test_life.py`、`C:\Users\HP\AI_Companion\test_engine.py`、`C:\Users\HP\AI_Companion\web\index.html`、`C:\Users\HP\AI_Companion\commands.py`、`C:\Users\HP\AI_Companion\life.py` 等 22 个文件 〔dc03c9b0#46–666〕
-- 工具使用：edit×54，pwsh×40，read×34，web_fetch×7，todo_write×3，web_search×3，grep×2，ask_user_question×1
+- 工具使用：edit×54，pwsh×46，read×34，web_fetch×7，todo_write×3，web_search×3，grep×2，todo_tick×2
 
 ## 当前进度
-- 已完成：复现并定位 bug1：今日进度 HUD 永远显示「第 1/1 章」（相对当日计划而非全书）；读线上聊天记录 + 意识流，定位 bug2：挑刺/刻薄、素材只有一句评价、突兀文艺句的来源；v0.111 单独提交（未验证·本轮 ≥6 条命令无逐项对应）
-- 正在进行：bug1：新增全书章节坐标（life/webui/index.html/commands/stream）
-- 剩余：bug2-A：聊天常识块 + 反谄媚/独白/说话层校准；bug2-B：待办队列去污染（起话题否不入队 + 24h 过期 + 近似去重 + 只注入 3 条）；bug2-C：素材分享具体化 + 早安禁止编天气/光；补测试并跑全量（EXPECTED_TOTAL 同步）；改文档 + v0.112 提交 + 同步服务器 + 清线上旧待办；线上验收（HUD 全书章节 / 聊天语气） + 交接
+- 已完成：复现并定位 bug1：今日进度 HUD 永远显示「第 1/1 章」（相对当日计划而非全书）；读线上聊天记录 + 意识流，定位 bug2：挑刺/刻薄、素材只有一句评价、突兀文艺句的来源；v0.111 单独提交（未验证·本轮 21 个文件、≥6 条命令无逐项对应）；bug1：新增全书章节坐标（life/webui/index.html/commands/stream）（机器：life.py）；bug2-A：聊天常识块 + 反谄媚/独白/说话层校准（机器：persona.py）；bug2-B：待办队列去污染（起话题否不入队 + 24h 过期 + 近似去重 + 只注入 3 条）（机器：todos.py）；bug2-C：素材分享具体化 + 早安禁止编天气/光（机器：trueread.py）；补测试并跑全量（EXPECTED_TOTAL 同步）（机器：run_tests.py）；改文档 + v0.112 提交 + 同步服务器 + 清线上旧待办（未验证）；线上验收（HUD 全书章节 / 聊天语气） + 交接（未验证）
+- 正在进行：（无）
+- 剩余：（无）
 - 本轮（机器）：修改了 `todos.py`、`docs/实测反馈/#54-聊天刻薄与进度显示.md`、`test_life.py` 等 21 个文件；执行了 `$py = @' import sqlite3, json c = sqlit…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_ke…` 等 6 条命令
-- 下一步：继续「bug1：新增全书章节坐标（life/webui/index.html/commands/stream）」
+- 下一步：让用户真机聊几轮验收语气（重点：短回『噢/额』不再被当冒犯、不再硬插无关的『光』、分享会先给具体内容）；刷新页面后看 HUD 是否显示「第 8/54 章」。明早观察早安是否不再编天气。线上旧待办已清空（备份在服务器 /tmp/todos.bak.json）。若语气仍偏硬，下一轮优先调 CHAT_SENSE 第 2/4…
 
 ## 这一轮经验
 - 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.gottman.com" resolves to a non-public IP address 〔dc03c9b0#177〕
@@ -55,6 +55,11 @@
 - 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "en.wikipedia.org" resolves to a non-public IP address 〔dc03c9b0#191〕
 - 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.atsdr.cdc.gov" resolves to a non-public IP address 〔dc03c9b0#192〕
 - 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.thenews.com.pk" resolves to a non-public IP address 〔dc03c9b0#206〕
+- HUD 的 chapter/total_chapters 是『今日计划内偏移』，不能直接当全书进度显示——全书坐标另立 book_chapter/book_total；两者语义别混（prompt 的『今天圈了 N 章』还靠旧口径） 〔dc03c9b0#763〕
+- 待办队列的根因不是文案而是机制：core._inner_monologue 以前不看【要不要主动起话题】、todos.prompt_hint 全量注入 58 条、utterance_instruction 又要求『有内容就说』——三处叠加才会把同一句『光』硬塞一周 〔dc03c9b0#763〕
+- 凡按书 id 做的进程内缓存必须带 BOOKS_DIR（测试/多朋友会换书架），且『找不到书』的 0 不能缓存——否则同名书章数串库 〔dc03c9b0#763〕
+- 本机 web_fetch 对任何域名都报 non-public IP（环境限制），联网查资料只能用 web_search + 结果链接 〔dc03c9b0#763〕
+- commit 后 handover.md 还会被插件刷新成 dirty；同步脚本会提示『handover.md 未提交』，属预期，最后单独提交即可 〔dc03c9b0#763〕
 
 <!-- dsh-task-handover:session:8080a0ee -->
 ### 会话 `8080a0ee` · 2026-10-21 22:25:46
