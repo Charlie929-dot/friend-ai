@@ -378,7 +378,10 @@ class Engine:
 
     def _inner_monologue(self, messages: list[dict], batch: list[str]) -> str:
         """第 1 次调用：结构化内心独白（不发给对方）。失败返回空串由上层兜底。"""
-        system = persona.monologue_prompt()
+        # v0.113（实测 #55）：独白层以前看不到钟点，会把 23:45 猜成"早上七八点"，
+        # 第 2 层又必须照独白翻译 → 用户问"现在几点"，它答"手边没表"。
+        # 时间是最基本的事实，独白层也得有。
+        system = persona.monologue_prompt() + "\n\n" + persona.clock_hint()
         # 独白层要看到的三样东西：①最近在说什么 ②关于我自己的记忆（一致性检查）
         # ③ 我上次的内部状态。省掉"对方的 profile/便签"，那会让判断偏向对方。
         parts = []
@@ -644,11 +647,15 @@ class Engine:
         self._do_wake()
 
     def _do_wake(self) -> None:
-        """真正醒来：道早安 + 回离线留言 + 补昨晚错过的关怀提醒。"""
+        """真正醒来：道早安 + 回离线留言 + 补昨晚错过的关怀提醒。
+
+        v0.113（实测 #55）：只有真的是早上才发「早！」。兜底唤醒万一在深夜/晚上
+        发生（老库、被外部改状态），醒来本身照常记，但不许把深夜说成早上。"""
         db.set_state("AWAKE")
         db.set_kv("sleepy_reason", "")
         stream.append("wake", "我伸了懒腰，起床了")
-        self.proactive("morning")
+        if 5 <= datetime.now().hour < 12:
+            self.proactive("morning")
         self.flush_inbox()
         events.flush_missed(self)  # 昨晚说好要提醒的，结果睡着了，现在补上
 

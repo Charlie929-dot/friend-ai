@@ -356,6 +356,8 @@ PROACTIVE_SCENARIOS = {
     "morning": "现在是早上，你刚醒，主动跟TA道早安。说点你真的知道的：今天的日期、"
                "昨晚没聊完的事、今天打算读哪本、刚醒来的感觉。**别编天气、光线、窗外**"
                "（你看不到天气，也没有窗边的画面），别每次都是同一句。",
+               # 注：【当前时间】显示的不是早上（半夜/深夜）就不许道早安、不许说天亮
+               # ——见 core._do_wake 的 5–12 点时间闸门。
     "night": "现在是晚上，你要去睡了，主动跟TA道晚安。温柔一点。",
     "bubble": "你们刚认识，你想冒个泡刷下存在感。发一条**很短**的消息：一句'在干啥呀'之类的，或者干脆只发一个无厘头的颜文字/表情。千万别每次都用同一个。",
     # v0.103 批 2「念头驱动」：开口必须有理由——分享冲动（素材产出/刷到好东西）
@@ -469,6 +471,26 @@ def static_system_prompt() -> str:
     return "\n".join(parts)
 
 
+def clock_hint(now: datetime | None = None) -> str:
+    """【当前时间】块：日期 + 星期 + 钟点 + 时段（v0.113）。
+
+    单独抽出来给**内心独白层**用——独白层以前只拿人设和会话、看不到钟点，
+    于是把 23:45 猜成「早上七八点」，说话层又必须照独白翻译，
+    用户问「现在几点」得到的是「手边没表」（实测 #55）。"""
+    now = now or datetime.now()
+    _, late_night = _life_day(now)
+    weekday = "一二三四五六日"[now.weekday()]
+    # 日期/星期一律用**真实墙钟**：生活日（day）只决定「这算哪一天」的语义，
+    # 过了午夜还用 day 的日期会报出「10月21日 00:10」这种不存在的时刻。
+    info = (f"现在是 {now:%Y年%m月%d日} 星期{weekday} "
+            f"{now:%H:%M}，{_time_period(now.hour)}。")
+    if late_night:
+        info += ("注意：钟表虽然过了午夜，但你和TA都还没睡——对熬夜的人来说，"
+                 "这还是「今天」的深夜，只有睡一觉醒来才算新的一天。"
+                 "所以别把这个夜晚说成「昨天」，也别道早安。")
+    return f"【当前时间】{info}"
+
+
 def dynamic_system_prompt(state: str, now: datetime | None = None) -> str:
     """**动态** system：当前时间 / 当前状态 / 关系阶段 / 手头的事。
 
@@ -476,14 +498,6 @@ def dynamic_system_prompt(state: str, now: datetime | None = None) -> str:
     否则每轮都变的内容卡在缓存前缀里，全量读的 token 全部按未命中计价。"""
     import db  # 延迟导入避免循环依赖
     now = now or datetime.now()
-    day, late_night = _life_day(now)
-    weekday = "一二三四五六日"[day.weekday()]
-    time_info = (f"现在是 {day:%Y年%m月%d日} 星期{weekday} "
-                 f"{now:%H:%M}，{_time_period(now.hour)}。")
-    if late_night:
-        time_info += ("注意：钟表虽然过了午夜，但你和TA都还没睡——对熬夜的人来说，"
-                      "这还是「今天」的深夜，只有睡一觉醒来才算新的一天。"
-                      "所以别把这个夜晚说成「昨天」，也别道早安。")
 
     stage = db.get_kv("relationship_stage", "new")
     stage_hint = NEW_STAGE_HINT if stage == "new" else FAMILIAR_STAGE_HINT
@@ -491,7 +505,7 @@ def dynamic_system_prompt(state: str, now: datetime | None = None) -> str:
     state_hint = _sleepy_hint() if state == "SLEEPY" else \
         STATE_HINTS.get(state, STATE_HINTS["AWAKE"])
 
-    parts = [f"【当前时间】{time_info}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
+    parts = [f"{clock_hint(now)}回复要符合时段（比如深夜就别说'吃午饭了吗'）。",
              f"【当前状态】{state_hint}",
              stage_hint]
     # 手头的事（S3 工作系统）：它得知道自己正在忙什么，才谈得上"什么时候找它会打扰"
@@ -607,6 +621,8 @@ def utterance_instruction(monologue: str) -> str:
         "接不上就不提——别在回对方的话后面硬插一句自己的事。",
         "6. 不许提关系进度：不要说'我们算朋友了''不知不觉了解你这么多了'。",
         "7. 不点评对方怎么接话、不纠正对方的用词/语气；刻薄不是有主见，冷嘲比沉默更伤人。",
+        "8. **你清楚现在是几点**（见【当前时间】）。对方问时间就照实说；别编"
+        "「手边没表」「看不到钟点」「凭光猜」这类话，也别把深夜当成早上。",
         "只输出你会说的那段话本身，不要引号、不要前缀、不要解释。",
     ])
 

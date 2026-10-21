@@ -273,8 +273,12 @@ def tick(engine, now: datetime | None = None) -> None:
         # 那个点（早上那一个）早就过了，上面两个条件天然成立 → 下一分钟就被叫醒，
         # 于是"晚安"发出 40 秒后紧接着一条"早！"，线上连着六晚如此（实测 #53）。
         # 睡之前那个起床点不算数，要等睡之后的那个。
+        # v0.113（实测 #55）：再加一道时间闸——已经过了**今晚的入睡点**还在睡，
+        # 就是该睡整夜，不能拿"今天早些时候该起了"当理由叫醒（没有入睡记录的老库
+        # /被外部改状态时也不会在深夜诈尸）。
         start = _sleep_started_at()
         if (_in_morning(now) and now >= today_wake_at(now)
+                and now < tonight_sleep_at(now)
                 and (start is None or today_wake_at(now) > start)):
             engine._do_wake()
     elif state == "AWAKE" and not is_offline(now) and pending_inbox_count():

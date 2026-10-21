@@ -439,6 +439,20 @@ def test_persona_kernel():
     morning = _persona.PROACTIVE_SCENARIOS["morning"]
     assert "别编天气" in morning and "光线" in morning, morning
 
+    # 7) v0.113（实测 #55）：时间是最基本的事实，独白层/说话层都不许"没表"
+    from datetime import datetime as _dt
+    clock = _persona.clock_hint(_dt(2026, 10, 21, 23, 45))
+    assert "【当前时间】" in clock and "23:45" in clock and "深夜" in clock, clock
+    # 过了午夜也要报真实日期（生活日仍是 10-21 深夜，但墙钟是 10-22 00:10）
+    midnight = _persona.clock_hint(_dt(2026, 10, 22, 0, 10))
+    assert "10月22日" in midnight and "00:10" in midnight, midnight
+    assert "10月21日" not in midnight, f"过了午夜还报昨天的日期：{midnight}"
+    dyn = _persona.dynamic_system_prompt("AWAKE", _dt(2026, 10, 21, 23, 45))
+    assert "23:45" in dyn, f"动态 prompt 丢了钟点：{dyn[:120]}"
+    utter = _persona.utterance_instruction("【我最想说的】手边没表")
+    assert "你清楚现在是几点" in utter and "手边没表" in utter, \
+        f"说话层缺时间铁律：{utter[:200]}"
+
     # 6) 开关关掉就不注入（保留旧的纯形容词人格行为）
     config.PERSONA_KERNEL_ENABLED = False
     try:

@@ -463,6 +463,21 @@ def test_just_slept_not_woken():
         _db.set_state("SLEEPING")
         _off.tick(eng, _dt(2026, 10, 19, 23, 30))
         assert not eng.calls, f"退回意识流的入睡时刻没生效：{eng.calls}"
+
+        # v0.113（实测 #55）：连入睡记录都没有（老库/外部改状态）时，已经过了今晚
+        # 入睡点还在睡，也不许被"今天早些时候该起了"兜底叫醒。
+        eng.calls.clear()
+        _db.set_kv("sleep_started_at", "")
+        _db.set_kv("rest_schedule", json.dumps(
+            {"day": "2026-10-21", "sleep_at": "2026-10-21T22:41:00",
+             "wake_days": {"2026-10-21": "2026-10-21T08:30:00",
+                           "2026-10-22": "2026-10-22T08:30:00"}}))
+        _db.set_state("SLEEPING")
+        _off.tick(eng, _dt(2026, 10, 21, 23, 25))
+        assert not eng.calls, f"没有入睡记录时深夜被兜底叫醒（时间闸失效）：{eng.calls}"
+        # 第二天早上照常醒（闸门只管"今晚入睡点之后"）
+        _off.tick(eng, _dt(2026, 10, 22, 9, 0))
+        assert eng.calls == ["wake"], f"时间闸把第二天早晨也拦了：{eng.calls}"
         print("ok 刚入睡不被叫醒（起床点须晚于入睡时刻 + 无 kv 退意识流 + 睡过头兜底仍在）")
 
 

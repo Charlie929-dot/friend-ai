@@ -1172,6 +1172,10 @@ def test_inner_monologue():
 
             assert monologue_hits, "独白层没被调用"
             assert second_layer_seen, "第 2 层没被调用"
+            # v0.113（实测 #55）：独白层必须看得到当前时间（否则会把深夜猜成早上）
+            assert any("【当前时间】" in "\n".join(
+                str(m.get("content", "")) for m in hit) for hit in monologue_hits), \
+                "独白层看不到当前时间"
             # ①独白的内容不能出现在发给聊天对象的文字里
             sent = [e[1] for e in ch.events if e[0] == "send"]
             assert sent, f"没发出任何内容：{ch.events}"
