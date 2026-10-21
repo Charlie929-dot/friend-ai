@@ -594,9 +594,13 @@ def handle(cmd_line: str) -> str:
         fresh = len([x for x in _life._shareables() if not x.get("used")])
         # v0.89 §5.2：今日任务 = 一本真书的若干章；进度按字数百分比（"余额"已改「经验」）
         book = f"《{s['book_title']}》" if s["book_title"] else "（今天没有在读的书）"
+        # v0.112：今日圈定章数（计划内）与全书读到第几章分开说，别再让人看到
+        # "第 1/1 章"就以为它一直停在第一章。
+        pos = (f" · 全书第 {s['book_chapter']}/{s['book_total']} 章"
+               if s.get("book_total") else "")
         return (f"{_life.hud()}\n"
                 f"今日任务 {book} 圈 {s['total_chapters']} 章 · 进度 {s['progress']}%"
-                f"（第 {s['chapter']}/{s['total_chapters']} 章）"
+                f"（今日第 {s['chapter']}/{s['total_chapters']} 章{pos}）"
                 f" · 精力 {s['energy']}/{config.WORK_ENERGY_MAX} · 经验 {s['exp']}"
                 + (" · 今天读得有点晚" if s["overtime"] else "") + "\n"
                 f"攒了 {fresh} 条没说过的素材\n"

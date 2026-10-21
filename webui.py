@@ -137,7 +137,8 @@ def _state_payload(channel: WebChannel) -> dict:
         "typing": channel.typing_now(),
         # v0.89 §5.2：HUD 契约换成「在读哪本 / 进度% / 章节 / 经验」（余额与"第几件"退役）
         "work": {k: s[k] for k in ("phase", "energy", "exp", "progress",
-                                   "chapter", "total_chapters", "book_title", "overtime")},
+                                   "chapter", "total_chapters", "book_chapter", "book_total",
+                                   "book_title", "overtime")},
         "cost": {"level": c["level"],
                  "badge": cost.LEVEL_BADGE.get(c["level"], ""),
                  "index": c["cost_index"]},

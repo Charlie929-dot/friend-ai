@@ -1,7 +1,7 @@
 <!-- dsh-task-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-21 22:39:26 · 3 个会话小节 · 项目规则见 AGENTS.md
+> 更新于 2026-10-21 23:23:15 · 3 个会话小节 · 项目规则见 AGENTS.md
 
 <!-- dsh-task-handover:sessions:start -->
 <!-- 20a1fb2c = session-20a1fb2c-3f26-416a-9e38-fe8e0d07369f -->
@@ -13,28 +13,40 @@
 
 <!-- dsh-task-handover:snapshot:start -->
 <!-- dsh-task-handover:session:dc03c9b0 -->
-### 会话 `dc03c9b0` · 2026-10-21 22:39:26
+### 会话 `dc03c9b0` · 2026-10-21 23:23:15
 
-> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~201k tokens（+5.4k） · 概要：已核对线上代码与真实数据（`git fetch` 后与远端同步，本地 v0.111 改动 94/94 绿）。结论：**不是你不会聊天**，是三个机制叠在一起把它往“挑刺”和“硬塞话题”上推。 ## 1. 进度总显示第一章——相对“今日计划”，不是全书 线上 `kv.day_state.plan` 实况： ``` bo… · 事件 #40–273 · 签名：项目改动
+> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~649k tokens（+2.1k） · 概要：已核对线上代码与真实数据（`git fetch` 后与远端同步，本地 v0.111 改动 94/94 绿）。结论：**不是你不会聊天**，是三个机制叠在一起把它往“挑刺”和“硬塞话题”上推。 ## 1. 进度总显示第一章——相对“今日计划”，不是全书 线上 `kv.day_state.plan` 实况： ``` bo… · 事件 #40–707 · 签名：项目改动
 
 ## 这一轮行为概览
-- [ ] 修改了文档
-- [ ] 修改了代码
+- [x] 修改了文档（6 个文件 / 15 次改动，+117/−11 行）
+- [x] 修改了代码（15 个文件 / 34 次改动，+312/−54 行）
 - [ ] 修改了配置
-- [x] 执行了命令（18 条）
+- [x] 执行了命令（39 条）
 
 ## 这一轮行为详情
-- 执行了 18 条命令，以下为样例：`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json, glob, os print("cwd:", os.getcwd(), "dbs:", glob…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`
-- 本轮只有命令、没有文件工具的改动记录：shell 里的写入/重定向不计入（见 README「为什么 shell 改的文件不算文件改动」）
-- 读取了 `C:\Users\HP\AI_Companion\trueread.py`、`C:\Users\HP\AI_Companion\persona.py`、`C:\Users\HP\AI_Companion\context.py`、`C:\Users\HP\AI_Companion\todos.py`、`C:\Users\HP\AI_Companion\library.py`、`C:\Users\HP\AI_Companion\core.py`、`C:\Users\HP\AI_Companion\stream.py`、`C:\Users\HP\AI_Companion\test_life.py`、`C:\Users\HP\AI_Companion\test_engine.py`、`C:\Users\HP\AI_Companion\web\index.html` 〔dc03c9b0#46–257〕
-- 工具使用：pwsh×19，read×13，web_fetch×7，web_search×3，grep×2，ask_user_question×1，todo_tick×1，todo_write×1
+- 修改了 `AGENTS.md`（1 次改动，+1/−1 行） 〔dc03c9b0#650〕
+- 修改了 `commands.py`（1 次改动，+5/−1 行） 〔dc03c9b0#324〕
+- 修改了 `config.py`（1 次改动，+1/−0 行） 〔dc03c9b0#379〕
+- 修改了 `context.py`（2 次改动，+5/−3 行） 〔dc03c9b0#413–415〕
+- 修改了 `docs/版本更新记录.md`（1 次改动，+2/−0 行） 〔dc03c9b0#610〕
+- 修改了 `docs/实测反馈/#54-聊天刻薄与进度显示.md`（1 次改动，+90/−0 行） 〔dc03c9b0#589〕
+- 修改了 `docs/体验优化清单.md`（1 次改动，+12/−0 行） 〔dc03c9b0#612〕
+- 修改了 `docs/文件改动同步清单.md`（6 次改动，+6/−6 行） 〔dc03c9b0#671–696〕
+- 修改了 `docs/需求概要-朋友型AI.md`（5 次改动，+6/−4 行） 〔dc03c9b0#627–638〕
+- 修改了 `life.py`（5 次改动，+52/−10 行） 〔dc03c9b0#301–531〕
+- 修改了 `persona.py`（7 次改动，+54/−7 行） 〔dc03c9b0#331–515〕
+- 修改了 `run_tests.py`（1 次改动，+4/−3 行） 〔dc03c9b0#486〕
+- …另有 9 个文件未列出
+- 执行了 39 条命令，以下为样例：`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`、`$py = @' import sqlite3, json, glob, os print("cwd:", os.getcwd(), "dbs:", glob…`、`$py = @' import sqlite3, json c = sqlite3.connect("friend.db"); c.row_factory =…`
+- 读取了 `C:\Users\HP\AI_Companion\trueread.py`、`C:\Users\HP\AI_Companion\persona.py`、`C:\Users\HP\AI_Companion\context.py`、`C:\Users\HP\AI_Companion\todos.py`、`C:\Users\HP\AI_Companion\library.py`、`C:\Users\HP\AI_Companion\core.py`、`C:\Users\HP\AI_Companion\stream.py`、`C:\Users\HP\AI_Companion\test_life.py`、`C:\Users\HP\AI_Companion\test_engine.py`、`C:\Users\HP\AI_Companion\web\index.html`、`C:\Users\HP\AI_Companion\commands.py`、`C:\Users\HP\AI_Companion\life.py` 等 22 个文件 〔dc03c9b0#46–666〕
+- 工具使用：edit×54，pwsh×40，read×34，web_fetch×7，todo_write×3，web_search×3，grep×2，ask_user_question×1
 
 ## 当前进度
-- 已完成：复现并定位 bug1：今日进度 HUD 永远显示「第 1/1 章」（相对当日计划而非全书）（未验证）；读线上聊天记录 + 意识流，定位 bug2：挑刺/刻薄、素材只有一句评价、突兀文艺句的来源（未验证）
-- 正在进行：（无）
-- 剩余：搜网络「聊天常识」并整理成可注入的对话准则；给出修复方案 + 工程量评估，等用户拍板后落地
-- 本轮（机器）：执行了 `$py = @' import sqlite3, json c = sqlit…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_ke…` 等 6 条命令
-- 下一步：继续「搜网络「聊天常识」并整理成可注入的对话准则」
+- 已完成：复现并定位 bug1：今日进度 HUD 永远显示「第 1/1 章」（相对当日计划而非全书）；读线上聊天记录 + 意识流，定位 bug2：挑刺/刻薄、素材只有一句评价、突兀文艺句的来源；v0.111 单独提交（未验证·本轮 ≥6 条命令无逐项对应）
+- 正在进行：bug1：新增全书章节坐标（life/webui/index.html/commands/stream）
+- 剩余：bug2-A：聊天常识块 + 反谄媚/独白/说话层校准；bug2-B：待办队列去污染（起话题否不入队 + 24h 过期 + 近似去重 + 只注入 3 条）；bug2-C：素材分享具体化 + 早安禁止编天气/光；补测试并跑全量（EXPECTED_TOTAL 同步）；改文档 + v0.112 提交 + 同步服务器 + 清线上旧待办；线上验收（HUD 全书章节 / 聊天语气） + 交接
+- 本轮（机器）：修改了 `todos.py`、`docs/实测反馈/#54-聊天刻薄与进度显示.md`、`test_life.py` 等 21 个文件；执行了 `$py = @' import sqlite3, json c = sqlit…`、`ssh -i "$env:USERPROFILE\.ssh\tunnel_ke…` 等 6 条命令
+- 下一步：继续「bug1：新增全书章节坐标（life/webui/index.html/commands/stream）」
 
 ## 这一轮经验
 - 工具 `web_fetch` 失败（WEB_BLOCKED_URL）：Error: URL hostname "www.gottman.com" resolves to a non-public IP address 〔dc03c9b0#177〕

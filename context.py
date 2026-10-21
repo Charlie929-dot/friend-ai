@@ -252,8 +252,9 @@ def _inject_impulse_material(prompt: list[dict]) -> bool:
             body = (pick.get("summary") or pick.get("title") or "").strip()
             prompt[-1]["content"] += (
                 f"\n（你今天刷手机看到一条：{body}。"
-                f"可以自然跟TA聊起它，聊一两句；想聊别的也行。）"
-                f"\n（分享质量：聊这个要落在具体内容上，别泛泛、别硬扯生活。）")
+                f"可以自然跟TA聊起它；想聊别的也行。）"
+                f"\n（分享质量：先把条目里的具体事实说出来——谁/多少/发生了什么，"
+                f"再说你的反应；别只留一句评价，也别泛泛、别硬扯生活。）")
             return True
     # 待办：脑子里想说、还没说的事（读过/想过攒下来的）
     if config.TODOS_ENABLED:
@@ -264,7 +265,8 @@ def _inject_impulse_material(prompt: list[dict]) -> bool:
             _carry(int(item.get("id") or 0))
             prompt[-1]["content"] += (
                 f"\n（你心里一直搁着这么一件事，还没跟TA说过：「{item.get('text', '')}」。"
-                f"现在提起它正合适，别生硬地带出。）")
+                f"现在提起它正合适，别生硬地带出。提的时候给出具体内容（哪一句/哪个细节），"
+                f"别只给一句评价。）")
             return True
     # 自我记忆：我答应过却还没兑现的事
     if config.SELF_MEMORY_ENABLED:

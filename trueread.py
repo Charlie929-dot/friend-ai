@@ -315,8 +315,15 @@ def settle_chapter(now=None) -> dict | None:
     result = {"alpha_id": alpha_id, "beta_id": beta_id, "moved": moved,
               "chapter": ch["title"], "book_title": ch["book_title"]}
     if moved:
+        # v0.112：只给 alpha（60 字概述）时，主动分享就只剩一句评价——"数字比什么
+        # 形容都狠"那种话不是分享，是点评。把 beta 里的具体内容也带上（限长），
+        # 它开口时才有东西可说：哪一段、发生了什么。
+        detail = " ".join((beta or "").split())
+        if len(detail) > 200:
+            detail = detail[:200] + "…"
         result["shareable_text"] = (
-            f"读到《{ch['book_title']}》的「{ch['title']}」，有点被触动：{alpha}")
+            f"读到《{ch['book_title']}》的「{ch['title']}」，有点被触动：{alpha}"
+            + (f" 具体是这一段：{detail}" if detail else ""))
     advance()
     return result
 

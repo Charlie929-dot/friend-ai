@@ -113,7 +113,9 @@ def status_line(now: datetime | None = None) -> dict:
     # §5.1：数字给屏幕、事件给舌头——这里只留「读到哪」的事实，不给百分比/点数
     reading = ""
     if s.get("book_title"):
-        reading = (f"读到《{s['book_title']}》第 {s.get('chapter', 0)}/{s.get('total_chapters', 0)} 章"
+        # v0.112：给全书坐标（读到书里第几章）；今天圈了几章是另一回事。
+        reading = (f"读到《{s['book_title']}》第 {s.get('book_chapter', s.get('chapter', 0))}"
+                   f"/{s.get('book_total', s.get('total_chapters', 0))} 章"
                    + ("，今天读得有点晚" if s.get("overtime") else ""))
     elif s["phase"] == "off":
         reading = "今天的事忙完了"

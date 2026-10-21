@@ -414,13 +414,30 @@ def test_persona_kernel():
         assert must in rules, f"缺{must}"
     # 条件触发：没碰到内核就不抬杠，碰到了才表达不认同
     assert "碰到" in rules and "好恶" in rules, f"异议不是条件触发写法：{rules[:120]}"
-    # 通用雷区（跨人格）：被敷衍/被说教/被要求表演热情/被替它总结
-    assert "被敷衍" in rules and "被说教" in rules and "表演热情" in rules, rules[:200]
+    # 通用雷区（跨人格）：被明显敷衍/被说教/被要求表演热情/被替它总结。
+    # v0.112：「被敷衍」加了阈值——单次"噢/额"不许当冒犯（这是它总挑刺的源头）。
+    assert "被明显敷衍" in rules and "被说教" in rules and "表演热情" in rules, rules[:200]
+    assert "单次" in rules and "先按善意理解" in rules, f"缺善意理解校准：{rules[:200]}"
 
-    # 5) 体系化注入：system prompt 里先规则、后内核，顺序不能反
+    # 5) 聊天常识（v0.112）：先接住、不纠正用词、不把短回当冒犯、分享要具体
+    sense = _persona.chat_sense_prompt()
+    for must in ("先接住", "不纠正", "单次短回", "别只给一句评价", "刻薄不是有主见",
+                 "同一个意象说过就放下"):
+        assert must in sense, f"聊天常识缺「{must}」"
+    assert "聊天常识" in _persona.static_system_prompt(), "静态 prompt 没注入聊天常识"
+    mono = _persona.monologue_prompt()
+    assert "大多数消息只是随口一说" in mono, "独白层缺过度敏感校准"
+    assert "不值得纠正" in mono, "独白层还在允许纠正对方用词"
+    utter = _persona.utterance_instruction("【我自己的话题】早上那阵光")
+    assert "接不上就不提" in utter and "不点评" in utter, f"说话层缺相关性/不挑刺约束：{utter}"
+
+    # 6) 体系化注入：system prompt 里先规则、后内核，顺序不能反
     sp = _persona.build_system_prompt("AWAKE")
     assert sp.index("五条硬规矩") < sp.index("【你是谁】"), "反谄媚必须排在人格之前"
     assert "【你真的受不了】" in sp, "system prompt 丢了核武器（禁忌清单）"
+    # 早安场景不许再让模型编天气/光线（v0.112：连续多天"光爬进来"的来源）
+    morning = _persona.PROACTIVE_SCENARIOS["morning"]
+    assert "别编天气" in morning and "光线" in morning, morning
 
     # 6) 开关关掉就不注入（保留旧的纯形容词人格行为）
     config.PERSONA_KERNEL_ENABLED = False

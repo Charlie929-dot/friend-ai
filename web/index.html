@@ -1461,8 +1461,11 @@ function renderState(s){
   // v0.89 §5.2：进度按字数百分比 + 章节副标；"余额"改「经验」
   $('barP').style.width=(p.progress||0)+'%';
   $('qDone').textContent=(p.progress||0);
-  $('qChap').textContent=(p.book_title&&p.total_chapters)
-    ? ('《'+p.book_title+'》第 '+(p.chapter||0)+'/'+(p.total_chapters||0)+' 章'+(p.overtime?' · 读得晚':''))
+  // v0.112：这里显示全书坐标（书签读到第几章），不再用「今日计划内的偏移」——
+  // 一天只圈 1 章时旧写法永远是「第 1/1 章」，看起来像从来没往后读。
+  const bkTotal=p.book_total||p.total_chapters||0, bkPos=p.book_chapter||p.chapter||0;
+  $('qChap').textContent=(p.book_title&&bkTotal)
+    ? ('《'+p.book_title+'》第 '+bkPos+'/'+bkTotal+' 章'+(p.overtime?' · 读得晚':''))
     : (p.phase==='off'?'今天的事忙完了':(p.book_title||''));
   $('mEnergy').textContent=e;
   $('mExp').textContent=p.exp||0;

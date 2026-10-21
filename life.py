@@ -197,7 +197,10 @@ def _reading_plan() -> dict:
     start_ch = bm["ch_idx"] if bm.get("book_id") == book["id"] else 0
     chapters, total = trueread.plan_from(book["id"], start_ch, config.READING_DAILY_CHARS)
     return {"done": not chapters, "book_id": book["id"], "book_title": book.get("title", ""),
-            "start_ch": int(start_ch), "chapters": chapters, "total_chars": int(total)}
+            "start_ch": int(start_ch), "chapters": chapters, "total_chars": int(total),
+            # v0.112：全书章数在排班时算一次（`library._parsed` 有缓存，但 txt 书
+            # 每次 chapters() 都会重切章——status 被轮询每 900ms 读，不能放进去现算）
+            "book_total": trueread.chapter_count(book["id"])}
 
 
 def _make_sessions(wake: datetime, plan: dict, bed: datetime) -> list[dict]:
@@ -295,6 +298,33 @@ def _chapter_pos(day: dict, read: float) -> tuple[int, int, str]:
     return max(0, len(chs) - 1), len(chs), (chs[-1].get("title", "") if chs else "")
 
 
+_BOOK_TOTAL_CACHE: dict[str, int] = {}
+
+
+def _book_total(plan: dict) -> int:
+    """全书章数（v0.112）。新排的班会带 `book_total`；旧 day_state 没有时按书 id
+    补算一次并记忆——`status()` 被网页端每 900ms 轮询，不能每次都去切 txt 的章。"""
+    n = int(plan.get("book_total") or 0)
+    if n:
+        return n
+    bid = plan.get("book_id") or ""
+    if not bid:
+        return 0
+    # 缓存键带书架路径：测试/多朋友会换 BOOKS_DIR，同名书的章数不是一回事；
+    # 找不到书（0）也不缓存——书架是异步上传的，别把"暂时没有"记成永久 0。
+    key = str(config.BOOKS_DIR / bid)
+    if key in _BOOK_TOTAL_CACHE:
+        return _BOOK_TOTAL_CACHE[key]
+    try:
+        import trueread
+        n = int(trueread.chapter_count(bid))
+    except Exception:
+        return 0
+    if n:
+        _BOOK_TOTAL_CACHE[key] = n
+    return n
+
+
 def energy(day: dict, now: datetime) -> int:
     """精力（派生）：会话中按分钟耗、休息中按分钟回。
 
@@ -349,7 +379,9 @@ def status(now: datetime | None = None) -> dict:
     empty = {"phase": "off", "label": PHASE_LABELS["off"], "flow": False,
              "energy": config.WORK_ENERGY_MAX, "exp": 0, "progress": 0,
              "chapter": 0, "total_chapters": 0, "book_title": "", "chapter_title": "",
-             "overtime": False}
+             # v0.112：全书坐标（HUD 用）。chapter/total_chapters 仍是"今日计划内"口径，
+             # 供 prompt 的「今天圈了 N 章」使用，两者别混。
+             "book_chapter": 0, "book_total": 0, "overtime": False}
     if not config.WORK_ENABLED:
         return empty
     day = today(now)
@@ -361,13 +393,23 @@ def status(now: datetime | None = None) -> dict:
     prog = progress(day, now)
     exp = int(round(prog * 100))
     cur, total, ctitle = _chapter_pos(day, read)
+    plan = day.get("plan", {})
+    book_total = _book_total(plan)
+    # 全书坐标（v0.112）：今日计划是从 start_ch 起的一段，`chapter` 只是这段里的偏移。
+    # 用户看到的一直是「第 1/1 章」正是因为它按今日列表算——书签其实早读到第 8 章了。
+    book_chapter = 0
+    if total:
+        book_chapter = int(plan.get("start_ch") or 0) + cur + 1
+        if book_total:
+            book_chapter = min(book_chapter, book_total)
     overt = ph in ("working", "flow") and now.hour >= config.LATE_READ_HOUR
     _settle_due(day, now)
     _note_events(ph, day, now, exp, cur, total, ctitle)
     return {"phase": ph, "label": PHASE_LABELS[ph], "flow": ph == "flow",
             "energy": energy(day, now), "exp": exp, "progress": int(round(prog * 100)),
             "chapter": cur + 1, "total_chapters": total,
-            "book_title": day.get("plan", {}).get("book_title", ""),
+            "book_chapter": book_chapter, "book_total": book_total,
+            "book_title": plan.get("book_title", ""),
             "chapter_title": ctitle, "overtime": overt, "settled": int(day.get("settled_idx") or 0)}
 
 

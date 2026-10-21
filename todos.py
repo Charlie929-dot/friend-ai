@@ -23,9 +23,21 @@ import db
 _KEY = "todos"
 _MAX_KEEP = 40          # 只留最近这些条（够一天用，防无限增长）
 _NOTHING = {"没有", "无", "暂无", "没有。", "无。", "没什么", "没"}
+# v0.112：脑子里的念头只在当天有效。过了 24 小时还拎出来说，就是"早上那阵光"
+# 从 10-16 一直硬塞到 10-21 的根因——旧念头不会自己过期。
+PENDING_TTL_HOURS = 24
+DONE_TTL_HOURS = 48
+HINT_MAX = 3            # 每轮最多注入几条（以前把 58 条全倒进 prompt，模型只能反复挑同一条）
 
 # 【我自己的话题】栏：独白格式里"此刻你脑子里有没有想聊的东西"，没有就写"没有"
 _TOPIC_RE = re.compile(r"【我自己的话题】(.+?)(?=\n【|\Z)", re.S)
+# 【要不要主动起话题】：独白自己已经判过"否"的，不许再入库（以前这个字段根本没被读）
+_INITIATIVE_RE = re.compile(r"【要不要主动起话题】\s*(是|否|yes|no)", re.I)
+# 独白里的"状态/情绪/不想聊"碎片不是可分享的话题——它们被当话题注入后，
+# 就成了对话里那句跟上下文无关的"早上那阵光……"。
+_META_RE = re.compile(
+    r"(不想现在|不想聊|不想说|没别的|脑子里|脑中|书也合上|合上书|这局收|"
+    r"今晚就这一件事|这会儿|懒得|困|算了|随便|没什么|不用|不接这个茬)")
 
 
 def _load() -> list[dict]:
@@ -48,17 +60,53 @@ def _norm(text: str) -> str:
     return re.sub(r"[\s\W_]+", "", text or "")
 
 
+def _age_hours(ts: str, now: datetime) -> float:
+    try:
+        t = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, (now - t).total_seconds() / 3600.0)
+
+
+def _fresh(x: dict, now: datetime) -> bool:
+    ttl = DONE_TTL_HOURS if x.get("done") else PENDING_TTL_HOURS
+    return _age_hours(x.get("ts"), now) <= ttl
+
+
+def _prune(items: list[dict], now: datetime) -> list[dict]:
+    """丢掉过期条目：没说的过一天就作废，说过的留两天供提示/排查。"""
+    return [x for x in items if _fresh(x, now)]
+
+
+def _similar(a: str, b: str) -> bool:
+    """近似重复判定（v0.112）："早上那阵光今天终于照进来了"和"早上光沿着书脊那道缝…"
+    是同一件事的变体，字面不同但说的是一个话头——旧逻辑只认完全相同，于是排了 6 条。"""
+    a, b = _norm(a), _norm(b)
+    if not a or not b:
+        return False
+    if a == b or (len(a) >= 6 and len(b) >= 6 and (a in b or b in a)):
+        return True
+    # 前缀相同只对短念头成立；长文本（读书素材）开头都是同一个模板，
+    # 不能因为"读到《同一本书》的…"就把不同章节的素材判成重复。
+    if 8 <= max(len(a), len(b)) <= 30 and a[:8] == b[:8]:
+        return True
+    ga = {a[i:i + 2] for i in range(len(a) - 1)}
+    gb = {b[i:i + 2] for i in range(len(b) - 1)}
+    if ga and gb:
+        return len(ga & gb) / len(ga | gb) >= 0.6
+    return False
+
+
 def add(text: str, source: str = "", now: datetime | None = None) -> int:
-    """往队列里加一条"想说还没说的事"。相同内容不重复入队。返回条目 id（0=没加）。"""
+    """往队列里加一条"想说还没说的事"。相同/近似内容不重复入队。返回条目 id（0=没加）。"""
     text = " ".join((text or "").split()).strip()
     if not text:
         return 0
-    items = _load()
-    fp = _norm(text)
-    for x in items:
-        if _norm(x["text"]) == fp and not x.get("done"):
-            return 0          # 已经有同一条且还没说，别重复排队
     now = now or datetime.now()
+    items = _prune(_load(), now)
+    for x in items:
+        if not x.get("done") and _similar(x["text"], text):
+            return 0          # 已经有类似的一条且还没说，别重复排队
     next_id = max((int(x.get("id") or 0) for x in items), default=0) + 1
     items.append({"id": next_id, "text": text, "source": source,
                   "ts": now.isoformat(timespec="seconds"), "done": 0, "done_ts": ""})
@@ -67,28 +115,47 @@ def add(text: str, source: str = "", now: datetime | None = None) -> int:
 
 
 def pending() -> list[dict]:
-    """还没跟 TA 说的（按入队先后）。"""
-    return [x for x in _load() if not x.get("done")]
+    """还没跟 TA 说的（按入队先后，只留当天有效的）。"""
+    now = datetime.now()
+    return [x for x in _load() if not x.get("done") and _fresh(x, now)]
 
 
 def done_items() -> list[dict]:
     """已经说过的（打勾的）。"""
-    return [x for x in _load() if x.get("done")]
+    now = datetime.now()
+    return [x for x in _load() if x.get("done") and _fresh(x, now)]
 
 
 def from_monologue(raw: str) -> str | None:
-    """从内心独白里解析【我自己的话题】栏。非空（也不是"没有"）就返回这条话题。"""
+    """从内心独白里解析【我自己的话题】栏。
+
+    v0.112：这个字段原来只被读出来、入库时连独白自己的判断都不看——
+    独白写"【要不要主动起话题】否"照样入队，下一轮又当"想说还没说的"注入，
+    于是回完正事后面硬插一句跟上下文无关的"早上那阵光…"。现在：
+    自己判"否"的不入库；情绪/状态碎片（"书也合上了""不想现在开"）也不入库。
+    """
     if not raw:
         return None
     m = _TOPIC_RE.search(raw)
     if not m:
         return None
+    init = _INITIATIVE_RE.search(raw)
+    if init and init.group(1).lower() in ("否", "no"):
+        return None
     text = " ".join(m.group(1).split()).strip()
     if not text or text in _NOTHING:
         return None
-    # 栏里偶尔夹着"没有，就是…"这种，取掉开头的"没有"
-    if text.startswith("没有") and len(text) > 4:
-        text = text[2:].lstrip("，,、：: ")
+    # 栏里偶尔夹着"没有，就是…"/"有，但…"这种，取掉开头的应答词
+    for head in ("没有", "有"):
+        if text.startswith(head) and len(text) > len(head):
+            rest = text[len(head):]
+            if rest[:1] in "，,。.、：: ":
+                text = rest.lstrip("，,。.、：: ")
+                break
+    if len(_norm(text)) < 8:        # "书也合上了。"这类短碎片不是话题
+        return None
+    if _META_RE.search(text):       # 情绪/状态/不想聊，不是可分享的内容
+        return None
     return text or None
 
 
@@ -163,12 +230,17 @@ def prompt_hint() -> str:
     if not config.TODOS_ENABLED:
         return ""
     items = _load()
-    pend = [x for x in items if not x.get("done")]
+    now = datetime.now()
+    pend = [x for x in items if not x.get("done") and _fresh(x, now)]
     if not pend:
         return ""
-    lines = ["【想说还没说的】下面是我脑子里攒着、还没跟TA聊过的事。"
-             "想聊就从这里挑一件自然地聊，别硬塞，也别一次全倒出来："]
-    for x in pend:
+    # v0.112：只给最近 3 条（旧版 40 条全倒进 prompt，模型每轮都在同一条上打转）。
+    # 并且明确"接不上就不提"——待办是可选弹药，不是每轮必须说完的任务。
+    lines = ["【想说还没说的】下面是我脑子里攒着、还没跟TA聊过的事（只列最近的几条）。"
+             "先看它跟TA刚说的事有没有关系：接得上就自然聊一句；接不上就别提，"
+             "这次只回TA。别硬塞，也别一次全倒出来；提的时候给出具体的东西"
+             "（哪一句/哪个细节），别只给一句评价："]
+    for x in pend[-HINT_MAX:]:
         lines.append(f"- {x['text']}")
     done = [x["text"] for x in items if x.get("done")][-3:]
     if done:

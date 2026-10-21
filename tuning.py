@@ -156,6 +156,8 @@ _GROUPS: list[dict] = [
     {
         "name": "人格 + 双层生成 + 兴趣 + 表情",
         "items": [
+            dict(k="CHAT_SENSE_ENABLED", l="聊天常识", v="L2", t="bool",
+                 h="注入「先接住对方/不挑刺/分享给具体内容」十条对话常识（v0.112）"),
             dict(k="INNER_MONOLOGUE_TEMPERATURE", l="独白温度", v="L2", t="float",
                  h="独白层温度（比说话层低，要判断不要表演）", min=0, max=2, step=0.05),
             dict(k="INNER_MONOLOGUE_MAX_TOKENS", l="独白 token", v="L2", t="int",

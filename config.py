@@ -197,6 +197,7 @@ CARE_ENABLED = os.environ.get("CARE_ENABLED", "on").lower() == "on"   # 承诺�
 # 再叠上模型自带的讨好先验 → 谁在跟它说话它就变成谁的形状（实测肖像画像）。
 PERSONA_KERNEL_ENABLED = os.environ.get("PERSONA_KERNEL_ENABLED", "on").lower() == "on"   # 结构化人格内核注入（好恶/立场/雷区/语言指纹）
 ANTI_SYCOPHANCY_ENABLED = os.environ.get("ANTI_SYCOPHANCY_ENABLED", "on").lower() == "on" # 反谄媚硬约束（镜像预算/异议配额/禁投降/话题主权）
+CHAT_SENSE_ENABLED = os.environ.get("CHAT_SENSE_ENABLED", "on").lower() == "on"  # 聊天常识块（v0.112：先接住、不挑刺、分享给具体内容）
 INNER_MONOLOGUE_ENABLED = os.environ.get("INNER_MONOLOGUE_ENABLED", "on").lower() == "on" # 双层生成：先出内心独白（不可见）再翻译成说出的话
 INNER_MONOLOGUE_TEMPERATURE = float(os.environ.get("INNER_MONOLOGUE_TEMPERATURE", "0.75"))  # 独白层温度（比说话层低，要判断不要表演）
 INNER_MONOLOGUE_MAX_TOKENS = int(os.environ.get("INNER_MONOLOGUE_MAX_TOKENS", "400"))       # 独白输出上限（很短，额外成本有限）

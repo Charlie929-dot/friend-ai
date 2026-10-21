@@ -835,7 +835,7 @@ def test_webui():
                 # v0.89：HUD 契约换成「在读哪本 / 进度% / 章节 / 经验」（"第几件/余额"退役）
                 assert st["work"]["phase"] in _life.PHASE_LABELS, f"phase 不合法：{st}"
                 for k in ("energy", "exp", "progress", "chapter", "total_chapters",
-                          "book_title", "overtime"):
+                          "book_chapter", "book_total", "book_title", "overtime"):
                     assert k in st["work"], f"HUD 状态缺 {k}：{st['work']}"
 
                 # 调优参数面板接口（v0.86）：返回分组 + 每项元数据 + 当前值

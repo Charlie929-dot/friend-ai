@@ -81,6 +81,8 @@ def test_life_engine():
         assert mid["exp"] == mid["progress"], f"经验 = 进度百分比：{mid}"
         assert mid["energy"] < config.WORK_ENERGY_MAX, f"读了 30 分钟该掉精力：{mid}"
         assert mid["chapter"] == 1 and mid["total_chapters"] == 6, f"章节坐标不对：{mid}"
+        # v0.112：全书坐标（HUD 用）与今日计划口径是两套数，不能混
+        assert mid["book_chapter"] == 1 and mid["book_total"] == 6, f"全书坐标不对：{mid}"
 
         # 惰性补账：电脑睡了一觉错过好几段 → 醒来 progress 直接到 100%（章节照读）
         late = _life.status(_dt(2026, 10, 10, 1, 0))   # 夜猫子的"今天深夜"
@@ -97,6 +99,30 @@ def test_life_engine():
         assert _life.take_shareable() == "刚发现楼下那只猫会自己开门"
         assert _life.take_shareable() == "", "同一条素材被取了两次"
         print("ok 生活引擎（排班跟人格作息 + 章节会话制 + 心流期 + 派生投影 + 跨天重排 + 素材不重复）")
+
+
+def test_book_chapter_position():
+    """v0.112：HUD 全书坐标。一天只圈 1 章、计划从第 4 章开始时，旧写法永远显示
+    「第 1/1 章」——用户看不出它其实在往后读。今日计划口径保留给 prompt。"""
+    import tempfile
+    from datetime import datetime as _dt
+
+    import db as _db
+    import life as _life
+
+    tmp = Path(tempfile.mkdtemp())
+    with _patch_config(_db_init=True, BASE_DIR=tmp, DB_PATH=tmp / "friend.db",
+                       BOOKS_DIR=tmp / "books", WORK_SHAREABLE_ENABLED=False):
+        _mk_book(config.BOOKS_DIR, n_ch=6)
+        _mk_day("2026-10-09", _dt(2026, 10, 9, 10, 0), [4000], start_ch=3)
+        s = _life.status(_dt(2026, 10, 9, 10, 30))
+        assert s["chapter"] == 1 and s["total_chapters"] == 1, \
+            f"今日计划口径变了（prompt 的「今天圈了 N 章」靠它）：{s}"
+        assert s["book_chapter"] == 4 and s["book_total"] == 6, \
+            f"全书坐标不对（该是第 4/6 章，不是今日 1/1）：{s}"
+        # 旧 day_state 没存 book_total → 按书 id 补算一次，也要正确
+        assert "book_total" not in _life.today(_dt(2026, 10, 9, 10, 30))["plan"]
+        print("ok 全书章节坐标（今日计划口径不变 + 旧 day_state 补算 + HUD 用全书位置）")
 
 
 def test_lazy_life_plan():
@@ -816,6 +842,8 @@ def test_todos():
     治"素材颠来倒去就一句"——说过就打勾，打勾的不再当话题。"""
     import json
     import tempfile
+    from datetime import datetime as _dt, timedelta as _td
+
     import config as _cfg
     import db as _db
     import stream as _stream
@@ -872,7 +900,36 @@ def test_todos():
         assert _todos.prompt_hint() == ""
         config.TODOS_ENABLED = True
 
-        # 8. reset 清空
+        # 8. v0.112：独白自己判"否"的不入库；状态碎片也不入库
+        assert _todos.from_monologue(
+            "【我自己的话题】早上那阵光今天终于照进来了\n【要不要主动起话题】否") is None
+        assert _todos.from_monologue("【我自己的话题】书也合上了。") is None
+        assert _todos.from_monologue(
+            "【我自己的话题】早上那阵光今天终于照进来了\n【要不要主动起话题】是") is not None
+
+        # 9. 近似去重：同一件事的不同说法只排一条（旧版排了 6 条"光"）
+        _todos.reset()
+        assert _todos.add("早上那阵光，今天终于照进来了。") > 0
+        assert _todos.add("早上那阵光今天终于照进来了，我边翻书边看它挪位置。") == 0
+
+        # 10. 过期：昨天的念头第二天不再注入（"光"从 10-16 挂到 10-21 的根因）
+        _todos.reset()
+        old = _dt.now() - _td(hours=30)
+        assert _todos.add("昨天想到的一件事，今天不该再冒出来", now=old) > 0
+        assert _todos.prompt_hint() == ""
+
+        # 11. 每轮最多注入 3 条（旧版 40 条全倒进 prompt，模型只会在同一条上打转）
+        _todos.reset()
+        for t in ("想跟你说说今天读到的那段雾",
+                  "楼下的猫今天又蹲在窗台上",
+                  "刚刷到一条讲攀岩受伤的新闻",
+                  "《时间机器》结尾那段我还没缓过来",
+                  "明天想早起去把书还了"):
+            _todos.add(t, now=_dt.now())
+        hint3 = _todos.prompt_hint()
+        assert hint3.count("\n- ") == 3, hint3
+
+        # 12. reset 清空
         _todos.reset()
         assert _todos.pending() == []
 
