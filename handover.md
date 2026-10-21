@@ -1,7 +1,7 @@
 <!-- dsh-task-handover:start -->
 # 任务交接
 
-> 更新于 2026-10-22 00:06:44 · 3 个会话小节 · 项目规则见 AGENTS.md
+> 更新于 2026-10-22 00:16:17 · 3 个会话小节 · 项目规则见 AGENTS.md
 
 <!-- dsh-task-handover:sessions:start -->
 <!-- 20a1fb2c = session-20a1fb2c-3f26-416a-9e38-fe8e0d07369f -->
@@ -14,43 +14,48 @@
 
 <!-- dsh-task-handover:snapshot:start -->
 <!-- dsh-task-handover:session:6ddb9e40 -->
-### 会话 `6ddb9e40` · 2026-10-22 00:06:44
+### 会话 `6ddb9e40` · 2026-10-22 00:16:17
 
-> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~212k tokens（+6.1k） · 事件 #33–425 · 签名：项目改动
+> 第 1 轮 · 触发：每 10 秒刷新 · 累计 ~247k tokens（+1.6k） · 概要：v0.113 落地并已部署：修「问几点答手边没表」（独白层注入真实时钟 + 说话层铁律）与「晚安后一分钟说早」（深夜兜底唤醒加时间闸 + 早安安只在 5–12 点发），并复位了被旧 bug 卡住的线上睡眠状态。 · 事件 #33–612 · 签名：项目改动
 
 ## 这一轮行为概览
-- [x] 修改了文档（6 个文件 / 10 次改动，+76/−5 行）
-- [x] 修改了代码（7 个文件 / 16 次改动，+118/−9 行）
+- [x] 修改了文档（6 个文件 / 13 次改动，+81/−8 行）
+- [x] 修改了代码（11 个文件 / 24 次改动，+196/−14 行）
 - [ ] 修改了配置
-- [x] 执行了命令（16 条）
+- [x] 执行了命令（35 条）
 
 ## 这一轮行为详情
+- 修改了 `_tmp_forcepush.sh`（1 次改动，+7/−0 行） 〔6ddb9e40#546〕
 - 修改了 `_tmp_inspect.py`（6 次改动，+55/−0 行） 〔6ddb9e40#81–159〕
+- 修改了 `_tmp_probe.py`（1 次改动，+25/−0 行） 〔6ddb9e40#579〕
+- 修改了 `_tmp_state.py`（1 次改动，+12/−0 行） 〔6ddb9e40#591〕
+- 修改了 `_tmp_verify.py`（1 次改动，+23/−0 行） 〔6ddb9e40#471〕
 - 修改了 `AGENTS.md`（1 次改动，+1/−1 行） 〔6ddb9e40#394〕
 - 修改了 `core.py`（2 次改动，+10/−3 行） 〔6ddb9e40#262–267〕
-- 修改了 `docs/版本更新记录.md`（1 次改动，+2/−0 行） 〔6ddb9e40#374〕
-- 修改了 `docs/实测反馈/#55-无法获取时间与晚安后说早.md`（2 次改动，+59/−1 行） 〔6ddb9e40#345–350〕
+- 修改了 `docs/版本更新记录.md`（2 次改动，+3/−1 行） 〔6ddb9e40#374–497〕
+- 修改了 `docs/实测反馈/#55-无法获取时间与晚安后说早.md`（4 次改动，+63/−3 行） 〔6ddb9e40#345–603〕
 - 修改了 `docs/体验优化清单.md`（1 次改动，+9/−0 行） 〔6ddb9e40#384〕
 - 修改了 `docs/文件改动同步清单.md`（2 次改动，+2/−2 行） 〔6ddb9e40#412–414〕
 - 修改了 `docs/需求概要-朋友型AI.md`（3 次改动，+3/−1 行） 〔6ddb9e40#355–359〕
-- 修改了 `offline.py`（1 次改动，+4/−0 行） 〔6ddb9e40#252〕
-- 修改了 `persona.py`（4 次改动，+20/−6 行） 〔6ddb9e40#232–247〕
-- 修改了 `test_engine.py`（1 次改动，+4/−0 行） 〔6ddb9e40#284〕
-- 修改了 `test_life.py`（1 次改动，+15/−0 行） 〔6ddb9e40#289〕
-- …另有 1 个文件未列出
-- 执行了 16 条命令，以下为样例：`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`Get-Content -Raw _tmp_inspect.py | ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o…`、`Get-Content -Raw _tmp_inspect.py | ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o…`、`Get-Date -Format "yyyy-MM-dd HH:mm:ss"; .venv\Scripts\python.exe -c "import dat…`、`.venv\Scripts\python.exe run_tests.py persona 2>&1 | Select-Object -Last 20`、`.venv\Scripts\python.exe run_tests.py life 2>&1 | Select-Object -Last 25`
+- …另有 5 个文件未列出
+- 执行了 35 条命令，以下为样例：`ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o ConnectTimeout=15 -o StrictHostKey…`、`Get-Content -Raw _tmp_inspect.py | ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o…`、`Get-Content -Raw _tmp_inspect.py | ssh -i "$env:USERPROFILE\.ssh\tunnel_key" -o…`、`Get-Date -Format "yyyy-MM-dd HH:mm:ss"; .venv\Scripts\python.exe -c "import dat…`、`.venv\Scripts\python.exe run_tests.py persona 2>&1 | Select-Object -Last 20`、`.venv\Scripts\python.exe run_tests.py life 2>&1 | Select-Object -Last 25`
 - 读取了 `C:\Users\HP\AI_Companion\persona.py`、`C:\Users\HP\AI_Companion\offline.py`、`C:\Users\HP\AI_Companion\context.py`、`C:\Users\HP\AI_Companion\scheduler.py`、`C:\Users\HP\AI_Companion\core.py`、`C:\Users\HP\AI_Companion\test_life.py`、`C:\Users\HP\AI_Companion\test_persona.py`、`C:\Users\HP\AI_Companion\test_engine.py`、`C:\Users\HP\AI_Companion\docs\需求概要-朋友型AI.md`、`C:\Users\HP\AI_Companion\docs\实测反馈\#54-聊天刻薄与进度显示.md`、`C:\Users\HP\AI_Companion\docs\版本更新记录.md`、`C:\Users\HP\AI_Companion\docs\体验优化清单.md` 等 14 个文件 〔6ddb9e40#42–407〕
-- 工具使用：read×26，edit×20，pwsh×17，grep×10，write×7，todo_write×1
+- 工具使用：pwsh×35，edit×27，read×26，grep×11，write×11，todo_tick×1，todo_write×1
 
 ## 当前进度
-- 已完成：定位两个 bug 的根因（线上库 + 日志）（未验证·本轮 1 个文件、≥6 条命令无逐项对应）
-- 正在进行：修 bug1：独白层注入当前时间 + 说话层时间铁律
-- 剩余：修 bug2：深夜/入睡点后不做"睡过头兜底"唤醒 + 早安场景以真实时间为准；补测试并跑全量 run_tests.py；改文档（需求/实测/版本记录/AGENTS/台账）+ 提交 + 同步服务器；线上验收：问时间、确认晚安后不再秒醒
-- 本轮（机器）：修改了 `docs/实测反馈/#55-无法获取时间与晚安后说早.md`、`_tmp_inspect.py`、`persona.py` 等 13 个文件；执行了 `ssh -i "$env:USERPROFILE\.ssh\tunnel_ke…`、`Get-Content -Raw _tmp_inspect.py | ssh …` 等 6 条命令
-- 下一步：继续「修 bug1：独白层注入当前时间 + 说话层时间铁律」
+- 已完成：定位两个 bug 的根因（线上库 + 日志）（未验证·本轮 17 个文件、≥6 条命令无逐项对应）；修 bug1：独白层注入当前时间 + 说话层时间铁律（机器：persona.py）；修 bug2：深夜/入睡点后不做"睡过头兜底"唤醒 + 早安场景以真实时间为准（机器：core.py）；补测试并跑全量 run_tests.py（未验证）；改文档（需求/实测/版本记录/AGENTS/台账）+ 提交 + 同步服务器（机器：AGENTS.md）；线上验收：问时间、确认晚安后不再秒醒（未验证）
+- 正在进行：（无）
+- 剩余：（无）
+- 本轮（机器）：修改了 `docs/实测反馈/#55-无法获取时间与晚安后说早.md`、`_tmp_inspect.py`、`persona.py` 等 17 个文件；执行了 `ssh -i "$env:USERPROFILE\.ssh\tunnel_ke…`、`Get-Content -Raw _tmp_inspect.py | ssh …` 等 6 条命令
+- 下一步：用户明早实测：问「现在几点/今天几号」应直接报出真实钟点与日期；早安应在 08:31 左右发、且不含「天亮了/光」。若仍出现「没表」类回答，优先看服务器 journal 的 [独白] 行是否带凌晨/深夜时段（确认新代码已加载）。线上库备份在 /opt/friend-ai/friend.db.bak.20261022-…
 
 ## 这一轮经验
 - 工具 `edit` 失败（FS_NOT_OBSERVED）：Error: cannot modify "C:\Users\HP\AI_Companion\docs\版本更新记录.md": file has not been read — read the file, then retry 〔6ddb9e40#364〕
+- 双层生成里，独白层看不到的事实（时间/日期）会被它猜错，第 2 层又必须照独白翻译——凡是「TA 应该知道的事实」都必须进独白层 system，光靠第 2 层的 dynamic_system_prompt 救不回来（实测 #55）。 〔6ddb9e40#613〕
+- 过了午夜报时间要用真实墙钟（now 的日期/星期），生活日 day 只用于「这算哪一天」的语义；否则会说出「10月21日 00:10」这种不存在的时刻。 〔6ddb9e40#613〕
+- offline.tick 的 SLEEPING 兜底除了「起床点晚于入睡时刻」，还要加「now < 今晚入睡点」：过了今晚入睡点还在睡就该睡整夜，没有入睡记录的老库也不会深夜诈尸。 〔6ddb9e40#613〕
+- sync-to-server.sh 用 git pull --ff-only；本机 amend 后 force push 会让服务器分叉，pull 报「Need to specify how to reconcile divergent branches」——服务器无本地提交时直接 git fetch gitee main && git reset --hard gitee/main 再重启。 〔6ddb9e40#613〕
+- 线上「已醒着过夜」是状态污染不是代码问题：旧 bug 23:25 唤醒后 sleep cron 当天已跑过，不会再触发入睡——要手工复位 kv.state=SLEEPING + sleep_started_at，否则会 AWAKE 到次日 23:10。 〔6ddb9e40#613〕
 
 <!-- dsh-task-handover:session:dc03c9b0 -->
 ### 会话 `dc03c9b0` · 2026-10-21 23:41:34
